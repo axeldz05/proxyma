@@ -1,15 +1,14 @@
 package storage
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
 
 type FileManager struct {
-	baseDir           string
-	userLookupFiles   map[string]string
-	userLookupFolders map[string]string
+	baseDir string
 }
 
 func Map[T, U any](slice []T, fn func(T) U) []U {
@@ -23,7 +22,7 @@ func Map[T, U any](slice []T, fn func(T) U) []U {
 func VisitAllFiles(fm *FileManager, fn func(fs.DirEntry)) {
 	filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return fmt.Errorf(err.Error())
 		}
 		if !d.IsDir() {
 			fn(d)
@@ -32,18 +31,9 @@ func VisitAllFiles(fm *FileManager, fn func(fs.DirEntry)) {
 	})
 }
 
-func FindFileAndDo[T any](fm *FileManager, fileName string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
+func FindFileAndDo[T any](fm *FileManager, pathToFile string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
 	var result T
-	pathToFile, err := fm.LookUpAbsoluteFilePath(fileName)
-	if err != nil {
-		return result, err
-	}
-	pathToFile, err = filepath.Rel(fm.baseDir, pathToFile)
-
-	if err != nil {
-		return result, err
-	}
-	err = filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -64,22 +54,16 @@ func FindFileAndDo[T any](fm *FileManager, fileName string, fn func(string, fs.D
 	return result, err
 }
 
-func (fm *FileManager) UploadFile(fileName string, content []byte) error {
-	if fm.LookUpExistsFileName(fileName) {
-		return ErrFileAlreadyExist
-	}
-	err := fm.SaveFileNameIntoLookUp(fileName)
+func (fm *FileManager) UploadFile(filePath string, content []byte) error {
+	err := AssertValidPath(filePath)
 	if err != nil {
 		return err
 	}
-	fullPath, err := fm.LookUpAbsoluteFilePath(fileName)
-	if err != nil {
-		return err
-	}
+	fullPath := filepath.Join(fm.baseDir, filePath)
 	_, err = os.Stat(fullPath)
 	switch {
 	case err == nil:
-		return SanitizeError(fileName, "Despite fileName being unique, the creation of a new fileName didn't create a unique fileName")
+		return ErrFileAlreadyExist
 	case os.IsNotExist(err):
 		return os.WriteFile(fullPath, content, 0644)
 	default:
@@ -87,41 +71,33 @@ func (fm *FileManager) UploadFile(fileName string, content []byte) error {
 	}
 }
 
-func ReadFileFromClient(clientIP string, pathToRead string) ([]byte, error) {
+func ReadFileFromClient(clientIP string, pathToRead string) ([]byte, error){
 	return os.ReadFile(pathToRead)
 }
 
-func (fm *FileManager) WriteNewFile(pathToUpload string, content []byte, perm os.FileMode) error {
-	err := fm.SaveFileNameIntoLookUp(pathToUpload)
-
-	if err != nil{
-		return err
-	}
-	newPath, err := fm.LookUpAbsoluteFilePath(pathToUpload)
-	if err != nil{
-		return err
-	}
-	return os.WriteFile(newPath, content, perm)
-}
 func (fm *FileManager) UploadFolderWithFiles(pathToUpload string, clientIP string) error {
-	folderName := filepath.Base(pathToUpload)
-	if err := fm.CreateFolder(folderName); err != nil {
+	err := AssertValidPath(pathToUpload)
+	if err != nil {
 		return err
 	}
+	rootFolderName := filepath.Base(pathToUpload)
+	rootFolder := filepath.Join(fm.baseDir, rootFolderName)
+	if err := fm.CreateFolder(rootFolderName); err != nil {return err}
 	return filepath.WalkDir(pathToUpload, func(path string, d fs.DirEntry, err error) error {
 		relPathToUpload, err := filepath.Rel(pathToUpload, path)
-		relPathToUpload = filepath.Join(folderName, relPathToUpload)
-		if !d.IsDir() {
+		if !d.IsDir(){
 			// should probably ask the system that uploads the file to do the ReadFile itself.
 			// should be receiving an IP where it asks for files by path
 			fileContent, err := ReadFileFromClient(clientIP, path)
-			if err != nil {
+			if err != nil{
 				return err
 			}
-			return fm.WriteNewFile(relPathToUpload, fileContent, 0644)
+			newPath := filepath.Join(rootFolder, relPathToUpload)
+			return os.WriteFile(newPath, fileContent, 0644)
 		}
-		if d.IsDir() && d.Name() != folderName {
-			return fm.CreateFolder(relPathToUpload)
+		if d.IsDir() && d.Name() != pathToUpload{
+			newPath := filepath.Join(rootFolder, relPathToUpload)
+			return os.MkdirAll(newPath, 0o755)
 		}
 		return nil
 	})
@@ -133,16 +109,25 @@ func (fm *FileManager) AmountOfFiles() int {
 	return result
 }
 
-func (fm *FileManager) FileExists(fileName string) bool {
-	return fm.LookUpExistsFileName(fileName)
+func (fm *FileManager) FileExists(filePath string) (bool, error) {
+	err := AssertValidPath(filePath)
+	if err != nil {
+		return false, err
+	}
+	return FindFileAndDo(fm, filePath, func(path string, d fs.DirEntry) (bool, error) {
+		return true, nil
+	})
 }
 
 func (fm *FileManager) DownloadFile(fileName string) ([]byte, error) {
 	// No hace falta esto, deberia de dar error en FindFileAndDo
-	//fileExists := fm.FileExists(fileName)
-	//if !fileExists {
-	//	return nil, ErrFileDoesNotExist
-	//}
+	fileExists, err := fm.FileExists(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if !fileExists {
+		return nil, ErrFileDoesNotExist
+	}
 
 	return FindFileAndDo(fm, fileName, func(path string, file fs.DirEntry) ([]byte, error) {
 		return os.ReadFile(path)
@@ -151,8 +136,10 @@ func (fm *FileManager) DownloadFile(fileName string) ([]byte, error) {
 
 func (fm *FileManager) RenameFile(fileName string, newFileName string) error {
 	found, err := FindFileAndDo(fm, fileName, func(path string, file fs.DirEntry) (bool, error) {
-		renameErr := fm.RenameLookupFileName(fileName, newFileName)
-		return true, renameErr 
+		dir := filepath.Dir(path)
+		newPath := filepath.Join(dir, newFileName)
+		os.Rename(path, newPath)
+		return true, nil
 	})
 	if !found {
 		return ErrFileDoesNotExist
@@ -160,33 +147,29 @@ func (fm *FileManager) RenameFile(fileName string, newFileName string) error {
 	return err
 }
 
-func (fm *FileManager) RenameFolder(folderName string, newFolderName string) error {
-	if fm.LookUpExistsFolderName(folderName){
-		return fm.RenameLookupFolderName(folderName, newFolderName)
-	}
-	return ErrFileDoesNotExist
-}
-
-func (fm *FileManager) CreateFolder(folderName string) error {
-
-	exists := fm.LookUpExistsFolderName(folderName)
-	if exists{
-		return ErrFileAlreadyExist
-	}
-
-	err := fm.SaveFolderNameIntoLookUp(folderName)
+func (fm *FileManager) CreateFolder(folderPath string) error {
+	err := AssertValidPath(folderPath)
 	if err != nil {
 		return err
 	}
-	path, err := fm.LookUpAbsoluteFolderPath(folderName)
-	if err != nil{
+	path := filepath.Join(fm.baseDir, folderPath)
+	exists, err := fm.FolderExists(folderPath)	
+	if err != nil {
 		return err
+	}
+	if exists {
+		return ErrFileAlreadyExist
 	}
 	return os.Mkdir(path, 0o755)
 }
 
-func (fm *FileManager) FolderExists(folderName string) (bool, error) {
-	_, err := fm.LookUpAbsoluteFolderPath(folderName)
+func (fm *FileManager) FolderExists(folderPath string) (bool, error) {
+	err := AssertValidPath(folderPath)
+	if err != nil {
+		return false, err
+	}
+	path := filepath.Join(fm.baseDir, folderPath)
+	_, err = os.Stat(path)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -196,37 +179,31 @@ func (fm *FileManager) FolderExists(folderName string) (bool, error) {
 	return true, nil
 }
 
-func (fm *FileManager) DeleteFile(fileName string) error {
+func (fm *FileManager) DeleteFile(pathToFile string) error {
 	// struct{} takes 0 bytes
-	_, err := FindFileAndDo(fm, fileName, func(path string, de fs.DirEntry) (struct{}, error) {
-		removeFileErr := fm.RemoveFileNameLookUp(fileName)
-		if removeFileErr != nil {
-			return struct{}{}, removeFileErr
-		}
+	_, err := FindFileAndDo(fm, pathToFile, func(path string, de fs.DirEntry) (struct{}, error) {
 		return struct{}{}, os.Remove(path)
 	})
 	return err
 }
 
-func (fm *FileManager) DeleteFolder(folderName string) error {
-	fullPath, err := fm.LookUpAbsoluteFolderPath(folderName)
+func (fm *FileManager) DeleteFolder(pathToFolder string) error {
+	err := AssertValidPath(pathToFolder)
 	if err != nil {
 		return err
 	}
-	err = fm.RemoveFolderNameLookUp(folderName)
-	if err != nil {
-		return err
-	}
-	return os.RemoveAll(fullPath)
+	path := filepath.Join(fm.baseDir, pathToFolder)
+	return os.RemoveAll(path)
 }
 
-func (fm *FileManager) UpdateFile(fileName string, newContent []byte) error {
-	fullPath, err := fm.LookUpAbsoluteFilePath(fileName)
+func (fm *FileManager) UpdateFile(pathToFile string, newContent []byte) error {
+	err := AssertValidPath(pathToFile)
 	if err != nil {
 		return err
 	}
+	fullPath := filepath.Join(fm.baseDir, pathToFile)
 	_, err = os.Stat(fullPath)
-	if err != nil {
+	if err != nil{
 		return err
 	}
 	return os.WriteFile(fullPath, newContent, 0644)

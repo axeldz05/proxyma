@@ -265,10 +265,8 @@ func Test18CanUpdateAFilesContent(t *testing.T){
 func Test19CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
 	fm := NewFileManager(t.TempDir())	
 	fileName, content := aFileNotAcceptedByStorage()
-	require.NoError(t, fm.UploadFile(fileName, content))
-	assertFileExists(t, fm, fileName)
+	require.ErrorIs(t, fm.UploadFile(fileName, content), ErrFileNameShouldNotHaveMultipleDotsAtStart)
 }
-// BEFORE PROCEEDING, TEST LOOKUP AND THEN REFACTOR
 
 // TestxxFilesAreInTheirSubfolders
 
