@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,41 +16,6 @@ func Map[T, U any](slice []T, fn func(T) U) []U {
 		result[i] = fn(v)
 	}
 	return result
-}
-
-func VisitAllFiles(fm *FileManager, fn func(fs.DirEntry)) {
-	filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf(err.Error())
-		}
-		if !d.IsDir() {
-			fn(d)
-		}
-		return nil
-	})
-}
-
-func FindFileAndDo[T any](fm *FileManager, pathToFile string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
-	var result T
-	err := filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relPath, err := filepath.Rel(fm.baseDir, path)
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && relPath == pathToFile {
-			var errFunc error
-			result, errFunc = fn(path, d)
-			if errFunc != nil {
-				return errFunc
-			}
-			return filepath.SkipAll // when file is found, end the visitor
-		}
-		return nil
-	})
-	return result, err
 }
 
 func (fm *FileManager) UploadFile(filePath string, content []byte) error {
@@ -85,6 +49,13 @@ func (fm *FileManager) UploadFolderWithFiles(pathToUpload string, clientIP strin
 	if err := fm.CreateFolder(rootFolderName); err != nil {return err}
 	return filepath.WalkDir(pathToUpload, func(path string, d fs.DirEntry, err error) error {
 		relPathToUpload, err := filepath.Rel(pathToUpload, path)
+		if err != nil {
+			return err
+		}
+		err = AssertValidPath(relPathToUpload)
+		if err != nil {
+			return err
+		}
 		if !d.IsDir(){
 			// should probably ask the system that uploads the file to do the ReadFile itself.
 			// should be receiving an IP where it asks for files by path
@@ -103,10 +74,15 @@ func (fm *FileManager) UploadFolderWithFiles(pathToUpload string, clientIP strin
 	})
 }
 
-func (fm *FileManager) AmountOfFiles() int {
+func (fm *FileManager) AmountOfFiles() (error, int) {
 	result := 0
-	VisitAllFiles(fm, func(fs.DirEntry) { result++ })
-	return result
+	err := VisitAndDo(fm, func(string, fs.DirEntry) error { result++; return nil}, 
+		IsNotADir)
+	
+	if err != nil {
+		return err, 0
+	}
+	return nil, result
 }
 
 func (fm *FileManager) FileExists(filePath string) (bool, error) {
@@ -120,7 +96,6 @@ func (fm *FileManager) FileExists(filePath string) (bool, error) {
 }
 
 func (fm *FileManager) DownloadFile(fileName string) ([]byte, error) {
-	// No hace falta esto, deberia de dar error en FindFileAndDo
 	fileExists, err := fm.FileExists(fileName)
 	if err != nil {
 		return nil, err

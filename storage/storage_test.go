@@ -105,13 +105,13 @@ func aFolderWithSubFoldersAndFilesAcceptedByStorage(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-
 	return root
 }
 
 func Test01StorageStartsWithNofiles(t *testing.T) {
 	fm := NewFileManager(t.TempDir())
-	got := fm.AmountOfFiles()
+	err, got := fm.AmountOfFiles()
+	require.NoError(t, err)	
 	want := 0
 	require.Equal(t, want, got)
 }
@@ -120,7 +120,8 @@ func Test02UploadingFilesIncreasesTheAmountOfFiles(t *testing.T) {
 	fm := NewFileManager(t.TempDir())
 	require.NoError(t, fm.UploadFile(aFileAcceptedByStorage()))
 	require.NoError(t, fm.UploadFile(aFileAcceptedByStorage2()))
-	got := fm.AmountOfFiles()
+	err, got := fm.AmountOfFiles()
+	require.NoError(t, err)	
 	want := 2
 	require.Equal(t, got, want)
 }
@@ -265,12 +266,10 @@ func Test18CanUpdateAFilesContent(t *testing.T){
 func Test19CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
 	fm := NewFileManager(t.TempDir())	
 	fileName, content := aFileNotAcceptedByStorage()
-	require.ErrorIs(t, fm.UploadFile(fileName, content), ErrFileNameShouldNotHaveMultipleDotsAtStart)
+	require.ErrorIs(t, fm.UploadFile(fileName, content), ErrFileNameShouldNotTryToAccessParentFolder)
 }
 
-// TestxxFilesAreInTheirSubfolders
-
-//func Test19ClientCanSynchronizeWithTheStorage(t *testing.T){
+//func Test20ClientCanSynchronizeWithTheStorage(t *testing.T){
 //	fm := NewFileManager(t.TempDir())	
 //	folderToUpload := aFolderWithSubFoldersAndFilesAcceptedByStorage(t)
 //	require.NoError(t, fm.UploadFolderWithFiles(folderToUpload, validIP()))

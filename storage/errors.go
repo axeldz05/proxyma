@@ -10,7 +10,7 @@ var (
 	ErrFileDoesNotExist = os.ErrNotExist
 	ErrFileAlreadyExist = os.ErrExist
 	ErrFailedSanitizationOfFileName = errors.New("The sanitization failed")
-	ErrFileNameShouldNotHaveMultipleDotsAtStart = errors.New("File name should not have multiple dots at the beginning of its name")
+	ErrFileNameShouldNotTryToAccessParentFolder = errors.New("File name should not have multiple dots with slashes at the beginning of its name")
 )
 
 func SanitizeError(name, reason string) error {
