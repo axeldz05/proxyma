@@ -4,7 +4,7 @@ import(
 	"path/filepath"
 	"io/fs"
 )
-func VisitAndDo(fm *FileManager, execute func(string, fs.DirEntry)error, whenConditionIsMet func(string, fs.DirEntry)bool) error {
+func VisitAndDo(fm *Storage, execute func(string, fs.DirEntry)error, whenConditionIsMet func(string, fs.DirEntry)bool) error {
 	return filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -30,7 +30,7 @@ func ExistsFileRelativeToBase(baseDir string, pathToFile string)(func(path strin
 	}
 }
 
-func FindFileAndDo[T any](fm *FileManager, pathToFile string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
+func FindFileAndDo[T any](fm *Storage, pathToFile string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
 	var result T
 
 	onFileFoundDo := func(path string, d fs.DirEntry) error{

@@ -8,58 +8,58 @@ import(
 	"github.com/stretchr/testify/require"
 )
 
-func validIP()string{
-	return "111.111.111"
+func validClient()string{
+	return "validClient"
 }
 
 func testUploadFolder(t *testing.T, folderToUpload string) {
-    fm := NewFileManager(t.TempDir())
-    err := fm.UploadFolderWithFiles(folderToUpload, validIP())
+    aStorage := NewStorage(t.TempDir())
+    err := aStorage.UploadFolderWithFiles(folderToUpload, validClient())
     require.NoError(t, err)
     
     folderName := filepath.Base(folderToUpload)
-    assertFolderExists(t, fm, folderName)
-    assertUploadedFilesMatch(t, fm, folderToUpload, folderName)
+    assertFolderExists(t, aStorage, folderName)
+    assertUploadedFilesMatch(t, aStorage, folderToUpload, folderName)
 }
 
-func assertFileExists(t *testing.T, fm *FileManager, fileName string) {
-	exists, _ := fm.FileExists(fileName)
+func assertFileExists(t *testing.T, aStorage *Storage, fileName string) {
+	exists, _ := aStorage.FileExists(fileName)
 	require.True(t, exists)
 }
 
-func assertFileDoesNotExists(t *testing.T, fm *FileManager, fileName string) {
-	exists, _ := fm.FileExists(fileName)
+func assertFileDoesNotExists(t *testing.T, aStorage *Storage, fileName string) {
+	exists, _ := aStorage.FileExists(fileName)
 	require.False(t, exists)
 }
 
-func noErrorUploadFile(t *testing.T, fm *FileManager, fileName string, content []byte) {
-	require.NoError(t, fm.UploadFile(fileName, content))
+func noErrorUploadFile(t *testing.T, aStorage *Storage, fileName string, content []byte) {
+	require.NoError(t, aStorage.UploadFile(fileName, content))
 }
 
-func uploadFileAndVerify(t *testing.T, fm *FileManager, fileName string, content []byte) {
-	require.NoError(t, fm.UploadFile(fileName, content))
-	got, err := fm.DownloadFile(fileName)
+func uploadFileAndVerify(t *testing.T, aStorage *Storage, fileName string, content []byte) {
+	require.NoError(t, aStorage.UploadFile(fileName, content))
+	got, err := aStorage.DownloadFile(fileName)
 	require.NoError(t, err)
 	require.Equal(t, content, got)
 }
 
-func assertFolderExists(t *testing.T, fm *FileManager, folderName string) {
-    folderExists, err := fm.FolderExists(folderName)
+func assertFolderExists(t *testing.T, aStorage *Storage, folderName string) {
+    folderExists, err := aStorage.FolderExists(folderName)
     require.NoError(t, err)
     if !folderExists {
-        t.Fatalf("The folder named '%v' should exist as direct subfolder to '%v'", folderName, fm.baseDir)
+        t.Fatalf("The folder named '%v' should exist as direct subfolder to '%v'", folderName, aStorage.baseDir)
     }
 }
 
-func assertFolderDoesNotExists(t *testing.T, fm *FileManager, folderPath string) {
-    folderExists, err := fm.FolderExists(folderPath)
+func assertFolderDoesNotExists(t *testing.T, aStorage *Storage, folderPath string) {
+    folderExists, err := aStorage.FolderExists(folderPath)
     require.NoError(t, err)
     if folderExists {
-        t.Fatalf("The folder named '%v' should not exist as direct subfolder to '%v'", folderPath, fm.baseDir)
+        t.Fatalf("The folder named '%v' should not exist as direct subfolder to '%v'", folderPath, aStorage.baseDir)
     }
 }
 
-func assertUploadedFilesMatch(t *testing.T, fm *FileManager, folderToUpload, folderName string) {
+func assertUploadedFilesMatch(t *testing.T, aStorage *Storage, folderToUpload, folderName string) {
     require.NoError(t, filepath.WalkDir(folderToUpload, func(path string, d fs.DirEntry, err error) error {
         relPath, err := filepath.Rel(folderToUpload, path)
         require.NoError(t, err)
@@ -68,13 +68,13 @@ func assertUploadedFilesMatch(t *testing.T, fm *FileManager, folderToUpload, fol
         if !d.IsDir() {
             fileContent, err := os.ReadFile(path)
             require.NoErrorf(t, err, "There is no file '%v' on root '%v'", path, folderToUpload)
-            gotContent, err := fm.DownloadFile(relPath)
+            gotContent, err := aStorage.DownloadFile(relPath)
             require.NoErrorf(t, err, "There is no uploaded file '%v'. Root is '%v'", relPath, folderToUpload)
             require.Equal(t, gotContent, fileContent)
         }
         
         if d.IsDir() && d.Name() != folderName {
-            fm.FolderExists(relPath)
+            aStorage.FolderExists(relPath)
         }
         
         return nil

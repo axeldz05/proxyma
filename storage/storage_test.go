@@ -109,106 +109,106 @@ func aFolderWithSubFoldersAndFilesAcceptedByStorage(t *testing.T) string {
 }
 
 func Test01StorageStartsWithNofiles(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
-	err, got := fm.AmountOfFiles()
+	aStorage := NewStorage(t.TempDir())
+	err, got := aStorage.AmountOfFiles()
 	require.NoError(t, err)	
 	want := 0
 	require.Equal(t, want, got)
 }
 
 func Test02UploadingFilesIncreasesTheAmountOfFiles(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
-	require.NoError(t, fm.UploadFile(aFileAcceptedByStorage()))
-	require.NoError(t, fm.UploadFile(aFileAcceptedByStorage2()))
-	err, got := fm.AmountOfFiles()
+	aStorage := NewStorage(t.TempDir())
+	require.NoError(t, aStorage.UploadFile(aFileAcceptedByStorage()))
+	require.NoError(t, aStorage.UploadFile(aFileAcceptedByStorage2()))
+	err, got := aStorage.AmountOfFiles()
 	require.NoError(t, err)	
 	want := 2
 	require.Equal(t, got, want)
 }
 
 func Test03StorageRecognizesTheSameUploadedFile(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
-	uploadFileAndVerify(t, fm, fileName, content)
+	uploadFileAndVerify(t, aStorage, fileName, content)
 }
 
 func Test04CanNotDownloadAFileThatDoesNotExistsInTheStorage(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, _ := aFileAcceptedByStorage()
-	_, got := fm.DownloadFile(fileName)
+	_, got := aStorage.DownloadFile(fileName)
 	want := ErrFileDoesNotExist
 	require.ErrorIs(t, got, want)
 }
 
 func Test05CanChangeTheNameOfAnUploadedFile(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
-	noErrorUploadFile(t, fm, fileName, content)
-	require.NoError(t, fm.RenameFile(fileName, NewFileName()))
-	assertFileExists(t, fm, NewFileName())
+	noErrorUploadFile(t, aStorage, fileName, content)
+	require.NoError(t, aStorage.RenameFile(fileName, NewFileName()))
+	assertFileExists(t, aStorage, NewFileName())
 }
 func Test06AfterChangingAFileNameThePreviousShouldNotLongerExist(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
-	noErrorUploadFile(t, fm, fileName, content)
-	require.NoError(t, fm.RenameFile(fileName, NewFileName()))
-	assertFileDoesNotExists(t, fm, fileName)
+	noErrorUploadFile(t, aStorage, fileName, content)
+	require.NoError(t, aStorage.RenameFile(fileName, NewFileName()))
+	assertFileDoesNotExists(t, aStorage, fileName)
 }
 
 func Test07AChangedFileNameShouldMantainItsContent(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
-	noErrorUploadFile(t, fm, fileName, content)
+	noErrorUploadFile(t, aStorage, fileName, content)
 
-	want, downloadFileErr := fm.DownloadFile(fileName)
+	want, downloadFileErr := aStorage.DownloadFile(fileName)
 	require.NoError(t, downloadFileErr)
 
-	require.NoError(t, fm.RenameFile(fileName, NewFileName()))
+	require.NoError(t, aStorage.RenameFile(fileName, NewFileName()))
 
-	got, downloadFileErr := fm.DownloadFile(NewFileName())
+	got, downloadFileErr := aStorage.DownloadFile(NewFileName())
 	require.NoError(t, downloadFileErr)
 
 	require.Equal(t, got, want)
 }
 
 func Test08CanNotChangeAFileNameThatDoesNotExist(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, _ := aFileAcceptedByStorage()
-	got := fm.RenameFile(fileName, NewFileName())
+	got := aStorage.RenameFile(fileName, NewFileName())
 	want := ErrFileDoesNotExist
 	require.ErrorIs(t, got, want)
 }
 
 func Test09CanCreateFolders(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
-	err := fm.CreateFolder(aFolderAcceptedByStorage())
+	aStorage := NewStorage(t.TempDir())
+	err := aStorage.CreateFolder(aFolderAcceptedByStorage())
 	require.NoError(t, err)
-	assertFolderExists(t, fm, aFolderAcceptedByStorage())
+	assertFolderExists(t, aStorage, aFolderAcceptedByStorage())
 }
 
 func Test10CanNotCreateAFolderWithSameNameAsAnotherInSameDir(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
-	err := fm.CreateFolder(aFolderAcceptedByStorage())
+	aStorage := NewStorage(t.TempDir())
+	err := aStorage.CreateFolder(aFolderAcceptedByStorage())
 	require.NoError(t, err)
-	err = fm.CreateFolder(aFolderAcceptedByStorage())
+	err = aStorage.CreateFolder(aFolderAcceptedByStorage())
 	require.ErrorIs(t, err, ErrFileAlreadyExist)
 }
 
 func Test11CanCreateAFolderInSubFolder(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
-	err := fm.CreateFolder(aFolderAcceptedByStorage())
+	aStorage := NewStorage(t.TempDir())
+	err := aStorage.CreateFolder(aFolderAcceptedByStorage())
 	require.NoError(t, err)
 	folderPath := filepath.Join(aFolderAcceptedByStorage(), aFolderAcceptedByStorage())
-	err = fm.CreateFolder(folderPath)
+	err = aStorage.CreateFolder(folderPath)
 	require.NoError(t, err)
-	assertFolderExists(t, fm, folderPath)
+	assertFolderExists(t, aStorage, folderPath)
 }
 
 func Test12CanNotUploadAFileThatAlreadyExistsInSameFolder(t *testing.T) {
-	fm := NewFileManager(t.TempDir())
+	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
-	noErrorUploadFile(t, fm, fileName, content)
-	err := fm.UploadFile(fileName, content)
+	noErrorUploadFile(t, aStorage, fileName, content)
+	err := aStorage.UploadFile(fileName, content)
 	require.ErrorIs(t, err, ErrFileAlreadyExist, fmt.Sprintf("got: '%v'", err))
 }
 
@@ -223,56 +223,49 @@ func Test14CanUploadAFolderWithSubFolders(t *testing.T) {
 }
 
 func Test15DoesNotDeleteADifferentFileThanTheSpecified(t *testing.T){
-	fm := NewFileManager(t.TempDir())	
+	aStorage := NewStorage(t.TempDir())	
 	fileToDelete, content := aFileAcceptedByStorage()
-	noErrorUploadFile(t, fm, fileToDelete, content)
+	noErrorUploadFile(t, aStorage, fileToDelete, content)
 	remainingFileInTheStorage, content := aFileAcceptedByStorage2()
-	noErrorUploadFile(t, fm, remainingFileInTheStorage, content)
-	require.NoError(t, fm.DeleteFile(fileToDelete))
-	assertFileDoesNotExists(t, fm, fileToDelete)
-	assertFileExists(t, fm, remainingFileInTheStorage)
+	noErrorUploadFile(t, aStorage, remainingFileInTheStorage, content)
+	require.NoError(t, aStorage.DeleteFile(fileToDelete))
+	assertFileDoesNotExists(t, aStorage, fileToDelete)
+	assertFileExists(t, aStorage, remainingFileInTheStorage)
 }
 
 func Test16CanDeleteAFileThatIsInASubFolder(t *testing.T){
-	fm := NewFileManager(t.TempDir())	
+	aStorage := NewStorage(t.TempDir())	
 	folderToUpload := aFolderWithFilesAcceptedByStorage(t)
-	require.NoError(t, fm.UploadFolderWithFiles(folderToUpload, validIP()))
+	require.NoError(t, aStorage.UploadFolderWithFiles(folderToUpload, validClient()))
 	fileName, _ := aSubFileAcceptedByStorage()
 	pathToFile := filepath.Join(filepath.Base(folderToUpload), fileName)
-	require.NoError(t, fm.DeleteFile(pathToFile))
-	assertFileDoesNotExists(t, fm, pathToFile)
+	require.NoError(t, aStorage.DeleteFile(pathToFile))
+	assertFileDoesNotExists(t, aStorage, pathToFile)
 }
 
 func Test17DeletingAFolderAlsoRemovesItsFiles(t *testing.T){
-	fm := NewFileManager(t.TempDir())	
+	aStorage := NewStorage(t.TempDir())	
 	folderToUpload := aFolderWithSubFoldersAndFilesAcceptedByStorage(t)
-	require.NoError(t, fm.UploadFolderWithFiles(folderToUpload, validIP()))
+	require.NoError(t, aStorage.UploadFolderWithFiles(folderToUpload, validClient()))
 	pathToFolder := filepath.Join(filepath.Base(folderToUpload), aSubFolderAcceptedByStorage())
-	require.NoError(t, fm.DeleteFolder(pathToFolder))
-	assertFolderDoesNotExists(t, fm, pathToFolder)
+	require.NoError(t, aStorage.DeleteFolder(pathToFolder))
+	assertFolderDoesNotExists(t, aStorage, pathToFolder)
 }
 
 func Test18CanUpdateAFilesContent(t *testing.T){
-	fm := NewFileManager(t.TempDir())	
+	aStorage := NewStorage(t.TempDir())	
 	fileName, content := aFileAcceptedByStorage()
 	newContent := []byte("hello!")
-	require.NoError(t, fm.UploadFile(fileName, content))
-	require.NoError(t, fm.UpdateFile(fileName, newContent))
-	content, err := fm.DownloadFile(fileName)
+	require.NoError(t, aStorage.UploadFile(fileName, content))
+	require.NoError(t, aStorage.UpdateFile(fileName, newContent))
+	content, err := aStorage.DownloadFile(fileName)
 	require.NoError(t, err)
 	require.Equal(t, content, newContent)
 }
 
 func Test19CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
-	fm := NewFileManager(t.TempDir())	
+	aStorage := NewStorage(t.TempDir())	
 	fileName, content := aFileNotAcceptedByStorage()
-	require.ErrorIs(t, fm.UploadFile(fileName, content), ErrFileNameShouldNotTryToAccessParentFolder)
+	require.ErrorIs(t, aStorage.UploadFile(fileName, content), ErrFileNameShouldNotTryToAccessParentFolder)
 }
 
-//func Test20ClientCanSynchronizeWithTheStorage(t *testing.T){
-//	fm := NewFileManager(t.TempDir())	
-//	folderToUpload := aFolderWithSubFoldersAndFilesAcceptedByStorage(t)
-//	require.NoError(t, fm.UploadFolderWithFiles(folderToUpload, validIP()))
-//	// el cliente deberia de armar un http hacia fm. Esto se logra mediante una interfaz
-//	facade.SynchronizeClientWithServer(validIP(), fm)
-//}

@@ -7,6 +7,7 @@ import (
 )
 // make better error messages. Put context into it. FileDoesNotExist isnt enough
 var (
+	ErrClientAlreadyHasAStorage = errors.New("Client already has an storage")
 	ErrFileDoesNotExist = os.ErrNotExist
 	ErrFileAlreadyExist = os.ErrExist
 	ErrFailedSanitizationOfFileName = errors.New("The sanitization failed")
