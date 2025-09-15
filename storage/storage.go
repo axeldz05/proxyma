@@ -187,3 +187,63 @@ func (st *Storage) UpdateFile(pathToFile string, newContent []byte) error {
 	}
 	return os.WriteFile(fullPath, newContent, 0644)
 }
+
+
+func (ds *DiskStorage) Save(filename string, data io.Reader) (*FileInfo, error) {
+    filePath := filepath.Join(ds.basePath, filename)
+    
+    // Create the file
+    file, err := os.Create(filePath)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+    
+    // Copy data from reader to file
+    size, err := io.Copy(file, data)
+    if err != nil {
+        return nil, err
+    }
+    
+    return &FileInfo{
+        Name: filename,
+        Size: size,
+        Path: filePath,
+    }, nil
+}
+
+// SaveMultipart stores a file from a multipart.File
+func (ds *DiskStorage) SaveMultipart(filename string, file multipart.File) (*FileInfo, error) {
+    return ds.Save(filename, file)
+}
+
+// Retrieve returns an io.ReadCloser for reading a file
+func (ds *DiskStorage) Retrieve(filename string) (io.ReadCloser, error) {
+    filePath := filepath.Join(ds.basePath, filename)
+    return os.Open(filePath)
+}
+
+// RetrieveWriter writes file content to an io.Writer
+func (ds *DiskStorage) RetrieveWriter(filename string, w io.Writer) error {
+    file, err := ds.Retrieve(filename)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    
+    _, err = io.Copy(w, file)
+    return err
+}
+
+// Delete removes a file
+func (ds *DiskStorage) Delete(filename string) error {
+    filePath := filepath.Join(ds.basePath, filename)
+    return os.Remove(filePath)
+}
+
+// Exists checks if a file exists
+func (ds *DiskStorage) Exists(filename string) bool {
+    filePath := filepath.Join(ds.basePath, filename)
+    _, err := os.Stat(filePath)
+    return err == nil
+}
