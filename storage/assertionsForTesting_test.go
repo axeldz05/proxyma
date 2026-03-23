@@ -34,14 +34,16 @@ func assertFileDoesNotExists(t *testing.T, aStorage *Storage, fileName string) {
 }
 
 func noErrorUploadFile(t *testing.T, aStorage *Storage, fileName string, content []byte) {
-	require.NoError(t, aStorage.UploadFile(fileName, bytes.NewReader(content)))
+	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
+	require.NoError(t, err)
 }
 
 func uploadFileAndVerify(t *testing.T, aStorage *Storage, fileName string, content []byte) {
-	require.NoError(t, aStorage.UploadFile(fileName, bytes.NewReader(content)))
+	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
+	require.NoError(t, err)
 	
 	var got bytes.Buffer
-	err := aStorage.DownloadFile(fileName, &got)
+	err = aStorage.DownloadFile(fileName, &got)
 	require.NoError(t, err)
 	require.Equal(t, content, got.Bytes())
 }

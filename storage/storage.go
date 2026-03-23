@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"io/fs"
 	"os"
@@ -23,26 +25,28 @@ func (st *Storage) Name() string {
 	return filepath.Base(st.baseDir)
 }
 
-func (st *Storage) UploadFile(filePath string, content io.Reader) error {
+func (st *Storage) UploadFile(filePath string, content io.Reader) (string, error) {
 	err := AssertValidPath(filePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fullPath := filepath.Join(st.baseDir, filePath)
 	_, err = os.Stat(fullPath)
 	switch {
 	case err == nil:
-		return ErrFileAlreadyExist
+		return "", ErrFileAlreadyExist
 	case os.IsNotExist(err):
 		file, err := os.Create(fullPath)
 		if err != nil {
-			return err
+			return "", err
 		}
 		defer file.Close()
-		_, err = io.Copy(file, content)
-		return err
+		hasher := sha256.New()
+		mw := io.MultiWriter(file, hasher)
+		_, err = io.Copy(mw, content)
+		return hex.EncodeToString(hasher.Sum(nil)), err
 	default:
-		return err
+		return "", err
 	}
 }
 
@@ -228,22 +232,22 @@ func (st *Storage) DeleteFolder(pathToFolder string) error {
 	return os.RemoveAll(path)
 }
 
-func (st *Storage) UpdateFile(pathToFile string, newContent io.Reader) error {
+func (st *Storage) UpdateFile(pathToFile string, newContent io.Reader) (string, error) {
 	err := AssertValidPath(pathToFile)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fullPath := filepath.Join(st.baseDir, pathToFile)
 	_, err = os.Stat(fullPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, newContent)
-	return err
+	return "", err
 }
