@@ -7,69 +7,47 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"pcc/storage"
+	"proxyma/storage"
 	"strings"
 	"sync"
-	"time"
 )
 
-// FileInfo represents metadata about a file
 type FileInfo struct {
     Name string `json:"name"`
     Size int64  `json:"size"`
     URL  string `json:"url"` // URL to download the file from
+	Hash string `json:"hash"`
 }
 
-// Server represents a node in our network
 type Server struct {
     ID      string
     Address string
     Client  *http.Client
-    Peers   map[string]string // Map of peer IDs to their addresses
+    Peers   map[string]string
     
-    // File storage
 	storage storage.Storage
 
 	files map[string]FileInfo
     mutex      sync.RWMutex
     
-    // HTTP server
-    server *http.Server
+    server *httptest.Server
 }
 
 func main(){
-    // server := &http.Server{
-    //     Addr: ":8080",
-    // }
-
-    // http.HandleFunc("/", handler)
-
-    // log.Println("Starting file server on port 8080")
-    // server.ListenAndServe()
-	ctx := context.TODO() // use context.TODO() if you don't know what context to use.
-	var body io.Reader = strings.NewReader("Hello, world!!") // nil readers are OK; it means there's no body.
+	ctx := context.TODO()
+	var body io.Reader = strings.NewReader("Hello, world!!")
 	const method = "POST"
 	const url = "https://eblog.fly.dev/index.html"
-	req, err := http.NewRequestWithContext(ctx, method, url, body) // the function will parse the URL and set the Host header; invalid URLs will return an error.
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		panic(err)
 	}
-	req.Header.Add("Accept-Encoding", "gzip")
-    req.Header.Add("Accept-Encoding", "deflate")
-    req.Header.Set("User-Agent", "eblog/1.0")
-    req.Header.Set("some-key", "a value")   // will be canonicalized to Some-Key
-    req.Header.Set("SOMe-KEY", "somevalue") // will overwrite the above since we used Set rather than Add
     req.Write(os.Stdout)
 	log.Println(req.Header)
-	// analogous but with post
-	// const method = "POST"
-	// const url = "https://eblog.fly.dev/index.html"
-	// var body io.Reader = strings.NewReader("hello, world")
-	// req, err := http.NewRequestWithContext(ctx, method, url, body)
-
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -83,36 +61,38 @@ func GetUpdateHandler(w http.ResponseWriter, r *http.Request){
 	w.Write([]byte("file1.txt"))
 }
 
-// func (c *PccClient) SyncStorage()(bool, error){
-// 	return true, nil
-// }
-// func (c *PccClient) UploadFile(filePath string, content []byte)error{
-// 	return c.Storage.UploadFile(filePath, content)
-// }
+func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
+    s.mutex.RLock()
+    defer s.mutex.RUnlock()
+	//for v,k := range s.Peers{
+	//fmt.Printf("v: %s. k: %s", v,k)
+	//}
+    json.NewEncoder(w).Encode(s.Peers)
+}
 
 
-// AddPeer adds another server to this server's peer list
+func (s *Server) SyncStorage()bool{
+	return true
+}
+
 func (s *Server) AddPeer(peerID, address string) {
     s.mutex.Lock()
     defer s.mutex.Unlock()
     s.Peers[peerID] = address
 }
 
-// handleUpload handles file uploads from clients using custom storage
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
     }
     
-    // Parse multipart form
     err := r.ParseMultipartForm(10 << 20) // 10 MB limit
     if err != nil {
         http.Error(w, "Unable to parse form", http.StatusBadRequest)
         return
     }
     
-    // Get the file from the form data
     file, header, err := r.FormFile("file")
     if err != nil {
         http.Error(w, "Error retrieving file", http.StatusBadRequest)
@@ -120,32 +100,35 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
     }
     defer file.Close()
     
-    // Use custom storage to save the file
-    fileInfo, err := s.storage.Save(header.Filename, file, header.Size)
+	hash, err := s.storage.UploadFile(header.Filename, file)
     if err != nil {
         http.Error(w, "Error saving file: "+err.Error(), http.StatusInternalServerError)
         return
     }
     
-    // Create file info for metadata tracking
-    fileMeta := FileInfo{
-        Name: fileInfo.Name,
-        Size: fileInfo.Size,
+	metaFileSize, metaFileName, err := getFileInfo(header)
+
+	if err != nil {
+        http.Error(w, "Error retrieving file metadata: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fileMeta := FileInfo{
+        Name: metaFileName,
+        Size: metaFileSize,
         URL:  fmt.Sprintf("%s/download/%s", s.Address, header.Filename),
+		Hash: hash,
     }
     
-    // Store file metadata
     s.mutex.Lock()
     s.files[header.Filename] = fileMeta
     s.mutex.Unlock()
     
-    // Notify all peers about the new file
     go s.notifyPeers(fileMeta)
     
     w.WriteHeader(http.StatusCreated)
     json.NewEncoder(w).Encode(map[string]string{
         "message": "File uploaded successfully",
-        "file_id": fileInfo.ID, // Assuming your storage returns an ID
     })
 }
 
@@ -163,7 +146,6 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
         return
     }
     
-    // Check if we already have this file
     s.mutex.RLock()
     _, exists := s.files[fileInfo.Name]
     s.mutex.RUnlock()
@@ -174,18 +156,15 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
         return
     }
     
-    // Download the file from the peer
     go s.downloadFileFromPeer(fileInfo)
     
     w.WriteHeader(http.StatusAccepted)
     fmt.Fprint(w, "Notification received, downloading file")
 }
 
-// handleDownload serves files to peers using custom storage
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
     filename := r.URL.Path[len("/download/"):]
     
-    // Check if file exists in our metadata
     s.mutex.RLock()
     _, exists := s.files[filename]
     s.mutex.RUnlock()
@@ -195,35 +174,15 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
         return
     }
     
-    // Use custom storage to retrieve the file
-    reader, err := s.storage.Retrieve(filename)
+    err := s.storage.DownloadFile(filename, w)
     if err != nil {
         http.Error(w, "Error retrieving file: "+err.Error(), http.StatusInternalServerError)
         return
     }
-    defer reader.Close()
-    
-    // Set appropriate headers
     w.Header().Set("Content-Disposition", "attachment; filename="+filename)
     w.Header().Set("Content-Type", "application/octet-stream")
-    
-    // Stream the file to the client
-    _, err = io.Copy(w, reader)
-    if err != nil {
-        http.Error(w, "Error sending file", http.StatusInternalServerError)
-        return
-    }
 }
 
-// handlePeers returns information about this server's peers
-func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
-    s.mutex.RLock()
-    defer s.mutex.RUnlock()
-    
-    json.NewEncoder(w).Encode(s.Peers)
-}
-
-// handleHealth returns server health information
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
     health := map[string]interface{}{
         "status":   "healthy",
@@ -231,13 +190,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
         "files":    len(s.files),
         "peers":    len(s.Peers),
         "address":  s.Address,
-        "storage":  s.storage.Health(), // Assuming your storage has a health method
     }
     
     json.NewEncoder(w).Encode(health)
 }
 
-// notifyPeers notifies all peers about a new file
 func (s *Server) notifyPeers(fileInfo FileInfo) {
     s.mutex.RLock()
     peers := make(map[string]string, len(s.Peers))
@@ -248,10 +205,9 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
     
     for peerID, peerAddr := range peers {
         if peerID == s.ID {
-            continue // Skip self
+            continue
         }
         
-        // Prepare the request
         url := fmt.Sprintf("%s/notify", peerAddr)
         body, err := json.Marshal(fileInfo)
         if err != nil {
@@ -259,7 +215,6 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
             continue
         }
         
-        // Send notification
         resp, err := s.Client.Post(url, "application/json", bytes.NewReader(body))
         if err != nil {
             fmt.Printf("Error notifying peer %s: %v\n", peerID, err)
@@ -273,9 +228,8 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
     }
 }
 
-// downloadFileFromPeer downloads a file from a peer server
+// This should verify that it comes from a valid peer.
 func (s *Server) downloadFileFromPeer(fileInfo FileInfo) {
-    // Download the file
     resp, err := s.Client.Get(fileInfo.URL)
     if err != nil {
         fmt.Printf("Error downloading file %s: %v\n", fileInfo.Name, err)
@@ -287,21 +241,12 @@ func (s *Server) downloadFileFromPeer(fileInfo FileInfo) {
         fmt.Printf("Error downloading file %s: %s\n", fileInfo.Name, resp.Status)
         return
     }
-    
-    // Use custom storage to save the file
-    savedFileInfo, err := s.storage.Save(fileInfo.Name, resp.Body, fileInfo.Size)
+	_, err = s.storage.UploadFile(fileInfo.Name, resp.Body)
     if err != nil {
         fmt.Printf("Error saving file %s: %v\n", fileInfo.Name, err)
         return
     }
-    
-    // Update file metadata
-    fileMeta := FileInfo{
-        Name: savedFileInfo.Name,
-        Size: savedFileInfo.Size,
-        URL:  fmt.Sprintf("%s/download/%s", s.Address, fileInfo.Name),
-    }
-    
+    fileMeta := fileInfo    
     s.mutex.Lock()
     s.files[fileInfo.Name] = fileMeta
     s.mutex.Unlock()
@@ -309,7 +254,32 @@ func (s *Server) downloadFileFromPeer(fileInfo FileInfo) {
     fmt.Printf("Successfully downloaded file %s from peer\n", fileInfo.Name)
 }
 
-// Close shuts down the server
 func (s *Server) Close() {
     s.server.Close()
+}
+
+func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
+    file, err := header.Open()
+    if err != nil {
+        return 0, "", err
+    }
+    defer file.Close()
+
+    if stat, ok := file.(interface{ Stat() (os.FileInfo, error) }); ok {
+        info, err := stat.Stat()
+        if err != nil {
+            return 0, "", err
+        }
+        return info.Size(), info.Name(), nil
+    }
+
+    size, err := file.Seek(0, io.SeekEnd)
+    if err != nil {
+        return 0, "", err
+    }
+    _, err = file.Seek(0, io.SeekStart)
+    if err != nil {
+        return 0, "", err
+    }
+    return size, header.Filename, nil
 }
