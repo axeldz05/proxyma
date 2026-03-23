@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,11 +19,11 @@ func Map[T, U any](slice []T, fn func(T) U) []U {
 	return result
 }
 
-func (st *Storage) Name()string{
+func (st *Storage) Name() string {
 	return filepath.Base(st.baseDir)
 }
 
-func (st *Storage) UploadFile(filePath string, content []byte) error {
+func (st *Storage) UploadFile(filePath string, content io.Reader) error {
 	err := AssertValidPath(filePath)
 	if err != nil {
 		return err
@@ -33,14 +34,21 @@ func (st *Storage) UploadFile(filePath string, content []byte) error {
 	case err == nil:
 		return ErrFileAlreadyExist
 	case os.IsNotExist(err):
-		return os.WriteFile(fullPath, content, 0644)
+		file, err := os.Create(fullPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = io.Copy(file, content)
+		return err
 	default:
 		return err
 	}
 }
 
-func ReadFileFromClient(clientIP string, pathToRead string) ([]byte, error){
-	return os.ReadFile(pathToRead)
+func ReadFileFromClient(clientIP string, pathToRead string) (io.ReadCloser, error) {
+	// For now this is mocked. It should do a HTTP GET request to the client.
+	return os.Open(pathToRead)
 }
 
 func (st *Storage) UploadFolderWithFiles(pathToUpload string, clientIP string) error {
@@ -50,7 +58,9 @@ func (st *Storage) UploadFolderWithFiles(pathToUpload string, clientIP string) e
 	}
 	rootFolderName := filepath.Base(pathToUpload)
 	rootFolder := filepath.Join(st.baseDir, rootFolderName)
-	if err := st.CreateFolder(rootFolderName); err != nil {return err}
+	if err := st.CreateFolder(rootFolderName); err != nil {
+		return err
+	}
 	return filepath.WalkDir(pathToUpload, func(path string, d fs.DirEntry, err error) error {
 		relPathToUpload, err := filepath.Rel(pathToUpload, path)
 		if err != nil {
@@ -60,17 +70,24 @@ func (st *Storage) UploadFolderWithFiles(pathToUpload string, clientIP string) e
 		if err != nil {
 			return err
 		}
-		if !d.IsDir(){
-			// should probably ask the system that uploads the file to do the ReadFile itself.
-			// should be receiving an IP where it asks for files by path
+		if !d.IsDir() {
 			fileContent, err := ReadFileFromClient(clientIP, path)
-			if err != nil{
+			if err != nil {
 				return err
 			}
+			defer fileContent.Close()
+
 			newPath := filepath.Join(rootFolder, relPathToUpload)
-			return os.WriteFile(newPath, fileContent, 0644)
+			outFile, err := os.Create(newPath)
+			if err != nil {
+				return err
+			}
+			defer outFile.Close()
+
+			_, err = io.Copy(outFile, fileContent)
+			return err
 		}
-		if d.IsDir() && d.Name() != pathToUpload{
+		if d.IsDir() && d.Name() != pathToUpload {
 			newPath := filepath.Join(rootFolder, relPathToUpload)
 			return os.MkdirAll(newPath, 0o755)
 		}
@@ -80,9 +97,9 @@ func (st *Storage) UploadFolderWithFiles(pathToUpload string, clientIP string) e
 
 func (st *Storage) AmountOfFiles() (error, int) {
 	result := 0
-	err := VisitAndDo(st, func(string, fs.DirEntry) error { result++; return nil}, 
+	err := VisitAndDo(st, func(string, fs.DirEntry) error { result++; return nil },
 		IsNotADir)
-	
+
 	if err != nil {
 		return err, 0
 	}
@@ -94,36 +111,71 @@ func (st *Storage) FileExists(filePath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return FindFileAndDo(st, filePath, func(path string, d fs.DirEntry) (bool, error) {
-		return true, nil
-	})
+	fullPath := filepath.Join(st.baseDir, filePath)
+	info, err := os.Stat(fullPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir(), nil
 }
 
-func (st *Storage) DownloadFile(fileName string) ([]byte, error) {
-	fileExists, err := st.FileExists(fileName)
+func (st *Storage) DownloadFile(fileName string, w io.Writer) error {
+	err := AssertValidPath(fileName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if !fileExists {
-		return nil, ErrFileDoesNotExist
+	fullPath := filepath.Join(st.baseDir, fileName)
+
+	file, err := os.Open(fullPath)
+	if os.IsNotExist(err) {
+		return ErrFileDoesNotExist
+	}
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return ErrFileDoesNotExist
 	}
 
-	return FindFileAndDo(st, fileName, func(path string, file fs.DirEntry) ([]byte, error) {
-		return os.ReadFile(path)
-	})
+	_, err = io.Copy(w, file)
+	return err
 }
 
 func (st *Storage) RenameFile(fileName string, newFileName string) error {
-	found, err := FindFileAndDo(st, fileName, func(path string, file fs.DirEntry) (bool, error) {
-		dir := filepath.Dir(path)
-		newPath := filepath.Join(dir, newFileName)
-		os.Rename(path, newPath)
-		return true, nil
-	})
-	if !found {
+	err := AssertValidPath(fileName)
+	if err != nil {
+		return err
+	}
+	err = AssertValidPath(newFileName)
+	if err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(st.baseDir, fileName)
+	dir := filepath.Dir(fullPath)
+	newFullPath := filepath.Join(dir, newFileName)
+
+	info, err := os.Stat(fullPath)
+	if os.IsNotExist(err) {
 		return ErrFileDoesNotExist
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return ErrFileDoesNotExist
+	}
+
+	return os.Rename(fullPath, newFullPath)
 }
 
 func (st *Storage) CreateFolder(folderPath string) error {
@@ -132,7 +184,7 @@ func (st *Storage) CreateFolder(folderPath string) error {
 		return err
 	}
 	path := filepath.Join(st.baseDir, folderPath)
-	exists, err := st.FolderExists(folderPath)	
+	exists, err := st.FolderExists(folderPath)
 	if err != nil {
 		return err
 	}
@@ -148,22 +200,23 @@ func (st *Storage) FolderExists(folderPath string) (bool, error) {
 		return false, err
 	}
 	path := filepath.Join(st.baseDir, folderPath)
-	_, err = os.Stat(path)
+	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	if err != nil { // else if
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return info.IsDir(), nil
 }
 
 func (st *Storage) DeleteFile(pathToFile string) error {
-	// struct{} takes 0 bytes
-	_, err := FindFileAndDo(st, pathToFile, func(path string, de fs.DirEntry) (struct{}, error) {
-		return struct{}{}, os.Remove(path)
-	})
-	return err
+	err := AssertValidPath(pathToFile)
+	if err != nil {
+		return err
+	}
+	fullPath := filepath.Join(st.baseDir, pathToFile)
+	return os.Remove(fullPath)
 }
 
 func (st *Storage) DeleteFolder(pathToFolder string) error {
@@ -175,75 +228,22 @@ func (st *Storage) DeleteFolder(pathToFolder string) error {
 	return os.RemoveAll(path)
 }
 
-func (st *Storage) UpdateFile(pathToFile string, newContent []byte) error {
+func (st *Storage) UpdateFile(pathToFile string, newContent io.Reader) error {
 	err := AssertValidPath(pathToFile)
 	if err != nil {
 		return err
 	}
 	fullPath := filepath.Join(st.baseDir, pathToFile)
 	_, err = os.Stat(fullPath)
-	if err != nil{
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(fullPath, newContent, 0644)
-}
+	file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
 
-
-func (ds *DiskStorage) Save(filename string, data io.Reader) (*FileInfo, error) {
-    filePath := filepath.Join(ds.basePath, filename)
-    
-    // Create the file
-    file, err := os.Create(filePath)
-    if err != nil {
-        return nil, err
-    }
-    defer file.Close()
-    
-    // Copy data from reader to file
-    size, err := io.Copy(file, data)
-    if err != nil {
-        return nil, err
-    }
-    
-    return &FileInfo{
-        Name: filename,
-        Size: size,
-        Path: filePath,
-    }, nil
-}
-
-// SaveMultipart stores a file from a multipart.File
-func (ds *DiskStorage) SaveMultipart(filename string, file multipart.File) (*FileInfo, error) {
-    return ds.Save(filename, file)
-}
-
-// Retrieve returns an io.ReadCloser for reading a file
-func (ds *DiskStorage) Retrieve(filename string) (io.ReadCloser, error) {
-    filePath := filepath.Join(ds.basePath, filename)
-    return os.Open(filePath)
-}
-
-// RetrieveWriter writes file content to an io.Writer
-func (ds *DiskStorage) RetrieveWriter(filename string, w io.Writer) error {
-    file, err := ds.Retrieve(filename)
-    if err != nil {
-        return err
-    }
-    defer file.Close()
-    
-    _, err = io.Copy(w, file)
-    return err
-}
-
-// Delete removes a file
-func (ds *DiskStorage) Delete(filename string) error {
-    filePath := filepath.Join(ds.basePath, filename)
-    return os.Remove(filePath)
-}
-
-// Exists checks if a file exists
-func (ds *DiskStorage) Exists(filename string) bool {
-    filePath := filepath.Join(ds.basePath, filename)
-    _, err := os.Stat(filePath)
-    return err == nil
+	_, err = io.Copy(file, newContent)
+	return err
 }
