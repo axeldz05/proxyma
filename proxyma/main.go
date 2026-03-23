@@ -19,8 +19,12 @@ import (
 type FileInfo struct {
     Name string `json:"name"`
     Size int64  `json:"size"`
-    URL  string `json:"url"` // URL to download the file from
 	Hash string `json:"hash"`
+}
+
+type PeerNotification struct {
+    File   FileInfo `json:"file"`
+    Source string   `json:"source"`
 }
 
 type Server struct {
@@ -116,12 +120,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	fileMeta := FileInfo{
         Name: metaFileName,
         Size: metaFileSize,
-        URL:  fmt.Sprintf("%s/download/%s", s.Address, header.Filename),
 		Hash: hash,
     }
     
     s.mutex.Lock()
-    s.files[header.Filename] = fileMeta
+    s.files[hash] = fileMeta
     s.mutex.Unlock()
     
     go s.notifyPeers(fileMeta)
@@ -138,35 +141,24 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
     }
-    
-    var fileInfo FileInfo
-    err := json.NewDecoder(r.Body).Decode(&fileInfo)
+	var notification PeerNotification
+    err := json.NewDecoder(r.Body).Decode(&notification)
     if err != nil {
         http.Error(w, "Invalid JSON", http.StatusBadRequest)
         return
     }
     
-    s.mutex.RLock()
-    _, exists := s.files[fileInfo.Name]
-    s.mutex.RUnlock()
-    
-    if exists {
-        w.WriteHeader(http.StatusOK)
-        fmt.Fprint(w, "File already exists")
-        return
-    }
-    
-    go s.downloadFileFromPeer(fileInfo)
-    
+	go s.downloadFileFromPeer(notification.File, notification.Source)    
+
     w.WriteHeader(http.StatusAccepted)
     fmt.Fprint(w, "Notification received, downloading file")
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-    filename := r.URL.Path[len("/download/"):]
+    requestedHash := r.URL.Path[len("/download/"):]
     
     s.mutex.RLock()
-    _, exists := s.files[filename]
+    fileMeta, exists := s.files[requestedHash]
     s.mutex.RUnlock()
     
     if !exists {
@@ -174,12 +166,12 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
         return
     }
     
-    err := s.storage.DownloadFile(filename, w)
+    err := s.storage.DownloadFile(fileMeta.Name, w)
     if err != nil {
         http.Error(w, "Error retrieving file: "+err.Error(), http.StatusInternalServerError)
         return
     }
-    w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+    w.Header().Set("Content-Disposition", "attachment; requestedHash="+requestedHash)
     w.Header().Set("Content-Type", "application/octet-stream")
 }
 
@@ -209,7 +201,11 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
         }
         
         url := fmt.Sprintf("%s/notify", peerAddr)
-        body, err := json.Marshal(fileInfo)
+        payload := PeerNotification{
+            File:   fileInfo,
+            Source: s.Address,
+        }
+        body, err := json.Marshal(payload)
         if err != nil {
             fmt.Printf("Error marshaling JSON for peer %s: %v\n", peerID, err)
             continue
@@ -229,8 +225,10 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
 }
 
 // This should verify that it comes from a valid peer.
-func (s *Server) downloadFileFromPeer(fileInfo FileInfo) {
-    resp, err := s.Client.Get(fileInfo.URL)
+func (s *Server) downloadFileFromPeer(fileInfo FileInfo, sourceAddr string) {
+    downloadURL := fmt.Sprintf("%s/download/%s", sourceAddr, fileInfo.Hash)
+    resp, err := s.Client.Get(downloadURL)
+
     if err != nil {
         fmt.Printf("Error downloading file %s: %v\n", fileInfo.Name, err)
         return
@@ -246,9 +244,8 @@ func (s *Server) downloadFileFromPeer(fileInfo FileInfo) {
         fmt.Printf("Error saving file %s: %v\n", fileInfo.Name, err)
         return
     }
-    fileMeta := fileInfo    
     s.mutex.Lock()
-    s.files[fileInfo.Name] = fileMeta
+    s.files[fileInfo.Hash] = fileInfo
     s.mutex.Unlock()
     
     fmt.Printf("Successfully downloaded file %s from peer\n", fileInfo.Name)

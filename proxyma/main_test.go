@@ -120,6 +120,10 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	noUpdatedServer.AddPeer("2", noUpdatedServer.Address)
 
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+
+	hasher := sha256.New()
+	hasher.Write([]byte(fileContent))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
     
     req := httptest.NewRequest("POST", "/upload", &requestBody)
     req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -128,15 +132,16 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
     updatedServer.handleUpload(w, req)
     
     resp := w.Result()
-    if resp.StatusCode != http.StatusCreated {
-        t.Errorf("Expected status Created, got %v", resp.StatusCode)
+    if w.Code != http.StatusCreated {
+        t.Errorf("Expected status Created, got %v", w.Code)
     }
-	_, exists := updatedServer.files["test.txt"]
+	_, exists := updatedServer.files[expectedHash]
     if !exists {
-        t.Errorf("File 'test.txt' was registered in the metadata for storage %s", updatedServer.ID)
+        t.Errorf("File hash '%s' was not registered in the metadata", expectedHash)
     }
 
-	req = httptest.NewRequest("GET", "/download/test.txt",nil)
+	downloadURL := fmt.Sprintf("/download/%s", expectedHash)
+	req = httptest.NewRequest("GET", downloadURL, nil)
 	w = httptest.NewRecorder()
 	updatedServer.handleDownload(w, req)
 	resp = w.Result()
@@ -152,7 +157,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
     }
 	require.Eventually(t, func() bool {
         noUpdatedServer.mutex.RLock()
-        _, exists := noUpdatedServer.files["test.txt"]
+        _, exists := noUpdatedServer.files[expectedHash]
         noUpdatedServer.mutex.RUnlock()
         return exists
     }, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
@@ -164,25 +169,23 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
     
+	hasher := sha256.New()
+	hasher.Write([]byte(fileContent))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
 	req := httptest.NewRequest("POST", "/upload", &requestBody)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	w := httptest.NewRecorder()
 	sv.handleUpload(w, req)
-    
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	sv.mutex.RLock()
-	fileMeta, exists := sv.files["test.txt"]
+	fileMeta, exists := sv.files[expectedHash]
 	sv.mutex.RUnlock()
 
 	require.True(t, exists, "The file should be registered in s.files")
 	require.NotEmpty(t, fileMeta.Hash, "The metadata should include the hash")
-    
-	hasher := sha256.New()
-	hasher.Write([]byte(fileContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
 	require.Equal(t, expectedHash, fileMeta.Hash, "The metadata's hash should be the same as the file content's hash")
 }
 
@@ -218,7 +221,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
 			srv.mutex.RLock()
-			meta, exists := srv.files["test.txt"]
+			meta, exists := srv.files[expectedHash]
 			srv.mutex.RUnlock()
 			
 			if !exists || meta.Hash != expectedHash {
@@ -227,4 +230,29 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 		}
 		return true
 	}, 3*time.Second, 100*time.Millisecond, "The cluster couldn't synchronize the file at a reasonable time.")
+}
+
+func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
+	sv := NewServer("1", t.TempDir())
+	defer sv.Close()
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	req := httptest.NewRequest("POST", "/upload", &requestBody)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	
+	w := httptest.NewRecorder()
+	sv.handleUpload(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	hasher := sha256.New()
+	hasher.Write([]byte(fileContent))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
+	downloadURL := fmt.Sprintf("/download/%s", expectedHash)
+	reqDL := httptest.NewRequest("GET", downloadURL, nil)
+	wDL := httptest.NewRecorder()
+	
+	sv.handleDownload(wDL, reqDL)
+	
+	require.Equal(t, http.StatusOK, wDL.Code, "Server should answer with OK 200 status when requesting Hash")
+	require.Equal(t, fileContent, wDL.Body.String(), "Downloaded content should be the same as the uploaded content")
 }
