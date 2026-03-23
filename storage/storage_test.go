@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"crypto/sha256"
+	"encoding/hex"
 
 	"github.com/stretchr/testify/require"
 )
@@ -121,10 +123,12 @@ func Test02UploadingFilesIncreasesTheAmountOfFiles(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	
 	fileName1, content1 := aFileAcceptedByStorage()
-	require.NoError(t, aStorage.UploadFile(fileName1, bytes.NewReader(content1)))
+	_, err := aStorage.UploadFile(fileName1, bytes.NewReader(content1))
+	require.NoError(t, err)
 	
 	fileName2, content2 := aFileAcceptedByStorage2()
-	require.NoError(t, aStorage.UploadFile(fileName2, bytes.NewReader(content2)))
+	_, err = aStorage.UploadFile(fileName2, bytes.NewReader(content2))
+	require.NoError(t, err)
 	
 	err, got := aStorage.AmountOfFiles()
 	require.NoError(t, err)	
@@ -219,7 +223,7 @@ func Test12CanNotUploadAFileThatAlreadyExistsInSameFolder(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
 	noErrorUploadFile(t, aStorage, fileName, content)
-	err := aStorage.UploadFile(fileName, bytes.NewReader(content))
+	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
 	require.ErrorIs(t, err, ErrFileAlreadyExist, fmt.Sprintf("got: '%v'", err))
 }
 
@@ -259,7 +263,7 @@ func Test17DeletingAFolderAlsoRemovesItsFiles(t *testing.T){
 	folderToUpload := aFolderWithSubFoldersAndFilesAcceptedByStorage(t)
 	require.NoError(t, aStorage.UploadFolderWithFiles(folderToUpload, validClient()))
 	pathToFolder := filepath.Join(filepath.Base(folderToUpload), aSubFolderAcceptedByStorage())
-	require.NoError(t, aStorage.DeleteFile(pathToFolder))
+	require.NoError(t, aStorage.DeleteFolder(pathToFolder))
 	assertFolderDoesNotExists(t, aStorage, pathToFolder)
 }
 
@@ -267,11 +271,13 @@ func Test18CanUpdateAFilesContent(t *testing.T){
 	aStorage := NewStorage(t.TempDir())	
 	fileName, content := aFileAcceptedByStorage()
 	newContent := []byte("hello!")
-	require.NoError(t, aStorage.UploadFile(fileName, bytes.NewReader(content)))
-	require.NoError(t, aStorage.UpdateFile(fileName, bytes.NewReader(newContent)))
+	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
+	require.NoError(t, err)
+	_, err = aStorage.UpdateFile(fileName, bytes.NewReader(newContent))
+	require.NoError(t, err)
 	
 	var buf bytes.Buffer
-	err := aStorage.DownloadFile(fileName, &buf)
+	err = aStorage.DownloadFile(fileName, &buf)
 	require.NoError(t, err)
 	require.Equal(t, buf.Bytes(), newContent)
 }
@@ -279,5 +285,20 @@ func Test18CanUpdateAFilesContent(t *testing.T){
 func Test19CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
 	aStorage := NewStorage(t.TempDir())	
 	fileName, content := aFileNotAcceptedByStorage()
-	require.ErrorIs(t, aStorage.UploadFile(fileName, bytes.NewReader(content)), ErrFileNameShouldNotTryToAccessParentFolder)
+	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
+	require.ErrorIs(t, err, ErrFileNameShouldNotTryToAccessParentFolder)
+}
+
+func Test20UploadFileReturnsSHA256Hash(t *testing.T) {
+	aStorage := NewStorage(t.TempDir())
+	fileName := "crypto_test.txt"
+	content := "Super secret message!"
+	hasher := sha256.New()
+	hasher.Write([]byte(content))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
+	gotHash, err := aStorage.UploadFile(fileName, bytes.NewReader([]byte(content)))
+	
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, gotHash, "Hash should be the exact SHA-256 of the file content")
 }
