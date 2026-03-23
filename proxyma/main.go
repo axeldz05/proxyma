@@ -14,6 +14,7 @@ import (
 	"proxyma/storage"
 	"strings"
 	"sync"
+	"time"
 )
 
 type FileInfo struct {
@@ -32,6 +33,7 @@ type Server struct {
     Address string
     Client  *http.Client
     Peers   map[string]string
+	Secret  string
     
 	storage storage.Storage
 
@@ -211,8 +213,17 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
             continue
         }
         
-        resp, err := s.Client.Post(url, "application/json", bytes.NewReader(body))
-        if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+        	fmt.Printf("Error making a request with context %s: %v\n", ctx, err)
+			return
+		}
+		req.Header.Set("Proxyma-Secret", s.Secret)
+		req.Header.Set("content-type", "application/json")
+		resp, err := s.Client.Do(req)
+		if err != nil {
             fmt.Printf("Error notifying peer %s: %v\n", peerID, err)
             continue
         }
@@ -227,9 +238,18 @@ func (s *Server) notifyPeers(fileInfo FileInfo) {
 // This should verify that it comes from a valid peer.
 func (s *Server) downloadFileFromPeer(fileInfo FileInfo, sourceAddr string) {
     downloadURL := fmt.Sprintf("%s/download/%s", sourceAddr, fileInfo.Hash)
-    resp, err := s.Client.Get(downloadURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-    if err != nil {
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+        fmt.Printf("Error making a request with context %s: %v\n", ctx, err)
+        return
+	}
+	req.Header.Set("Proxyma-Secret", s.Secret)
+	resp, err := s.Client.Do(req)
+
+	if err != nil {
         fmt.Printf("Error downloading file %s: %v\n", fileInfo.Name, err)
         return
     }
@@ -279,4 +299,15 @@ func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
         return 0, "", err
     }
     return size, header.Filename, nil
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        clientSecret := r.Header.Get("Proxyma-Secret")
+        if clientSecret != s.Secret {
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
+        next(w, r)
+    }
 }
