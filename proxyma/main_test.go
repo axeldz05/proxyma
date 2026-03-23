@@ -142,11 +142,13 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
         t.Errorf("File hash '%s' was not registered in the metadata", expectedHash)
     }
 
-	downloadURL := fmt.Sprintf("/download/%s", expectedHash)
-	req = httptest.NewRequest("GET", downloadURL, nil)
-	w := httptest.NewRecorder()
-	updatedServer.handleDownload(w, req)
-	resp = w.Result()
+	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.Address, expectedHash)
+	req, err = http.NewRequest("GET", downloadURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Proxyma-Secret", "test-secret")
+	resp, err = updatedServer.Client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 	buf := new(strings.Builder)
 	_, err = io.Copy(buf,resp.Body)
 	if err != nil {
@@ -252,14 +254,19 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	downloadURL := fmt.Sprintf("/download/%s", expectedHash)
-	reqDL := httptest.NewRequest("GET", downloadURL, nil)
-	wDL := httptest.NewRecorder()
-	
-	sv.handleDownload(wDL, reqDL)
-	
-	require.Equal(t, http.StatusOK, wDL.Code, "Server should answer with OK 200 status when requesting Hash")
-	require.Equal(t, fileContent, wDL.Body.String(), "Downloaded content should be the same as the uploaded content")
+	downloadURL := fmt.Sprintf("%s/download/%s", sv.Address, expectedHash)
+	reqDL, err := http.NewRequest("GET", downloadURL, nil)
+	require.NoError(t, err)
+	reqDL.Header.Set("Proxyma-Secret", "test-secret")
+	respDL, err := sv.Client.Do(reqDL)
+	require.NoError(t, err)
+	defer respDL.Body.Close()
+
+	require.Equal(t, http.StatusOK, respDL.StatusCode, "Server should answer with OK 200 status when requesting Hash")
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, respDL.Body)
+	require.NoError(t, err)
+	require.Equal(t, fileContent, buf.String(), "Downloaded content should be the same as the uploaded content")
 }
 
 func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
