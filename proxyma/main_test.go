@@ -186,59 +186,45 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	require.Equal(t, expectedHash, fileMeta.Hash, "The metadata's hash should be the same as the file content's hash")
 }
 
-func testServers() {
-    dir1, _ := os.MkdirTemp("", "server1")
-    dir2, _ := os.MkdirTemp("", "server2")
-    dir3, _ := os.MkdirTemp("", "server3")
-    defer os.RemoveAll(dir1)
-    defer os.RemoveAll(dir2)
-    defer os.RemoveAll(dir3)
-    
-    server1 := NewServer("server1", dir1)
-    server2 := NewServer("server2", dir2)
-    server3 := NewServer("server3", dir3)
-    defer server1.Close()
-    defer server2.Close()
-    defer server3.Close()
-    
-    server1.AddPeer("server2", server2.Address)
-    server1.AddPeer("server3", server3.Address)
-    
-    server2.AddPeer("server1", server1.Address)
-    server2.AddPeer("server3", server3.Address)
-    
-    server3.AddPeer("server1", server1.Address)
-    server3.AddPeer("server2", server2.Address)
-    
-    fmt.Printf("Server 1: %s\n", server1.Address)
-    fmt.Printf("Server 2: %s\n", server2.Address)
-    fmt.Printf("Server 3: %s\n", server3.Address)
-    
-    fmt.Println("Uploading file to server1...")
-    
-    req := httptest.NewRequest("POST", "/upload", nil)
-    w := httptest.NewRecorder()
-    
-    server1.handleUpload(w, req)
-    
-    if w.Code == http.StatusCreated {
-        fmt.Println("File uploaded successfully to server1")
-        fmt.Println("Servers will now synchronize the file among themselves")
-    } else {
-        fmt.Printf("Upload failed with status: %d\n", w.Code)
-    }
-    
-    time.Sleep(2 * time.Second)
-    
-    fmt.Println("\nChecking file synchronization:")
-    servers := []*Server{server1, server2, server3}
-    for i, server := range servers {
-        server.mutex.RLock()
-        fileCount := len(server.files)
-        server.mutex.RUnlock()
-        fmt.Printf("Server %d has %d files\n", i+1, fileCount)
-    }
-    
-    fmt.Println("\nPress Ctrl+C to exit...")
-    select {}
+func Test05P2PNetworkEventualConsistency(t *testing.T) {
+	clusterSize := 3
+	servers := make([]*Server, clusterSize)
+	for i := 0; i < clusterSize; i++ {
+		servers[i] = NewServer(fmt.Sprintf("node-%d", i), t.TempDir())
+		defer servers[i].Close()
+	}
+
+	// Full connection between the peers
+	for i, current := range servers {
+		for j, peer := range servers {
+			if i != j {
+				current.AddPeer(peer.ID, peer.Address)
+			}
+		}
+	}
+
+	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t)
+	req := httptest.NewRequest("POST", "/upload", &requestBody)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	
+	w := httptest.NewRecorder()
+	servers[0].handleUpload(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	hasher := sha256.New()
+	hasher.Write([]byte(expectedContent))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
+	require.Eventually(t, func() bool {
+		for _, srv := range servers {
+			srv.mutex.RLock()
+			meta, exists := srv.files["test.txt"]
+			srv.mutex.RUnlock()
+			
+			if !exists || meta.Hash != expectedHash {
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, 100*time.Millisecond, "The cluster couldn't synchronize the file at a reasonable time.")
 }
