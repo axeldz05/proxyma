@@ -1,6 +1,7 @@
 package storage
 
 import(
+	"bytes"
 	"testing"
 	"io/fs"
 	"os"
@@ -33,14 +34,16 @@ func assertFileDoesNotExists(t *testing.T, aStorage *Storage, fileName string) {
 }
 
 func noErrorUploadFile(t *testing.T, aStorage *Storage, fileName string, content []byte) {
-	require.NoError(t, aStorage.UploadFile(fileName, content))
+	require.NoError(t, aStorage.UploadFile(fileName, bytes.NewReader(content)))
 }
 
 func uploadFileAndVerify(t *testing.T, aStorage *Storage, fileName string, content []byte) {
-	require.NoError(t, aStorage.UploadFile(fileName, content))
-	got, err := aStorage.DownloadFile(fileName)
+	require.NoError(t, aStorage.UploadFile(fileName, bytes.NewReader(content)))
+	
+	var got bytes.Buffer
+	err := aStorage.DownloadFile(fileName, &got)
 	require.NoError(t, err)
-	require.Equal(t, content, got)
+	require.Equal(t, content, got.Bytes())
 }
 
 func assertFolderExists(t *testing.T, aStorage *Storage, folderName string) {
@@ -68,9 +71,11 @@ func assertUploadedFilesMatch(t *testing.T, aStorage *Storage, folderToUpload, f
         if !d.IsDir() {
             fileContent, err := os.ReadFile(path)
             require.NoErrorf(t, err, "There is no file '%v' on root '%v'", path, folderToUpload)
-            gotContent, err := aStorage.DownloadFile(relPath)
+            
+			var gotContent bytes.Buffer
+			err = aStorage.DownloadFile(relPath, &gotContent)
             require.NoErrorf(t, err, "There is no uploaded file '%v'. Root is '%v'", relPath, folderToUpload)
-            require.Equal(t, gotContent, fileContent)
+            require.Equal(t, fileContent, gotContent.Bytes())
         }
         
         if d.IsDir() && d.Name() != folderName {
