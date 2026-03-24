@@ -2,7 +2,6 @@ package storage
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -219,12 +218,17 @@ func Test11CanCreateAFolderInSubFolder(t *testing.T) {
 	assertFolderExists(t, aStorage, folderPath)
 }
 
-func Test12CanNotUploadAFileThatAlreadyExistsInSameFolder(t *testing.T) {
+func Test12OverwriteFileWithSameNameWhenUploading(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	fileName, content := aFileAcceptedByStorage()
 	noErrorUploadFile(t, aStorage, fileName, content)
 	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
-	require.ErrorIs(t, err, ErrFileAlreadyExist, fmt.Sprintf("got: '%v'", err))
+	var buf bytes.Buffer
+	err = aStorage.DownloadFile(fileName, &buf)
+	err, actualAmount := aStorage.AmountOfFiles()
+	require.Equal(t, 1, actualAmount)
+	require.Equal(t, buf.Bytes(), content)
+	require.NoError(t, err)
 }
 
 func Test13CanUploadAFolderWithMultipleFiles(t *testing.T) {
@@ -267,29 +271,14 @@ func Test17DeletingAFolderAlsoRemovesItsFiles(t *testing.T){
 	assertFolderDoesNotExists(t, aStorage, pathToFolder)
 }
 
-func Test18CanUpdateAFilesContent(t *testing.T){
-	aStorage := NewStorage(t.TempDir())	
-	fileName, content := aFileAcceptedByStorage()
-	newContent := []byte("hello!")
-	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
-	require.NoError(t, err)
-	_, err = aStorage.UpdateFile(fileName, bytes.NewReader(newContent))
-	require.NoError(t, err)
-	
-	var buf bytes.Buffer
-	err = aStorage.DownloadFile(fileName, &buf)
-	require.NoError(t, err)
-	require.Equal(t, buf.Bytes(), newContent)
-}
-
-func Test19CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
+func Test18CanNotUploadAFileOrFolderOutsideOfRoot(t *testing.T){
 	aStorage := NewStorage(t.TempDir())	
 	fileName, content := aFileNotAcceptedByStorage()
 	_, err := aStorage.UploadFile(fileName, bytes.NewReader(content))
 	require.ErrorIs(t, err, ErrFileNameShouldNotTryToAccessParentFolder)
 }
 
-func Test20UploadFileReturnsSHA256Hash(t *testing.T) {
+func Test19UploadFileReturnsSHA256Hash(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	fileName := "crypto_test.txt"
 	content := "Super secret message!"
