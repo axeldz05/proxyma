@@ -133,6 +133,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	req.Header.Set("Proxyma-Secret", "test-secret")
 	resp, err := updatedServer.Client.Do(req)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
     if resp.StatusCode != http.StatusCreated {
@@ -184,6 +185,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	req.Header.Set("Proxyma-Secret", "test-secret")
 	resp, err := sv.Client.Do(req)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	sv.mutex.RLock()
@@ -219,6 +221,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	req.Header.Set("Proxyma-Secret", "test-secret")
 	resp, err := servers[0].Client.Do(req)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	
 	hasher := sha256.New()
@@ -249,6 +252,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	req.Header.Set("Proxyma-Secret", "test-secret")
 	resp, err := sv.Client.Do(req)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	
 	hasher := sha256.New()
@@ -313,6 +317,7 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "You must reject requests with the wrong secret")
 }
 
