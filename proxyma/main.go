@@ -77,8 +77,47 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 
-func (s *Server) SyncStorage()bool{
-	return true
+func (s *Server) SyncStorage() error {
+	s.mutex.RLock()
+	peers := make(map[string]string, len(s.Peers))
+	for k, v := range s.Peers {
+		peers[k] = v
+	}
+	s.mutex.RUnlock()
+	for _, peerAddress := range peers{
+		err := func(pAddr string) error {
+			ctx, cancel := context.WithTimeout(context.Background(),5*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx,"GET", peerAddress+"/manifest", nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Proxyma-Secret", s.Secret)
+			resp, err := s.Client.Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			var decodedResp map[string]FileInfo
+			err = json.NewDecoder(resp.Body).Decode(&decodedResp)
+			if err != nil { 
+				return err 
+			}
+			for remoteHash, remoteFileInfo := range decodedResp{
+				s.mutex.RLock()
+				_, exists := s.files[remoteHash]
+				s.mutex.RUnlock()
+				if !exists {
+					s.downloadFileFromPeer(remoteFileInfo, peerAddress)
+				}
+			}
+			return nil
+		}(peerAddress)
+		if err != nil {
+			fmt.Printf("Warning: Failed to synchronize with peer %s: %v\n", peerAddress, err)
+		}
+	}
+	return nil
 }
 
 func (s *Server) AddPeer(peerID, address string) {

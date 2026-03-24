@@ -64,8 +64,7 @@ func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, str
 func Test01FirstServerIsAlreadySynced(t *testing.T){
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
-    res := sv.SyncStorage()
-	require.True(t, res, "should return true")
+    require.NoError(t, sv.SyncStorage())
 }
 
 func Test02AServerCanConnectToAnother(t *testing.T){
@@ -101,8 +100,8 @@ func Test02AServerCanConnectToAnother(t *testing.T){
 	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.Address)
 	require.Equal(t,expectedPeersOfSv2,gotPeersOfSv2)
 	require.Equal(t,expectedPeersOfSv1,gotPeersOfSv1)
-	require.True(t, sv1.SyncStorage(), "sv1 should be synced to sv2")
-	require.True(t, sv2.SyncStorage(), "sv2 should be synced to sv1")
+	require.NoError(t, sv1.SyncStorage())
+	require.NoError(t, sv2.SyncStorage())
 }
 
 func Test03AllServersSyncsToLastUpdated(t *testing.T){
@@ -348,4 +347,42 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	require.Contains(t, manifest, fakeHash, "The manifest must contain the hash of the injected file")
 	require.Equal(t, fakeFile.Name, manifest[fakeHash].Name, "The filename must be the same as in the manifest")
+}
+
+func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
+	sv1 := NewServer("1", t.TempDir(), "test-secret")
+	defer sv1.Close()
+
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	req, err := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Proxyma-Secret", "test-secret")
+	
+	resp, err := sv1.Client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	defer resp.Body.Close()
+
+	hasher := sha256.New()
+	hasher.Write([]byte(fileContent))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
+	sv2 := NewServer("2", t.TempDir(), "test-secret")
+	defer sv2.Close()
+	sv2.AddPeer("1", sv1.Address)
+
+	sv2.mutex.RLock()
+	_, existsBefore := sv2.files[expectedHash]
+	sv2.mutex.RUnlock()
+	require.False(t, existsBefore, "Node 2 shouldn't have any files")
+
+	err = sv2.SyncStorage()
+	require.NoError(t, err, "SyncStorage shouldn't fail")
+	sv2.mutex.RLock()
+	fileMeta, existsAfter := sv2.files[expectedHash]
+	sv2.mutex.RUnlock()
+
+	require.True(t, existsAfter, "Node 2 should have the file of node 1 after executing SyncStorage")
+	require.Equal(t, expectedHash, fileMeta.Hash)
 }
