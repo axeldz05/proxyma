@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -12,8 +15,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"crypto/sha256"
-	"encoding/hex"
 
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +35,7 @@ func NewServer(id, storagePath, secret string) *Server {
     mux.HandleFunc("/notify", s.authMiddleware(s.handleNotification))
     mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
     mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
+    mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
     
     s.server = httptest.NewServer(mux)
     s.Address = s.server.URL
@@ -313,4 +315,37 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "You must reject requests with the wrong secret")
+}
+
+func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
+	sv := NewServer("1", t.TempDir(), "test-secret")
+	defer sv.Close()
+
+	fakeHash := "hash-simulado-999"
+	fakeFile := FileInfo{
+		Name: "dataset_v2.csv",
+		Size: 1024,
+		Hash: fakeHash,
+	}
+	
+	sv.mutex.Lock()
+	sv.files[fakeHash] = fakeFile
+	sv.mutex.Unlock()
+
+	req, err := http.NewRequest("GET", sv.Address+"/manifest", nil)
+	require.NoError(t, err)
+	req.Header.Set("Proxyma-Secret", "test-secret")
+	
+	resp, err := sv.Client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	
+	require.Equal(t, http.StatusOK, resp.StatusCode, "The endpoint /manifest must answer with status code: 200 OK")
+
+	var manifest map[string]FileInfo
+	err = json.NewDecoder(resp.Body).Decode(&manifest)
+	require.NoError(t, err, "The manifest must be a valid JSON in format: map[string]FileInfo")
+
+	require.Contains(t, manifest, fakeHash, "The manifest must contain the hash of the injected file")
+	require.Equal(t, fakeFile.Name, manifest[fakeHash].Name, "The filename must be the same as in the manifest")
 }

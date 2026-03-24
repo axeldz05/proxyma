@@ -311,3 +311,9 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
         next(w, r)
     }
 }
+
+func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+	s.mutex.RLock()
+	json.NewEncoder(w).Encode(s.files)
+	s.mutex.RUnlock()
+}
