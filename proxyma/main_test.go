@@ -20,26 +20,26 @@ import (
 )
 
 func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
-    s := &Server{
-        ID:         id,
-        Peers:      make(map[string]string),
-        storage: 	*storage.NewStorage(storagePath),
-        index:      make(map[string]IndexEntry),
+	s := &Server{
+		ID:            id,
+		Peers:         make(map[string]string),
+		storage:       *storage.NewStorage(storagePath),
+		vfs:           *NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
-    }
-    
-    os.MkdirAll(storagePath, 0755)
-    
-    mux := http.NewServeMux()
-    mux.HandleFunc("/upload", s.authMiddleware(s.handleUpload))
-    mux.HandleFunc("/notify", s.authMiddleware(s.handleNotification))
-    mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
-    mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
-    mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
-    mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
-    
-    s.server = httptest.NewServer(mux)
-    s.Address = s.server.URL
+	}
+
+	os.MkdirAll(storagePath, 0755)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/upload", s.authMiddleware(s.handleUpload))
+	mux.HandleFunc("/notify", s.authMiddleware(s.handleNotification))
+	mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
+	mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
+	mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
+	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
+
+	s.server = httptest.NewServer(mux)
+	s.Address = s.server.URL
 	s.Client = s.server.Client()
 	s.Secret = secret
 
@@ -47,10 +47,10 @@ func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
 		go s.downloadWorker()
 	}
 
-    return s
+	return s
 }
 
-func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *multipart.Writer, string){
+func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *multipart.Writer, string) {
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
 	fileWriter, err := writer.CreateFormFile("file", fileName)
@@ -66,14 +66,14 @@ func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *mult
 	return requestBody, writer, fileContent
 }
 
-func Test01FirstServerIsAlreadySynced(t *testing.T){
+func Test01FirstServerIsAlreadySynced(t *testing.T) {
 	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
-    require.NoError(t, sv.SyncStorage())
+	require.NoError(t, sv.SyncStorage())
 }
 
-func Test02AServerCanConnectToAnother(t *testing.T){
+func Test02AServerCanConnectToAnother(t *testing.T) {
 	t.Parallel()
 	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
 	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
@@ -84,10 +84,10 @@ func Test02AServerCanConnectToAnother(t *testing.T){
 
 	req := httptest.NewRequest("GET", "/peers", nil)
 	w := httptest.NewRecorder()
-	sv2.GetPeers(w, req)	
+	sv2.GetPeers(w, req)
 	resp := w.Result()
 	buf := new(strings.Builder)
-	_, err := io.Copy(buf,resp.Body)
+	_, err := io.Copy(buf, resp.Body)
 	if err != nil {
 		t.Errorf("Could not copy response from %s", resp.Body)
 	}
@@ -96,22 +96,22 @@ func Test02AServerCanConnectToAnother(t *testing.T){
 
 	req = httptest.NewRequest("GET", "/peers", nil)
 	w = httptest.NewRecorder()
-	sv1.GetPeers(w, req)	
+	sv1.GetPeers(w, req)
 	resp = w.Result()
 	buf = new(strings.Builder)
-	_, err = io.Copy(buf,resp.Body)
+	_, err = io.Copy(buf, resp.Body)
 	if err != nil {
 		t.Errorf("Could not copy response from %s", resp.Body)
 	}
 	gotPeersOfSv1 := strings.TrimSpace(buf.String())
 	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.Address)
-	require.Equal(t,expectedPeersOfSv2,gotPeersOfSv2)
-	require.Equal(t,expectedPeersOfSv1,gotPeersOfSv1)
+	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
+	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
 	require.NoError(t, sv1.SyncStorage())
 	require.NoError(t, sv2.SyncStorage())
 }
 
-func Test03AllServersSyncsToLastUpdated(t *testing.T){
+func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	t.Parallel()
 	updatedServer := NewServer("1", t.TempDir(), "test-secret", 2)
 	noUpdatedServer := NewServer("2", t.TempDir(), "test-secret", 2)
@@ -119,7 +119,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	defer updatedServer.Close()
 	defer noUpdatedServer.Close()
 	defer noUpdatedServer2.Close()
-	
+
 	updatedServer.AddPeer("2", noUpdatedServer.Address)
 	updatedServer.AddPeer("3", noUpdatedServer2.Address)
 
@@ -134,23 +134,23 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-    
-    req, err := http.NewRequest("POST", updatedServer.Address+"/upload", &requestBody)
+
+	req, err := http.NewRequest("POST", updatedServer.Address+"/upload", &requestBody)
 	require.NoError(t, err)
-    req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
 	resp, err := updatedServer.Client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-    if resp.StatusCode != http.StatusCreated {
-        t.Errorf("Expected status Created, got %v", resp.StatusCode)
-    }
-	_, exists := updatedServer.index[fileName]
-    if !exists {
-        t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
-    }
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Expected status Created, got %v", resp.StatusCode)
+	}
+	_, exists := updatedServer.vfs.Get(fileName)
+	if !exists {
+		t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
+	}
 
 	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.Address, expectedHash)
 	req, err = http.NewRequest("GET", downloadURL, nil)
@@ -160,21 +160,21 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf := new(strings.Builder)
-	_, err = io.Copy(buf,resp.Body)
+	_, err = io.Copy(buf, resp.Body)
 	if err != nil {
 		t.Errorf("Could not copy fileContent from %s", resp.Body)
 	}
 	uploadedContent := buf.String()
-    
-    if uploadedContent != fileContent {
-        t.Errorf("Expected content %s, got %s", fileContent, string(uploadedContent))
-    }
+
+	if uploadedContent != fileContent {
+		t.Errorf("Expected content %s, got %s", fileContent, string(uploadedContent))
+	}
 	require.Eventually(t, func() bool {
-        noUpdatedServer.mutex.RLock()
-		_, exists := noUpdatedServer.index[fileName]
-        noUpdatedServer.mutex.RUnlock()
-        return exists
-    }, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
+
+		_, exists := noUpdatedServer.vfs.Get(fileName)
+
+		return exists
+	}, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
 }
 
 func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
@@ -184,7 +184,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 
 	fileName := "test04.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-    
+
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
@@ -198,9 +198,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	sv.mutex.RLock()
-	fileMeta, exists := sv.index[fileName]
-	sv.mutex.RUnlock()
+	fileMeta, exists := sv.vfs.Get(fileName)
 
 	require.True(t, exists, "The file should be registered in s.files")
 	require.NotEmpty(t, fileMeta.Hash, "The metadata should include the hash")
@@ -234,17 +232,16 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	
+
 	hasher := sha256.New()
 	hasher.Write([]byte(expectedContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
-			srv.mutex.RLock()
-			meta, exists := srv.index[fileName]
-			srv.mutex.RUnlock()
-			
+
+			meta, exists := srv.vfs.Get(fileName)
+
 			if !exists || meta.Hash != expectedHash {
 				return false
 			}
@@ -267,7 +264,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	
+
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
@@ -291,7 +288,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	t.Parallel()
 	// A "trap" node that takes 5 seconds to respond
 	slowPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5*time.Second)
+		time.Sleep(5 * time.Second)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer slowPeer.Close()
@@ -309,10 +306,9 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	sv.downloadFileFromPeer(fakeFile, slowPeer.URL)
 	duration := time.Since(start)
 	require.Less(t, duration, 3*time.Second, "The request should have been aborted by Timeout before the slow node ended")
-	
-	sv.mutex.RLock()
-	_, exists := sv.index[fakeFile.Name]
-	sv.mutex.RUnlock()
+
+	_, exists := sv.vfs.Get(fakeFile.Name)
+
 	require.False(t, exists, "The file should not be registered if the download failed or timed out")
 }
 
@@ -325,11 +321,11 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "Reject requests without the Proxyma-Secret header")
-	
+
 	req, err := http.NewRequest("GET", sv.Address+"/peers", nil)
 	require.NoError(t, err)
 	req.Header.Set("Proxyma-Secret", "secreto-falso-de-un-hacker")
-	
+
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -347,19 +343,17 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 		Size: 1024,
 		Hash: fakeHash,
 	}
-	
-	sv.mutex.Lock()
-	sv.index[fakeFile.Name] = fakeFile
-	sv.mutex.Unlock()
+
+	sv.vfs.Upsert(fakeFile)
 
 	req, err := http.NewRequest("GET", sv.Address+"/manifest", nil)
 	require.NoError(t, err)
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	
+
 	resp, err := sv.Client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	
+
 	require.Equal(t, http.StatusOK, resp.StatusCode, "The endpoint /manifest must answer with status code: 200 OK")
 
 	var manifest map[string]IndexEntry
@@ -381,7 +375,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	
+
 	resp, err := sv1.Client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -395,17 +389,14 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	defer sv2.Close()
 	sv2.AddPeer("1", sv1.Address)
 
-	sv2.mutex.RLock()
-	_, existsBefore := sv2.index[fileName]
-	sv2.mutex.RUnlock()
+	_, existsBefore := sv2.vfs.Get(fileName)
+
 	require.False(t, existsBefore, "Node 2 shouldn't have any files")
 
 	err = sv2.SyncStorage()
 	require.NoError(t, err, "SyncStorage shouldn't fail")
 	require.Eventually(t, func() bool {
-		sv2.mutex.RLock()
-		fileMeta, existsAfter := sv2.index[fileName]
-		sv2.mutex.RUnlock()
+		fileMeta, existsAfter := sv2.vfs.Get(fileName)
 		require.Equal(t, expectedHash, fileMeta.Hash)
 		return existsAfter
 	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing SyncStorage")
@@ -452,9 +443,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	hasher2.Write([]byte(content2))
 	hash2 := hex.EncodeToString(hasher2.Sum(nil))
 
-	sv.mutex.RLock()
-	meta, exists := sv.index[fileName]
-	sv.mutex.RUnlock()
+	meta, exists := sv.vfs.Get(fileName)
 
 	require.True(t, exists, "The system must track the file by its logic name")
 	require.Equal(t, hash2, meta.Hash, "Index should point to the Version 2 Hash")
@@ -489,11 +478,11 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	defer slowPeer.Close()
 
 	// TODO: This assumes that the server has two pool workers. It must be passed as parameter
-	sv := NewServer("1", t.TempDir(), "test-secret", 2) 
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
 	start := time.Now()
-	
+
 	for _, notif := range notifications {
 		notif.Source = slowPeer.URL
 		body, _ := json.Marshal(notif)
@@ -504,13 +493,12 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		sv.mutex.RLock()
-		defer sv.mutex.RUnlock()
-		return len(sv.index) == 5
+
+		return len(sv.vfs.Snapshot()) == 5
 	}, 5*time.Second, 100*time.Millisecond)
 
 	duration := time.Since(start)
-	
+
 	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. The Worker Pool isn't limiting the concurrency.")
 	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
 }
@@ -528,9 +516,8 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	respUp, _ := sv.Client.Do(reqUp)
 	respUp.Body.Close()
 
-	sv.mutex.RLock()
-	metaBefore := sv.index[fileName]
-	sv.mutex.RUnlock()
+	metaBefore, _ := sv.vfs.Get(fileName)
+
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 
 	reqDel, _ := http.NewRequest("DELETE", sv.Address+"/file?name="+fileName, nil)
@@ -540,9 +527,7 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	defer respDel.Body.Close()
 	require.Equal(t, http.StatusOK, respDel.StatusCode, "The endpoint DELETE should return 200 OK")
 
-	sv.mutex.RLock()
-	metaAfter, exists := sv.index[fileName]
-	sv.mutex.RUnlock()
+	metaAfter, exists := sv.vfs.Get(fileName)
 
 	require.True(t, exists, "The IndexEntry of the file should still exist after deleting")
 	require.True(t, metaAfter.Deleted, "Deleted should be true in the IndexEntry")
@@ -572,9 +557,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	respUp.Body.Close()
 
 	require.Eventually(t, func() bool {
-		sv2.mutex.RLock()
-		defer sv2.mutex.RUnlock()
-		_, exists := sv2.index[fileName]
+		_, exists := sv2.vfs.Get(fileName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond)
 
@@ -584,9 +567,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	respDel.Body.Close()
 
 	require.Eventually(t, func() bool {
-		sv2.mutex.RLock()
-		defer sv2.mutex.RUnlock()
-		meta := sv2.index[fileName]
+		meta, _ := sv2.vfs.Get(fileName)
 		return meta.Deleted && meta.Version == 2
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
 }
