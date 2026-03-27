@@ -45,8 +45,7 @@ func NewServer(id, storagePath, secret string) *Server {
     return s
 }
 
-func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, string, string){
-	fileName := "test.txt"
+func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *multipart.Writer, string){
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
 	fileWriter, err := writer.CreateFormFile("file", fileName)
@@ -59,7 +58,7 @@ func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, str
 		t.Fatal(err)
 	}
 	writer.Close()
-	return requestBody, writer, fileContent, fileName
+	return requestBody, writer, fileContent
 }
 
 func Test01FirstServerIsAlreadySynced(t *testing.T){
@@ -121,8 +120,8 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 
 	noUpdatedServer.AddPeer("1", updatedServer.Address)
 	noUpdatedServer.AddPeer("2", noUpdatedServer.Address)
-
-	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
+	fileName := "test03.txt"
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
 
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
@@ -174,7 +173,8 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
 
-	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
+	fileName := "test04.txt"
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
     
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
@@ -214,8 +214,8 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 			}
 		}
 	}
-
-	requestBody, writer, expectedContent, fileName := AnAcceptedFileForUpload(t)
+	fileName := "test05.txt"
+	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t, fileName)
 	req, err := http.NewRequest("POST", servers[0].Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -246,7 +246,8 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
-	requestBody, writer, fileContent, _ := AnAcceptedFileForUpload(t)
+	fileName := "test06.txt"
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
 	req, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -359,7 +360,8 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	sv1 := NewServer("1", t.TempDir(), "test-secret")
 	defer sv1.Close()
 
-	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
+	fileName := "missingFile.txt"
+	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
 	req, err := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -396,10 +398,11 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
-	requestBody1, writer1, content1, fileName1 := AnAcceptedFileForUpload(t)
-	req1, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody1)
+	fileName := "test11.txt"
+	requestBody, writer, content := AnAcceptedFileForUpload(t, fileName)
+	req1, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
 	require.NoError(t, err)
-	req1.Header.Set("Content-Type", writer1.FormDataContentType())
+	req1.Header.Set("Content-Type", writer.FormDataContentType())
 	req1.Header.Set("Proxyma-Secret", "test-secret")
 	resp1, err := sv.Client.Do(req1)
 	require.NoError(t, err)
@@ -407,12 +410,12 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	resp1.Body.Close()
 
 	hasher1 := sha256.New()
-	hasher1.Write([]byte(content1))
+	hasher1.Write([]byte(content))
 	hash1 := hex.EncodeToString(hasher1.Sum(nil))
 
 	var requestBody2 bytes.Buffer
 	writer2 := multipart.NewWriter(&requestBody2)
-	fileWriter2, err := writer2.CreateFormFile("file", "test.txt")
+	fileWriter2, err := writer2.CreateFormFile("file", fileName)
 	require.NoError(t, err)
 	content2 := "version 2!"
 	io.WriteString(fileWriter2, content2)
@@ -433,7 +436,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	hash2 := hex.EncodeToString(hasher2.Sum(nil))
 
 	sv.mutex.RLock()
-	meta, exists := sv.index[fileName1]
+	meta, exists := sv.index[fileName]
 	sv.mutex.RUnlock()
 
 	require.True(t, exists, "The system must track the file by its logic name")
