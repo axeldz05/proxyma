@@ -25,7 +25,7 @@ func NewServer(id, storagePath, secret string) *Server {
 //        Client:     &http.Client{Timeout: 10 * time.Second},
         Peers:      make(map[string]string),
         storage: 	*storage.NewStorage(storagePath),
-        files:      make(map[string]FileInfo),
+        index:      make(map[string]IndexEntry),
     }
     
     os.MkdirAll(storagePath, 0755)
@@ -45,10 +45,11 @@ func NewServer(id, storagePath, secret string) *Server {
     return s
 }
 
-func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, string){
+func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, string, string){
+	fileName := "test.txt"
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
-	fileWriter, err := writer.CreateFormFile("file", "test.txt")
+	fileWriter, err := writer.CreateFormFile("file", fileName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func AnAcceptedFileForUpload(t *testing.T) (bytes.Buffer, *multipart.Writer, str
 		t.Fatal(err)
 	}
 	writer.Close()
-	return requestBody, writer, fileContent
+	return requestBody, writer, fileContent, fileName
 }
 
 func Test01FirstServerIsAlreadySynced(t *testing.T){
@@ -121,7 +122,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 	noUpdatedServer.AddPeer("1", updatedServer.Address)
 	noUpdatedServer.AddPeer("2", noUpdatedServer.Address)
 
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
 
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
@@ -139,9 +140,9 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
     if resp.StatusCode != http.StatusCreated {
         t.Errorf("Expected status Created, got %v", resp.StatusCode)
     }
-	_, exists := updatedServer.files[expectedHash]
+	_, exists := updatedServer.index[fileName]
     if !exists {
-        t.Errorf("File hash '%s' was not registered in the metadata", expectedHash)
+        t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
     }
 
 	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.Address, expectedHash)
@@ -163,7 +164,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
     }
 	require.Eventually(t, func() bool {
         noUpdatedServer.mutex.RLock()
-        _, exists := noUpdatedServer.files[expectedHash]
+		_, exists := noUpdatedServer.index[fileName]
         noUpdatedServer.mutex.RUnlock()
         return exists
     }, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
@@ -173,7 +174,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
 
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
     
 	hasher := sha256.New()
 	hasher.Write([]byte(fileContent))
@@ -189,7 +190,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	sv.mutex.RLock()
-	fileMeta, exists := sv.files[expectedHash]
+	fileMeta, exists := sv.index[fileName]
 	sv.mutex.RUnlock()
 
 	require.True(t, exists, "The file should be registered in s.files")
@@ -214,7 +215,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 		}
 	}
 
-	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t)
+	requestBody, writer, expectedContent, fileName := AnAcceptedFileForUpload(t)
 	req, err := http.NewRequest("POST", servers[0].Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -231,7 +232,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
 			srv.mutex.RLock()
-			meta, exists := srv.files[expectedHash]
+			meta, exists := srv.index[fileName]
 			srv.mutex.RUnlock()
 			
 			if !exists || meta.Hash != expectedHash {
@@ -245,7 +246,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	requestBody, writer, fileContent, _ := AnAcceptedFileForUpload(t)
 	req, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -285,7 +286,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	sv := NewServer("1", t.TempDir(), "test-secret")
 	defer sv.Close()
 
-	fakeFile := FileInfo{
+	fakeFile := IndexEntry{
 		Name: "trampa.txt",
 		Size: 100,
 		Hash: "hashfalso123",
@@ -297,7 +298,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	require.Less(t, duration, 3*time.Second, "The request should have been aborted by Timeout before the slow node ended")
 	
 	sv.mutex.RLock()
-	_, exists := sv.files["hashfalso123"]
+	_, exists := sv.index[fakeFile.Name]
 	sv.mutex.RUnlock()
 	require.False(t, exists, "The file should not be registered if the download failed or timed out")
 }
@@ -326,14 +327,14 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 	defer sv.Close()
 
 	fakeHash := "hash-simulado-999"
-	fakeFile := FileInfo{
+	fakeFile := IndexEntry{
 		Name: "dataset_v2.csv",
 		Size: 1024,
 		Hash: fakeHash,
 	}
 	
 	sv.mutex.Lock()
-	sv.files[fakeHash] = fakeFile
+	sv.index[fakeFile.Name] = fakeFile
 	sv.mutex.Unlock()
 
 	req, err := http.NewRequest("GET", sv.Address+"/manifest", nil)
@@ -346,19 +347,19 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 	
 	require.Equal(t, http.StatusOK, resp.StatusCode, "The endpoint /manifest must answer with status code: 200 OK")
 
-	var manifest map[string]FileInfo
+	var manifest map[string]IndexEntry
 	err = json.NewDecoder(resp.Body).Decode(&manifest)
 	require.NoError(t, err, "The manifest must be a valid JSON in format: map[string]FileInfo")
 
-	require.Contains(t, manifest, fakeHash, "The manifest must contain the hash of the injected file")
-	require.Equal(t, fakeFile.Name, manifest[fakeHash].Name, "The filename must be the same as in the manifest")
+	require.Contains(t, manifest[fakeFile.Name].Hash, fakeHash, "The manifest must contain the hash of the injected file")
+	require.Equal(t, fakeFile.Name, manifest[fakeFile.Name].Name, "The filename must be the same as in the manifest")
 }
 
 func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	sv1 := NewServer("1", t.TempDir(), "test-secret")
 	defer sv1.Close()
 
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t)
+	requestBody, writer, fileContent, fileName := AnAcceptedFileForUpload(t)
 	req, err := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -378,16 +379,65 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	sv2.AddPeer("1", sv1.Address)
 
 	sv2.mutex.RLock()
-	_, existsBefore := sv2.files[expectedHash]
+	_, existsBefore := sv2.index[fileName]
 	sv2.mutex.RUnlock()
 	require.False(t, existsBefore, "Node 2 shouldn't have any files")
 
 	err = sv2.SyncStorage()
 	require.NoError(t, err, "SyncStorage shouldn't fail")
 	sv2.mutex.RLock()
-	fileMeta, existsAfter := sv2.files[expectedHash]
+	fileMeta, existsAfter := sv2.index[fileName]
 	sv2.mutex.RUnlock()
 
 	require.True(t, existsAfter, "Node 2 should have the file of node 1 after executing SyncStorage")
 	require.Equal(t, expectedHash, fileMeta.Hash)
+}
+
+func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
+	sv := NewServer("1", t.TempDir(), "test-secret")
+	defer sv.Close()
+	requestBody1, writer1, content1, fileName1 := AnAcceptedFileForUpload(t)
+	req1, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody1)
+	require.NoError(t, err)
+	req1.Header.Set("Content-Type", writer1.FormDataContentType())
+	req1.Header.Set("Proxyma-Secret", "test-secret")
+	resp1, err := sv.Client.Do(req1)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp1.StatusCode)
+	resp1.Body.Close()
+
+	hasher1 := sha256.New()
+	hasher1.Write([]byte(content1))
+	hash1 := hex.EncodeToString(hasher1.Sum(nil))
+
+	var requestBody2 bytes.Buffer
+	writer2 := multipart.NewWriter(&requestBody2)
+	fileWriter2, err := writer2.CreateFormFile("file", "test.txt")
+	require.NoError(t, err)
+	content2 := "version 2!"
+	io.WriteString(fileWriter2, content2)
+	writer2.Close()
+
+	req2, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody2)
+	require.NoError(t, err)
+	req2.Header.Set("Content-Type", writer2.FormDataContentType())
+	req2.Header.Set("Proxyma-Secret", "test-secret")
+
+	resp2, err := sv.Client.Do(req2)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp2.StatusCode)
+	resp2.Body.Close()
+
+	hasher2 := sha256.New()
+	hasher2.Write([]byte(content2))
+	hash2 := hex.EncodeToString(hasher2.Sum(nil))
+
+	sv.mutex.RLock()
+	meta, exists := sv.index[fileName1]
+	sv.mutex.RUnlock()
+
+	require.True(t, exists, "The system must track the file by its logic name")
+	require.Equal(t, hash2, meta.Hash, "Index should point to the Version 2 Hash")
+	require.NotEqual(t, hash1, meta.Hash, "Hash should have changed")
+	require.Equal(t, 2, meta.Version, "Version of the file should have been incremented to 2")
 }
