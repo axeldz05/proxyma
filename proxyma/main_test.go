@@ -36,6 +36,7 @@ func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
     mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
     mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
     mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
+    mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
     
     s.server = httptest.NewServer(mux)
     s.Address = s.server.URL
@@ -66,12 +67,14 @@ func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *mult
 }
 
 func Test01FirstServerIsAlreadySynced(t *testing.T){
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
     require.NoError(t, sv.SyncStorage())
 }
 
 func Test02AServerCanConnectToAnother(t *testing.T){
+	t.Parallel()
 	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
 	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
 	defer sv1.Close()
@@ -109,6 +112,7 @@ func Test02AServerCanConnectToAnother(t *testing.T){
 }
 
 func Test03AllServersSyncsToLastUpdated(t *testing.T){
+	t.Parallel()
 	updatedServer := NewServer("1", t.TempDir(), "test-secret", 2)
 	noUpdatedServer := NewServer("2", t.TempDir(), "test-secret", 2)
 	noUpdatedServer2 := NewServer("3", t.TempDir(), "test-secret", 2)
@@ -174,6 +178,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 }
 
 func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
@@ -203,6 +208,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 }
 
 func Test05P2PNetworkEventualConsistency(t *testing.T) {
+	t.Parallel()
 	clusterSize := 3
 	servers := make([]*Server, clusterSize)
 	for i := 0; i < clusterSize; i++ {
@@ -248,6 +254,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 }
 
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 	fileName := "test06.txt"
@@ -281,6 +288,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 }
 
 func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
+	t.Parallel()
 	// A "trap" node that takes 5 seconds to respond
 	slowPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5*time.Second)
@@ -309,6 +317,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 }
 
 func Test08UnauthorizedAccessIsRejected(t *testing.T) {
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "mi-secreto-super-seguro", 2)
 	defer sv.Close()
 
@@ -328,6 +337,7 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 }
 
 func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
@@ -361,6 +371,7 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 }
 
 func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
+	t.Parallel()
 	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv1.Close()
 
@@ -401,6 +412,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 }
 
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
+	t.Parallel()
 	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 	fileName := "test11.txt"
@@ -451,6 +463,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 }
 
 func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
+	t.Parallel()
 	mockFiles := make(map[string]string)
 	var notifications []PeerNotification
 
@@ -500,4 +513,80 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	
 	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. The Worker Pool isn't limiting the concurrency.")
 	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
+}
+
+func Test13LocalDeleteCreatesTombstone(t *testing.T) {
+	t.Parallel()
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	defer sv.Close()
+
+	fileName := "test13.txt"
+	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
+	reqUp, _ := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
+	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
+	reqUp.Header.Set("Proxyma-Secret", "test-secret")
+	respUp, _ := sv.Client.Do(reqUp)
+	respUp.Body.Close()
+
+	sv.mutex.RLock()
+	metaBefore := sv.index[fileName]
+	sv.mutex.RUnlock()
+	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
+
+	reqDel, _ := http.NewRequest("DELETE", sv.Address+"/file?name="+fileName, nil)
+	reqDel.Header.Set("Proxyma-Secret", "test-secret")
+	respDel, err := sv.Client.Do(reqDel)
+	require.NoError(t, err)
+	defer respDel.Body.Close()
+	require.Equal(t, http.StatusOK, respDel.StatusCode, "The endpoint DELETE should return 200 OK")
+
+	sv.mutex.RLock()
+	metaAfter, exists := sv.index[fileName]
+	sv.mutex.RUnlock()
+
+	require.True(t, exists, "The IndexEntry of the file should still exist after deleting")
+	require.True(t, metaAfter.Deleted, "Deleted should be true in the IndexEntry")
+	require.Equal(t, metaBefore.Version+1, metaAfter.Version, "Version should have been incremented")
+
+	// TODO: avoid using blobExists and make another function in the main instead
+	existsInDisk, _ := sv.storage.BlobExists(metaBefore.Hash)
+	require.False(t, existsInDisk, "The physical blob should have been deleted")
+}
+
+func Test14TombstonePropagatesToPeers(t *testing.T) {
+	t.Parallel()
+	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
+	defer sv1.Close()
+	defer sv2.Close()
+
+	sv1.AddPeer("2", sv2.Address)
+	sv2.AddPeer("1", sv1.Address)
+
+	fileName := "test14.txt"
+	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
+	reqUp, _ := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
+	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
+	reqUp.Header.Set("Proxyma-Secret", "test-secret")
+	respUp, _ := sv1.Client.Do(reqUp)
+	respUp.Body.Close()
+
+	require.Eventually(t, func() bool {
+		sv2.mutex.RLock()
+		defer sv2.mutex.RUnlock()
+		_, exists := sv2.index[fileName]
+		return exists
+	}, 2*time.Second, 100*time.Millisecond)
+
+	reqDel, _ := http.NewRequest("DELETE", sv1.Address+"/file?name="+fileName, nil)
+	reqDel.Header.Set("Proxyma-Secret", "test-secret")
+	respDel, _ := sv1.Client.Do(reqDel)
+	respDel.Body.Close()
+
+	require.Eventually(t, func() bool {
+		sv2.mutex.RLock()
+		defer sv2.mutex.RUnlock()
+		meta := sv2.index[fileName]
+		return meta.Deleted && meta.Version == 2
+	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
 }

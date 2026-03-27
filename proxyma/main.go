@@ -273,7 +273,20 @@ func (s *Server) notifyPeers(fileInfo IndexEntry) {
 }
 
 func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
-    downloadURL := fmt.Sprintf("%s/download/%s", sourceAddr, fileInfo.Hash)
+	if fileInfo.Deleted {
+		s.mutex.Lock()
+		savedFileInfo, exists := s.index[fileInfo.Name]
+		if !exists || (exists && savedFileInfo.Version < fileInfo.Version) {
+			s.index[fileInfo.Name] = fileInfo
+			if exists {
+				s.storage.DeleteBlob(savedFileInfo.Hash)
+			}
+			fmt.Printf("file %s deleted.\n", fileInfo.Name)
+		}
+		s.mutex.Unlock()
+		return
+	}
+	downloadURL := fmt.Sprintf("%s/download/%s", sourceAddr, fileInfo.Hash)
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
     defer cancel()
 
@@ -355,6 +368,34 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	s.mutex.RLock()
 	json.NewEncoder(w).Encode(s.index)
 	s.mutex.RUnlock()
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request){
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fileName := r.URL.Query().Get("name")
+	s.mutex.Lock()
+	entry, exists := s.index[fileName]
+	if !exists {
+		s.mutex.Unlock()
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	fileMeta := IndexEntry{
+		Name:    entry.Name,
+		Size:    entry.Size,
+		Hash:    entry.Hash,
+		Version: entry.Version + 1,
+		Deleted: true,
+	}
+	
+	s.index[fileName] = fileMeta
+	s.storage.DeleteBlob(entry.Hash)
+	s.mutex.Unlock()
+	go s.notifyPeers(fileMeta)
 }
 
 func (s *Server) downloadWorker() {
