@@ -40,7 +40,7 @@ type Server struct {
 	Secret  string
 
 	storage storage.Storage
-	vfs VFS
+	vfs 	*VFS
 
 	downloadQueue chan DownloadJob
 

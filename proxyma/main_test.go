@@ -24,7 +24,7 @@ func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
 		ID:            id,
 		Peers:         make(map[string]string),
 		storage:       *storage.NewStorage(storagePath),
-		vfs:           *NewVFS(),
+		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
 	}
 
