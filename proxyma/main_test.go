@@ -19,13 +19,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func NewServer(id, storagePath, secret string) *Server {
+func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
     s := &Server{
         ID:         id,
-//        Client:     &http.Client{Timeout: 10 * time.Second},
         Peers:      make(map[string]string),
         storage: 	*storage.NewStorage(storagePath),
         index:      make(map[string]IndexEntry),
+		downloadQueue: make(chan DownloadJob, 1000),
     }
     
     os.MkdirAll(storagePath, 0755)
@@ -41,7 +41,11 @@ func NewServer(id, storagePath, secret string) *Server {
     s.Address = s.server.URL
 	s.Client = s.server.Client()
 	s.Secret = secret
-    
+
+	for range poolWorkers {
+		go s.downloadWorker()
+	}
+
     return s
 }
 
@@ -62,14 +66,14 @@ func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *mult
 }
 
 func Test01FirstServerIsAlreadySynced(t *testing.T){
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
     require.NoError(t, sv.SyncStorage())
 }
 
 func Test02AServerCanConnectToAnother(t *testing.T){
-	sv1 := NewServer("1", t.TempDir(), "test-secret")
-	sv2 := NewServer("2", t.TempDir(), "test-secret")
+	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
 	defer sv1.Close()
 	defer sv2.Close()
 	sv1.AddPeer("2", sv2.Address)
@@ -105,9 +109,9 @@ func Test02AServerCanConnectToAnother(t *testing.T){
 }
 
 func Test03AllServersSyncsToLastUpdated(t *testing.T){
-	updatedServer := NewServer("1", t.TempDir(), "test-secret")
-	noUpdatedServer := NewServer("2", t.TempDir(), "test-secret")
-	noUpdatedServer2 := NewServer("3", t.TempDir(), "test-secret")
+	updatedServer := NewServer("1", t.TempDir(), "test-secret", 2)
+	noUpdatedServer := NewServer("2", t.TempDir(), "test-secret", 2)
+	noUpdatedServer2 := NewServer("3", t.TempDir(), "test-secret", 2)
 	defer updatedServer.Close()
 	defer noUpdatedServer.Close()
 	defer noUpdatedServer2.Close()
@@ -170,7 +174,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T){
 }
 
 func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
 	fileName := "test04.txt"
@@ -202,7 +206,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	clusterSize := 3
 	servers := make([]*Server, clusterSize)
 	for i := 0; i < clusterSize; i++ {
-		servers[i] = NewServer(fmt.Sprintf("node-%d", i), t.TempDir(), "test-secret")
+		servers[i] = NewServer(fmt.Sprintf("node-%d", i), t.TempDir(), "test-secret", 2)
 		defer servers[i].Close()
 	}
 
@@ -244,7 +248,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 }
 
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 	fileName := "test06.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
@@ -284,7 +288,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	}))
 	defer slowPeer.Close()
 
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
 	fakeFile := IndexEntry{
@@ -305,7 +309,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 }
 
 func Test08UnauthorizedAccessIsRejected(t *testing.T) {
-	sv := NewServer("1", t.TempDir(), "mi-secreto-super-seguro")
+	sv := NewServer("1", t.TempDir(), "mi-secreto-super-seguro", 2)
 	defer sv.Close()
 
 	resp, err := http.Get(sv.Address + "/peers")
@@ -324,7 +328,7 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 }
 
 func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 
 	fakeHash := "hash-simulado-999"
@@ -357,7 +361,7 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 }
 
 func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
-	sv1 := NewServer("1", t.TempDir(), "test-secret")
+	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv1.Close()
 
 	fileName := "missingFile.txt"
@@ -376,7 +380,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	sv2 := NewServer("2", t.TempDir(), "test-secret")
+	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
 	defer sv2.Close()
 	sv2.AddPeer("1", sv1.Address)
 
@@ -387,16 +391,17 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 
 	err = sv2.SyncStorage()
 	require.NoError(t, err, "SyncStorage shouldn't fail")
-	sv2.mutex.RLock()
-	fileMeta, existsAfter := sv2.index[fileName]
-	sv2.mutex.RUnlock()
-
-	require.True(t, existsAfter, "Node 2 should have the file of node 1 after executing SyncStorage")
-	require.Equal(t, expectedHash, fileMeta.Hash)
+	require.Eventually(t, func() bool {
+		sv2.mutex.RLock()
+		fileMeta, existsAfter := sv2.index[fileName]
+		sv2.mutex.RUnlock()
+		require.Equal(t, expectedHash, fileMeta.Hash)
+		return existsAfter
+	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing SyncStorage")
 }
 
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
-	sv := NewServer("1", t.TempDir(), "test-secret")
+	sv := NewServer("1", t.TempDir(), "test-secret", 2)
 	defer sv.Close()
 	fileName := "test11.txt"
 	requestBody, writer, content := AnAcceptedFileForUpload(t, fileName)
@@ -443,4 +448,56 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	require.Equal(t, hash2, meta.Hash, "Index should point to the Version 2 Hash")
 	require.NotEqual(t, hash1, meta.Hash, "Hash should have changed")
 	require.Equal(t, 2, meta.Version, "Version of the file should have been incremented to 2")
+}
+
+func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
+	mockFiles := make(map[string]string)
+	var notifications []PeerNotification
+
+	for i := range 5 {
+		content := fmt.Sprintf("Contenido %d", i)
+		hasher := sha256.New()
+		hasher.Write([]byte(content))
+		hash := hex.EncodeToString(hasher.Sum(nil))
+		mockFiles[hash] = content
+		notifications = append(notifications, PeerNotification{
+			File: IndexEntry{Name: fmt.Sprintf("archivo_%d.txt", i), Hash: hash, Version: 1},
+		})
+	}
+
+	slowPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1 * time.Second)
+		requestedHash := strings.TrimPrefix(r.URL.Path, "/download/")
+		if content, exists := mockFiles[requestedHash]; exists {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(content))
+		}
+	}))
+	defer slowPeer.Close()
+
+	// TODO: This assumes that the server has two pool workers. It must be passed as parameter
+	sv := NewServer("1", t.TempDir(), "test-secret", 2) 
+	defer sv.Close()
+
+	start := time.Now()
+	
+	for _, notif := range notifications {
+		notif.Source = slowPeer.URL
+		body, _ := json.Marshal(notif)
+		req, _ := http.NewRequest("POST", sv.Address+"/notify", bytes.NewReader(body))
+		req.Header.Set("Proxyma-Secret", "test-secret")
+		resp, _ := sv.Client.Do(req)
+		resp.Body.Close()
+	}
+
+	require.Eventually(t, func() bool {
+		sv.mutex.RLock()
+		defer sv.mutex.RUnlock()
+		return len(sv.index) == 5
+	}, 5*time.Second, 100*time.Millisecond)
+
+	duration := time.Since(start)
+	
+	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. The Worker Pool isn't limiting the concurrency.")
+	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
 }

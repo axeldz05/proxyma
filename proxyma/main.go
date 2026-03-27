@@ -28,6 +28,11 @@ type PeerNotification struct {
     Source string   `json:"source"`
 }
 
+type DownloadJob struct {
+    File   IndexEntry
+    Source string
+}
+
 type Server struct {
     ID      string
     Address string
@@ -39,8 +44,14 @@ type Server struct {
 
 	index map[string]IndexEntry
     mutex      sync.RWMutex
+	downloadQueue chan DownloadJob
     
     server *httptest.Server
+}
+
+func (s *Server) Close() {
+    s.server.Close()
+    close(s.downloadQueue)
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +73,6 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 	//}
     json.NewEncoder(w).Encode(s.Peers)
 }
-
 
 func (s *Server) SyncStorage() error {
 	s.mutex.RLock()
@@ -94,8 +104,11 @@ func (s *Server) SyncStorage() error {
 				s.mutex.RLock()
 				localFileInfo, exists := s.index[logicalName]
 				s.mutex.RUnlock()
-				if !exists || remoteFileInfo.Version > localFileInfo.Version {
-					s.downloadFileFromPeer(remoteFileInfo, peerAddress)
+				if !exists || (exists && remoteFileInfo.Version > localFileInfo.Version) {
+					s.downloadQueue <- DownloadJob{
+						File:   remoteFileInfo,
+						Source: peerAddress,
+					}
 				}
 			}
 			return nil
@@ -178,8 +191,10 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Invalid JSON", http.StatusBadRequest)
         return
     }
-    
-	go s.downloadFileFromPeer(notification.File, notification.Source)    
+	s.downloadQueue <- DownloadJob{
+		File:   notification.File,
+		Source: notification.Source,
+	}
 
     w.WriteHeader(http.StatusAccepted)
     fmt.Fprint(w, "Notification received, downloading file")
@@ -288,7 +303,7 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
         fmt.Printf("SECURITY ALERT: Peer has sent corrupted or false hash. Expected hash: %s, got: %s\n", fileInfo.Hash, savedHash)
         return
     }
-	
+		
 	s.mutex.Lock()
 	savedFileInfo, exists := s.index[fileInfo.Name]
 	if !exists || (exists && savedFileInfo.Version < fileInfo.Version) {
@@ -297,10 +312,6 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
     s.mutex.Unlock()
 
     fmt.Printf("Successfully downloaded file %s from peer\n", fileInfo.Name)
-}
-
-func (s *Server) Close() {
-    s.server.Close()
 }
 
 func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
@@ -344,4 +355,10 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	s.mutex.RLock()
 	json.NewEncoder(w).Encode(s.index)
 	s.mutex.RUnlock()
+}
+
+func (s *Server) downloadWorker() {
+    for job := range s.downloadQueue {
+        s.downloadFileFromPeer(job.File, job.Source)
+    }
 }
