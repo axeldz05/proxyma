@@ -288,9 +288,12 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
         fmt.Printf("SECURITY ALERT: Peer has sent corrupted or false hash. Expected hash: %s, got: %s\n", fileInfo.Hash, savedHash)
         return
     }
-
-    s.mutex.Lock()
-    s.index[fileInfo.Name] = fileInfo
+	
+	s.mutex.Lock()
+	savedFileInfo, exists := s.index[fileInfo.Name]
+	if !exists || (exists && savedFileInfo.Version < fileInfo.Version) {
+    	s.index[fileInfo.Name] = fileInfo
+	}
     s.mutex.Unlock()
 
     fmt.Printf("Successfully downloaded file %s from peer\n", fileInfo.Name)
