@@ -1,70 +1,65 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
+	"flag"
 	"fmt"
-	"io"
+	"log"
 	"net/http"
-	"net/http/httptest"
+	"os"
 	"proxyma/storage"
-	"time"
 )
 
-type IndexEntry struct {
-	Name    string `json:"name"`
-	Size    int64  `json:"size"`
-	Hash    string `json:"hash"`
-	Version int    `json:"version"`
-	Deleted bool   `json:"deleted"`
-}
+func main() {
+	port := flag.String("port", "8080", "Node port")
+	id := flag.String("id", "node-1", "Unique ID for the node")
+	storagePath := flag.String("storage", "./storage", "Path to physical folder of blobs")
+	secret := flag.String("secret", "default-secret", "Password for the cluster")
+	workers := flag.Int("workers", 5, "Limit of concurrent downloads")
+	flag.Parse()
 
-type PeerNotification struct {
-	File   IndexEntry `json:"file"`
-	Source string     `json:"source"`
-}
+	cfg := NodeConfig{
+		ID:          *id,
+		Address:     fmt.Sprintf("http://localhost:%s", *port),
+		StoragePath: *storagePath,
+		Secret:      *secret,
+		Workers:     *workers,
+	}
 
-type DownloadJob struct {
-	File   IndexEntry
-	Source string
-}
+	if err := os.MkdirAll(cfg.StoragePath, 0755); err != nil {
+		log.Fatalf("Fatal error: couldn't make a folder for the storage: %v", err)
+	}
 
-type Server struct {
-	config			NodeConfig
-	peerClient  	PeerClient
-	Peers   		map[string]string
-	storage 		storage.Storage
-	vfs 			*VFS
-	downloadQueue 	chan DownloadJob
-	server 			*httptest.Server
-}
+	s := &Server{
+		config:        cfg,
+		Peers:         make(map[string]string),
+		storage:       *storage.NewStorage(cfg.StoragePath),
+		vfs:           NewVFS(),
+		downloadQueue: make(chan DownloadJob, 1000),
+	}
 
-type NodeConfig struct {
-	ID          string
-	Address     string
-	StoragePath string
-	Secret      string
-	Workers     int
+	httpClient := &http.Client{} 
+	s.peerClient = NewHTTPPeerClient(httpClient, cfg.Secret)
+
+	for i := 0; i < s.config.Workers; i++ {
+		go s.downloadWorker()
+	}
+
+	mux := s.MountHandlers()
+
+	addr := fmt.Sprintf(":%s", *port)
+	fmt.Printf("🚀 Proxyma (Nodo %s) initialized.\n", cfg.ID)
+	fmt.Printf("📡 Listening port %s\n", *port)
+	fmt.Printf("📁 CAS path: %s\n", cfg.StoragePath)
+	
+	err := http.ListenAndServe(addr, mux)
+	if err != nil {
+		log.Fatalf("The program closed unexpectedly: %v", err)
+	}
 }
 
 func (s *Server) Close() {
 	s.server.Close()
 	close(s.downloadQueue)
-}
-
-func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func GetUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Updated"))
-	w.Write([]byte("file1.txt"))
-}
-
-func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(s.Peers)
 }
 
 func (s *Server) getPeersCopy() map[string]string{
@@ -73,258 +68,4 @@ func (s *Server) getPeersCopy() map[string]string{
 		peers[k] = v
 	}
 	return peers
-}
-func (s *Server) SyncStorage() error {
-	peers := s.getPeersCopy()
-	for _, peerAddress := range peers {
-		err := func(pAddr string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			remoteManifest, err := s.peerClient.FetchManifest(ctx, peerAddress)
-			if err != nil {
-				return err
-			}
-			for logicalName, remoteFileInfo := range remoteManifest {
-				localFileInfo, exists := s.vfs.Get(logicalName)
-				if !exists || (exists && remoteFileInfo.Version > localFileInfo.Version) {
-					s.downloadQueue <- DownloadJob{
-						File:   remoteFileInfo,
-						Source: peerAddress,
-					}
-				}
-			}
-			return nil
-		}(peerAddress)
-		if err != nil {
-			fmt.Printf("Warning: Failed to synchronize with peer %s: %v\n", peerAddress, err)
-		}
-	}
-	return nil
-}
-
-func (s *Server) AddPeer(peerID, address string) {
-	s.Peers[peerID] = address
-}
-
-func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
-	if err != nil {
-		http.Error(w, "Unable to parse form", http.StatusBadRequest)
-		return
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Error retrieving file", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	s.SaveLocalFile(header.Filename, file)
-	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Bloab uploaded successfully",
-	})
-}
-
-// handleNotification handles notifications from peers about new files
-func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var notification PeerNotification
-	err := json.NewDecoder(r.Body).Decode(&notification)
-	if err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-	s.downloadQueue <- DownloadJob{
-		File:   notification.File,
-		Source: notification.Source,
-	}
-
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprint(w, "Notification received, downloading file")
-}
-
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	requestedHash := r.URL.Path[len("/download/"):]
-	err := s.storage.ReadBlob(requestedHash, w)
-	if err != nil {
-		if err == storage.ErrFileDoesNotExist {
-			http.Error(w, "Blob not found", http.StatusNotFound)
-		} else {
-			http.Error(w, "Error retrieving blob: "+err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-}
-
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
-		"status":  "healthy",
-		"id":      s.config.ID,
-		"files":   len(s.vfs.Snapshot()),
-		"peers":   len(s.Peers),
-		"address": s.config.Address,
-	}
-
-	json.NewEncoder(w).Encode(health)
-}
-
-func (s *Server) notifyPeers(fileInfo IndexEntry) {
-	peers := make(map[string]string, len(s.Peers))
-	for k, v := range s.Peers {
-		peers[k] = v
-	}
-
-	for peerID, peerAddr := range peers {
-		if peerID == s.config.ID {
-			continue
-		}
-		payload := PeerNotification{
-			File:   fileInfo,
-			Source: s.config.Address,
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		err := s.peerClient.Notify(ctx, peerAddr, payload)
-		if err != nil {
-			fmt.Printf("Error notifying peer %s: %v\n", peerID, err)
-		}
-	}
-}
-
-func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
-	if fileInfo.Deleted {
-		savedFileInfo, exists := s.vfs.Get(fileInfo.Name)
-		if s.vfs.Upsert(fileInfo) {
-			if exists {
-				s.storage.DeleteBlob(savedFileInfo.Hash)
-			}
-			fmt.Printf("file %s deleted.\n", fileInfo.Name)
-		}
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	body,err := s.peerClient.DownloadBlob(ctx, sourceAddr, fileInfo.Hash)
-	if err != nil {
-		fmt.Printf("Error downloading blob %s: %v\n", fileInfo.Name, err)
-		return
-	}
-	defer body.Close()
-
-	savedHash, _, err := s.storage.SaveBlob(body)
-	if err != nil {
-		fmt.Printf("Error saving blob %s: %v\n", fileInfo.Name, err)
-		return
-	}
-	if savedHash != fileInfo.Hash {
-		fmt.Printf("SECURITY ALERT: Peer has sent corrupted or false hash. Expected hash: %s, got: %s\n", fileInfo.Hash, savedHash)
-		return
-	}
-
-	if s.vfs.Upsert(fileInfo) {
-		fmt.Printf("Successfully downloaded and applied file %s\n", fileInfo.Name)
-	} else {
-		fmt.Printf("Download discarded: %s went obsolete while downloading\n", fileInfo.Name)
-		s.storage.DeleteBlob(fileInfo.Hash)
-	}
-}
-
-func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		clientSecret := r.Header.Get("Proxyma-Secret")
-		if clientSecret != s.config.Secret {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
-func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(s.vfs.Snapshot())
-}
-
-func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	fileName := r.URL.Query().Get("name")
-	if fileName == "" {
-		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
-		return
-	}
-
-	err := s.DeleteLocalFile(fileName)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("File deleted successfully"))
-}
-
-func (s *Server) DeleteLocalFile(fileName string) error {
-	entry, exists := s.vfs.Get(fileName)
-	if !exists {
-		return fmt.Errorf("file not found: %s", fileName)
-	}
-	fileMeta := IndexEntry{
-		Name:    entry.Name,
-		Size:    entry.Size,
-		Hash:    entry.Hash,
-		Version: entry.Version + 1,
-		Deleted: true,
-	}
-	if s.vfs.Upsert(fileMeta) {
-		s.storage.DeleteBlob(entry.Hash)
-		go s.notifyPeers(fileMeta)
-	}
-	return nil
-}
-
-func (s *Server) SaveLocalFile(fileName string, content io.Reader) error {
-	hash, fileSize, err := s.storage.SaveBlob(content)
-	if err != nil {
-		return fmt.Errorf("Error saving blob: "+err.Error())
-	}
-
-	newVersion := 1
-	if existingMeta, exists := s.vfs.Get(fileName); exists {
-		newVersion = existingMeta.Version + 1
-	}
-	fileMeta := IndexEntry{
-		Name:    fileName,
-		Size:    fileSize,
-		Hash:    hash,
-		Version: newVersion,
-	}
-	s.vfs.Upsert(fileMeta)
-
-	go s.notifyPeers(fileMeta)
-
-	return nil
-}
-
-func (s *Server) downloadWorker() {
-	for job := range s.downloadQueue {
-		s.downloadFileFromPeer(job.File, job.Source)
-	}
 }

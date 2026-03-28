@@ -39,15 +39,7 @@ func NewServer(cfg NodeConfig) *Server {
 
 	os.MkdirAll(cfg.StoragePath, 0755)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/upload", s.authMiddleware(s.handleUpload))
-	mux.HandleFunc("/notify", s.authMiddleware(s.handleNotification))
-	mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
-	mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
-	mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
-
-	s.server = httptest.NewServer(mux)
+	s.server = httptest.NewServer(s.MountHandlers())
 	s.config.Address = s.server.URL
 	for range s.config.Workers {
 		go s.downloadWorker()
