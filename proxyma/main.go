@@ -32,15 +32,21 @@ type DownloadJob struct {
 }
 
 type Server struct {
-	ID      string
-	Address string
-	peerClient    PeerClient
-	Peers   map[string]string
-	storage storage.Storage
-	vfs 	*VFS
-	downloadQueue chan DownloadJob
+	config			NodeConfig
+	peerClient  	PeerClient
+	Peers   		map[string]string
+	storage 		storage.Storage
+	vfs 			*VFS
+	downloadQueue 	chan DownloadJob
+	server 			*httptest.Server
+}
 
-	server *httptest.Server
+type NodeConfig struct {
+	ID          string
+	Address     string
+	StoragePath string
+	Secret      string
+	Workers     int
 }
 
 func (s *Server) Close() {
@@ -99,7 +105,6 @@ func (s *Server) SyncStorage() error {
 }
 
 func (s *Server) AddPeer(peerID, address string) {
-
 	s.Peers[peerID] = address
 }
 
@@ -192,10 +197,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
 		"status":  "healthy",
-		"id":      s.ID,
+		"id":      s.config.ID,
 		"files":   len(s.vfs.Snapshot()),
 		"peers":   len(s.Peers),
-		"address": s.Address,
+		"address": s.config.Address,
 	}
 
 	json.NewEncoder(w).Encode(health)
@@ -208,12 +213,12 @@ func (s *Server) notifyPeers(fileInfo IndexEntry) {
 	}
 
 	for peerID, peerAddr := range peers {
-		if peerID == s.ID {
+		if peerID == s.config.ID {
 			continue
 		}
 		payload := PeerNotification{
 			File:   fileInfo,
-			Source: s.Address,
+			Source: s.config.Address,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -291,7 +296,7 @@ func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clientSecret := r.Header.Get("Proxyma-Secret")
-		if clientSecret != s.peerClient.GetSecret() {
+		if clientSecret != s.config.Secret {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

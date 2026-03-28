@@ -19,16 +19,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
+func DefaultConfigFor(t *testing.T, id string) NodeConfig {
+	return NodeConfig{
+		ID: id,
+		StoragePath: t.TempDir(),
+		Secret: "secret-key",
+		Workers: 2,
+	}
+}
+
+func NewServer(cfg NodeConfig) *Server {
 	s := &Server{
-		ID:            id,
+		config: 	   cfg,
 		Peers:         make(map[string]string),
-		storage:       *storage.NewStorage(storagePath),
+		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
 	}
 
-	os.MkdirAll(storagePath, 0755)
+	os.MkdirAll(cfg.StoragePath, 0755)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload", s.authMiddleware(s.handleUpload))
@@ -39,11 +48,11 @@ func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
 	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
 
 	s.server = httptest.NewServer(mux)
-	s.Address = s.server.URL
-	for range poolWorkers {
+	s.config.Address = s.server.URL
+	for range s.config.Workers {
 		go s.downloadWorker()
 	}
-	s.peerClient = NewHTTPPeerClient(s.server.Client(), secret)
+	s.peerClient = NewHTTPPeerClient(s.server.Client(), s.config.Secret)
 
 	return s
 }
@@ -66,19 +75,19 @@ func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *mult
 
 func Test01FirstServerIsAlreadySynced(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 	require.NoError(t, sv.SyncStorage())
 }
 
 func Test02AServerCanConnectToAnother(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
-	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
+	sv1 := NewServer(DefaultConfigFor(t, "1"))
+	sv2 := NewServer(DefaultConfigFor(t, "1"))
 	defer sv1.Close()
 	defer sv2.Close()
-	sv1.AddPeer("2", sv2.Address)
-	sv2.AddPeer("1", sv1.Address)
+	sv1.AddPeer("2", sv2.config.Address)
+	sv2.AddPeer("1", sv1.config.Address)
 
 	req := httptest.NewRequest("GET", "/peers", nil)
 	w := httptest.NewRecorder()
@@ -90,7 +99,7 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 		t.Errorf("Could not copy response from %s", resp.Body)
 	}
 	gotPeersOfSv2 := strings.TrimSpace(buf.String())
-	expectedPeersOfSv2 := fmt.Sprintf(`{"1":"%s"}`, sv1.Address)
+	expectedPeersOfSv2 := fmt.Sprintf(`{"1":"%s"}`, sv1.config.Address)
 
 	req = httptest.NewRequest("GET", "/peers", nil)
 	w = httptest.NewRecorder()
@@ -102,7 +111,7 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 		t.Errorf("Could not copy response from %s", resp.Body)
 	}
 	gotPeersOfSv1 := strings.TrimSpace(buf.String())
-	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.Address)
+	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.config.Address)
 	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
 	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
 	require.NoError(t, sv1.SyncStorage())
@@ -111,21 +120,21 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 
 func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	t.Parallel()
-	updatedServer := NewServer("1", t.TempDir(), "test-secret", 2)
-	noUpdatedServer := NewServer("2", t.TempDir(), "test-secret", 2)
-	noUpdatedServer2 := NewServer("3", t.TempDir(), "test-secret", 2)
+	updatedServer := NewServer(DefaultConfigFor(t, "1"))
+	noUpdatedServer := NewServer(DefaultConfigFor(t, "2"))
+	noUpdatedServer2 := NewServer(DefaultConfigFor(t, "3"))
 	defer updatedServer.Close()
 	defer noUpdatedServer.Close()
 	defer noUpdatedServer2.Close()
 
-	updatedServer.AddPeer("2", noUpdatedServer.Address)
-	updatedServer.AddPeer("3", noUpdatedServer2.Address)
+	updatedServer.AddPeer("2", noUpdatedServer.config.Address)
+	updatedServer.AddPeer("3", noUpdatedServer2.config.Address)
 
-	noUpdatedServer.AddPeer("1", updatedServer.Address)
-	noUpdatedServer.AddPeer("3", noUpdatedServer2.Address)
+	noUpdatedServer.AddPeer("1", updatedServer.config.Address)
+	noUpdatedServer.AddPeer("3", noUpdatedServer2.config.Address)
 
-	noUpdatedServer.AddPeer("1", updatedServer.Address)
-	noUpdatedServer.AddPeer("2", noUpdatedServer.Address)
+	noUpdatedServer.AddPeer("1", updatedServer.config.Address)
+	noUpdatedServer.AddPeer("2", noUpdatedServer.config.Address)
 	fileName := "test03.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
 
@@ -133,10 +142,10 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	req, err := http.NewRequest("POST", updatedServer.Address+"/upload", &requestBody)
+	req, err := http.NewRequest("POST", updatedServer.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
 	resp, err := updatedServer.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -150,10 +159,10 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 		t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
 	}
 
-	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.Address, expectedHash)
+	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.config.Address, expectedHash)
 	req, err = http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
 	resp, err = updatedServer.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -177,7 +186,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 
 func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	fileName := "test04.txt"
@@ -187,10 +196,10 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	req, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
+	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", sv.config.Secret)
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -208,7 +217,8 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	clusterSize := 3
 	servers := make([]*Server, clusterSize)
 	for i := 0; i < clusterSize; i++ {
-		servers[i] = NewServer(fmt.Sprintf("node-%d", i), t.TempDir(), "test-secret", 2)
+		serverName := fmt.Sprintf("node-%d", i)
+		servers[i] = NewServer(DefaultConfigFor(t, serverName))
 		defer servers[i].Close()
 	}
 
@@ -216,16 +226,16 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	for i, current := range servers {
 		for j, peer := range servers {
 			if i != j {
-				current.AddPeer(peer.ID, peer.Address)
+				current.AddPeer(peer.config.ID, peer.config.Address)
 			}
 		}
 	}
 	fileName := "test05.txt"
 	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", servers[0].Address+"/upload", &requestBody)
+	req, err := http.NewRequest("POST", servers[0].config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", servers[0].config.Secret)
 	resp, err := servers[0].server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -250,14 +260,14 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 	fileName := "test06.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
+	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", sv.config.Secret)
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -267,10 +277,10 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	downloadURL := fmt.Sprintf("%s/download/%s", sv.Address, expectedHash)
+	downloadURL := fmt.Sprintf("%s/download/%s", sv.config.Address, expectedHash)
 	reqDL, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
-	reqDL.Header.Set("Proxyma-Secret", "test-secret")
+	reqDL.Header.Set("Proxyma-Secret", sv.config.Secret)
 	respDL, err := sv.server.Client().Do(reqDL)
 	require.NoError(t, err)
 	defer respDL.Body.Close()
@@ -291,7 +301,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	}))
 	defer slowPeer.Close()
 
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
 	fakeFile := IndexEntry{
@@ -312,15 +322,15 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 
 func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "mi-secreto-super-seguro", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
-	resp, err := http.Get(sv.Address + "/peers")
+	resp, err := http.Get(sv.config.Address + "/peers")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "Reject requests without the Proxyma-Secret header")
 
-	req, err := http.NewRequest("GET", sv.Address+"/peers", nil)
+	req, err := http.NewRequest("GET", sv.config.Address+"/peers", nil)
 	require.NoError(t, err)
 	req.Header.Set("Proxyma-Secret", "secreto-falso-de-un-hacker")
 
@@ -332,7 +342,7 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 
 func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
 	fakeHash := "hash-simulado-999"
@@ -344,9 +354,9 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	sv.vfs.Upsert(fakeFile)
 
-	req, err := http.NewRequest("GET", sv.Address+"/manifest", nil)
+	req, err := http.NewRequest("GET", sv.config.Address+"/manifest", nil)
 	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", sv.config.Secret)
 
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
@@ -364,15 +374,15 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 
 func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv1 := NewServer(DefaultConfigFor(t,"1"))
 	defer sv1.Close()
 
 	fileName := "missingFile.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
+	req, err := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", "test-secret")
+	req.Header.Set("Proxyma-Secret", sv1.config.Secret)
 
 	resp, err := sv1.server.Client().Do(req)
 	require.NoError(t, err)
@@ -383,9 +393,9 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	hasher.Write([]byte(fileContent))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
+	sv2 := NewServer(DefaultConfigFor(t, "2"))
 	defer sv2.Close()
-	sv2.AddPeer("1", sv1.Address)
+	sv2.AddPeer("1", sv1.config.Address)
 
 	_, existsBefore := sv2.vfs.Get(fileName)
 
@@ -402,14 +412,14 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 	fileName := "test11.txt"
 	requestBody, writer, content := AnAcceptedFileForUpload(t, fileName)
-	req1, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
+	req1, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req1.Header.Set("Content-Type", writer.FormDataContentType())
-	req1.Header.Set("Proxyma-Secret", "test-secret")
+	req1.Header.Set("Proxyma-Secret", sv.config.Secret)
 	resp1, err := sv.server.Client().Do(req1)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp1.StatusCode)
@@ -427,10 +437,10 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	io.WriteString(fileWriter2, content2)
 	writer2.Close()
 
-	req2, err := http.NewRequest("POST", sv.Address+"/upload", &requestBody2)
+	req2, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody2)
 	require.NoError(t, err)
 	req2.Header.Set("Content-Type", writer2.FormDataContentType())
-	req2.Header.Set("Proxyma-Secret", "test-secret")
+	req2.Header.Set("Proxyma-Secret", sv.config.Secret)
 
 	resp2, err := sv.server.Client().Do(req2)
 	require.NoError(t, err)
@@ -475,8 +485,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	}))
 	defer slowPeer.Close()
 
-	// TODO: This assumes that the server has two pool workers. It must be passed as parameter
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
 	start := time.Now()
@@ -484,8 +493,8 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	for _, notif := range notifications {
 		notif.Source = slowPeer.URL
 		body, _ := json.Marshal(notif)
-		req, _ := http.NewRequest("POST", sv.Address+"/notify", bytes.NewReader(body))
-		req.Header.Set("Proxyma-Secret", "test-secret")
+		req, _ := http.NewRequest("POST", sv.config.Address+"/notify", bytes.NewReader(body))
+		req.Header.Set("Proxyma-Secret", sv.config.Secret)
 		resp, _ := sv.server.Client().Do(req)
 		resp.Body.Close()
 	}
@@ -503,14 +512,14 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 
 func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
-	sv := NewServer("1", t.TempDir(), "test-secret", 2)
+	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
 	fileName := "test13.txt"
 	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
-	reqUp, _ := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
+	reqUp, _ := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-	reqUp.Header.Set("Proxyma-Secret", "test-secret")
+	reqUp.Header.Set("Proxyma-Secret", sv.config.Secret)
 	respUp, _ := sv.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
@@ -518,8 +527,8 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 
-	reqDel, _ := http.NewRequest("DELETE", sv.Address+"/file?name="+fileName, nil)
-	reqDel.Header.Set("Proxyma-Secret", "test-secret")
+	reqDel, _ := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
+	reqDel.Header.Set("Proxyma-Secret", sv.config.Secret)
 	respDel, err := sv.server.Client().Do(reqDel)
 	require.NoError(t, err)
 	defer respDel.Body.Close()
@@ -538,19 +547,19 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 
 func Test14TombstonePropagatesToPeers(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer("1", t.TempDir(), "test-secret", 2)
-	sv2 := NewServer("2", t.TempDir(), "test-secret", 2)
+	sv1 := NewServer(DefaultConfigFor(t, "1"))
+	sv2 := NewServer(DefaultConfigFor(t, "2"))
 	defer sv1.Close()
 	defer sv2.Close()
 
-	sv1.AddPeer("2", sv2.Address)
-	sv2.AddPeer("1", sv1.Address)
+	sv1.AddPeer("2", sv2.config.Address)
+	sv2.AddPeer("1", sv1.config.Address)
 
 	fileName := "test14.txt"
 	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
-	reqUp, _ := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
+	reqUp, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-	reqUp.Header.Set("Proxyma-Secret", "test-secret")
+	reqUp.Header.Set("Proxyma-Secret", sv1.config.Secret)
 	respUp, _ := sv1.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
@@ -559,8 +568,8 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 		return exists
 	}, 2*time.Second, 100*time.Millisecond)
 
-	reqDel, _ := http.NewRequest("DELETE", sv1.Address+"/file?name="+fileName, nil)
-	reqDel.Header.Set("Proxyma-Secret", "test-secret")
+	reqDel, _ := http.NewRequest("DELETE", sv1.config.Address+"/file?name="+fileName, nil)
+	reqDel.Header.Set("Proxyma-Secret", sv1.config.Secret)
 	respDel, _ := sv1.server.Client().Do(reqDel)
 	respDel.Body.Close()
 
