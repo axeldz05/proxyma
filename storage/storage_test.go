@@ -37,7 +37,7 @@ func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
 	hasher.Write([]byte(content))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	gotHash, err := aStorage.SaveBlob(strings.NewReader(content))
+	gotHash, _, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, gotHash, "SaveBlob must return the content's hash SHA-256")
 
@@ -49,7 +49,7 @@ func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
 func Test03ReadBlobStreamsFromDiskUsingHash(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	content := "some content!"
-	savedHash, err := aStorage.SaveBlob(strings.NewReader(content))
+	savedHash, _, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	err = aStorage.ReadBlob(savedHash, &buf)
@@ -61,9 +61,9 @@ func Test03ReadBlobStreamsFromDiskUsingHash(t *testing.T) {
 func Test04SaveBlobIsIdempotent(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	content := "duplicated content"
-	hash1, err := aStorage.SaveBlob(strings.NewReader(content))
+	hash1, _, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
-	hash2, err := aStorage.SaveBlob(strings.NewReader(content))
+	hash2, _, err := aStorage.SaveBlob(strings.NewReader(content))
 
 	require.NoError(t, err, "Saving an existing blob should not return an error (Idempotence)")
 	require.Equal(t, hash1, hash2, "Hashes must be the same")
@@ -73,11 +73,11 @@ func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 
 	content1 := aFileAcceptedByStorage()
-	_, err := aStorage.SaveBlob(bytes.NewReader(content1))
+	_, _, err := aStorage.SaveBlob(bytes.NewReader(content1))
 	require.NoError(t, err)
 
 	content2 := aFileAcceptedByStorage2()
-	_, err = aStorage.SaveBlob(bytes.NewReader(content2))
+	_, _, err = aStorage.SaveBlob(bytes.NewReader(content2))
 	require.NoError(t, err)
 
 	err, got := aStorage.AmountOfBlobs()
@@ -89,7 +89,7 @@ func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
 func Test06StorageRecognizesTheSameSavedBlob(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
 	content := aFileAcceptedByStorage()
-	generatedHash, err := aStorage.SaveBlob(bytes.NewReader(content))
+	generatedHash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	var got bytes.Buffer
@@ -137,7 +137,7 @@ func Test9SaveBlobReturnsSHA256Hash(t *testing.T) {
 	hasher.Write([]byte(content))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	gotHash, err := aStorage.SaveBlob(bytes.NewReader([]byte(content)))
+	gotHash, _, err := aStorage.SaveBlob(bytes.NewReader([]byte(content)))
 
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, gotHash, "Hash should be the exact SHA-256 of the file content")

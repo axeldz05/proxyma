@@ -26,19 +26,19 @@ func (st *Storage) Name() string {
 	return filepath.Base(st.baseDir)
 }
 
-func (st *Storage) SaveBlob(content io.Reader) (string, error) {
+func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 	file, err := os.CreateTemp(st.baseDir, "tmp-blob-*")
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	tempName := file.Name()
 	defer os.Remove(tempName)
 	hasher := sha256.New()
 	mw := io.MultiWriter(file, hasher)
-	_, err = io.Copy(mw, content)
+	writtenBytes, err := io.Copy(mw, content)
 	if err != nil {
 		file.Close()
-		return "", err
+		return "", 0, err
 	}
 	generatedHash := hex.EncodeToString(hasher.Sum(nil))
 	fullpath := filepath.Join(st.baseDir, generatedHash)
@@ -47,10 +47,10 @@ func (st *Storage) SaveBlob(content io.Reader) (string, error) {
 	if os.IsNotExist(err){
 		err = os.Rename(file.Name(), fullpath)	
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 	}
-	return generatedHash, nil
+	return generatedHash, writtenBytes, nil
 }
 
 func ReadFileFromClient(clientIP string, pathToRead string) (io.ReadCloser, error) {

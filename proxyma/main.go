@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"proxyma/storage"
 	"time"
 )
@@ -127,31 +125,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	hash, err := s.storage.SaveBlob(file)
+	s.SaveLocalFile(header.Filename, file)
 	if err != nil {
-		http.Error(w, "Error saving blob: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
-	metaFileSize, metaFileName, err := getFileInfo(header)
-	if err != nil {
-		http.Error(w, "Error retrieving file metadata: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	newVersion := 1
-	if existingMeta, exists := s.vfs.Get(metaFileName); exists {
-		newVersion = existingMeta.Version + 1
-	}
-	fileMeta := IndexEntry{
-		Name:    metaFileName,
-		Size:    metaFileSize,
-		Hash:    hash,
-		Version: newVersion,
-	}
-	s.vfs.Upsert(fileMeta)
-
-	go s.notifyPeers(fileMeta)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -249,7 +227,7 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
 	}
 	defer body.Close()
 
-	savedHash, err := s.storage.SaveBlob(body)
+	savedHash, _, err := s.storage.SaveBlob(body)
 	if err != nil {
 		fmt.Printf("Error saving blob %s: %v\n", fileInfo.Name, err)
 		return
@@ -265,32 +243,6 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
 		fmt.Printf("Download discarded: %s went obsolete while downloading\n", fileInfo.Name)
 		s.storage.DeleteBlob(fileInfo.Hash)
 	}
-}
-
-func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
-	file, err := header.Open()
-	if err != nil {
-		return 0, "", err
-	}
-	defer file.Close()
-
-	if stat, ok := file.(interface{ Stat() (os.FileInfo, error) }); ok {
-		info, err := stat.Stat()
-		if err != nil {
-			return 0, "", err
-		}
-		return info.Size(), info.Name(), nil
-	}
-
-	size, err := file.Seek(0, io.SeekEnd)
-	if err != nil {
-		return 0, "", err
-	}
-	_, err = file.Seek(0, io.SeekStart)
-	if err != nil {
-		return 0, "", err
-	}
-	return size, header.Filename, nil
 }
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -314,14 +266,26 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fileName := r.URL.Query().Get("name")
-
-	entry, exists := s.vfs.Get(fileName)
-	if !exists {
-
-		http.Error(w, "File not found", http.StatusNotFound)
+	if fileName == "" {
+		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
 		return
 	}
 
+	err := s.DeleteLocalFile(fileName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("File deleted successfully"))
+}
+
+func (s *Server) DeleteLocalFile(fileName string) error {
+	entry, exists := s.vfs.Get(fileName)
+	if !exists {
+		return fmt.Errorf("file not found: %s", fileName)
+	}
 	fileMeta := IndexEntry{
 		Name:    entry.Name,
 		Size:    entry.Size,
@@ -329,12 +293,34 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		Version: entry.Version + 1,
 		Deleted: true,
 	}
-
-	if s.vfs.Upsert(fileMeta){
+	if s.vfs.Upsert(fileMeta) {
 		s.storage.DeleteBlob(entry.Hash)
 		go s.notifyPeers(fileMeta)
 	}
-	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+func (s *Server) SaveLocalFile(fileName string, content io.Reader) error {
+	hash, fileSize, err := s.storage.SaveBlob(content)
+	if err != nil {
+		return fmt.Errorf("Error saving blob: "+err.Error())
+	}
+
+	newVersion := 1
+	if existingMeta, exists := s.vfs.Get(fileName); exists {
+		newVersion = existingMeta.Version + 1
+	}
+	fileMeta := IndexEntry{
+		Name:    fileName,
+		Size:    fileSize,
+		Hash:    hash,
+		Version: newVersion,
+	}
+	s.vfs.Upsert(fileMeta)
+
+	go s.notifyPeers(fileMeta)
+
+	return nil
 }
 
 func (s *Server) downloadWorker() {
