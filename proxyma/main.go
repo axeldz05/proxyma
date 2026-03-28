@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,13 +34,10 @@ type DownloadJob struct {
 type Server struct {
 	ID      string
 	Address string
-	Client  *http.Client
+	peerClient    PeerClient
 	Peers   map[string]string
-	Secret  string
-
 	storage storage.Storage
 	vfs 	*VFS
-
 	downloadQueue chan DownloadJob
 
 	server *httptest.Server
@@ -64,40 +60,28 @@ func GetUpdateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
-	//for v,k := range s.Peers{
-	//fmt.Printf("v: %s. k: %s", v,k)
-	//}
 	json.NewEncoder(w).Encode(s.Peers)
 }
 
-func (s *Server) SyncStorage() error {
+func (s *Server) getPeersCopy() map[string]string{
 	peers := make(map[string]string, len(s.Peers))
 	for k, v := range s.Peers {
 		peers[k] = v
 	}
+	return peers
+}
+func (s *Server) SyncStorage() error {
+	peers := s.getPeersCopy()
 	for _, peerAddress := range peers {
 		err := func(pAddr string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, "GET", peerAddress+"/manifest", nil)
+			remoteManifest, err := s.peerClient.FetchManifest(ctx, peerAddress)
 			if err != nil {
-				return err
-			}
-			req.Header.Set("Proxyma-Secret", s.Secret)
-			resp, err := s.Client.Do(req)
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-
-			var remoteManifest map[string]IndexEntry
-			if err := json.NewDecoder(resp.Body).Decode(&remoteManifest); err != nil {
 				return err
 			}
 			for logicalName, remoteFileInfo := range remoteManifest {
-
 				localFileInfo, exists := s.vfs.Get(logicalName)
-
 				if !exists || (exists && remoteFileInfo.Version > localFileInfo.Version) {
 					s.downloadQueue <- DownloadJob{
 						File:   remoteFileInfo,
@@ -227,35 +211,15 @@ func (s *Server) notifyPeers(fileInfo IndexEntry) {
 		if peerID == s.ID {
 			continue
 		}
-		url := fmt.Sprintf("%s/notify", peerAddr)
 		payload := PeerNotification{
 			File:   fileInfo,
 			Source: s.Address,
 		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			fmt.Printf("Error marshaling JSON for peer %s: %v\n", peerID, err)
-			continue
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-		if err != nil {
-			fmt.Printf("Error making a request with context %s: %v\n", ctx, err)
-			return
-		}
-		req.Header.Set("Proxyma-Secret", s.Secret)
-		req.Header.Set("content-type", "application/json")
-		resp, err := s.Client.Do(req)
+		err := s.peerClient.Notify(ctx, peerAddr, payload)
 		if err != nil {
 			fmt.Printf("Error notifying peer %s: %v\n", peerID, err)
-			continue
-		}
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
-			fmt.Printf("Peer %s returned status: %s\n", peerID, resp.Status)
 		}
 	}
 }
@@ -271,28 +235,16 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
 		}
 		return
 	}
-	downloadURL := fmt.Sprintf("%s/download/%s", sourceAddr, fileInfo.Hash)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
-	if err != nil {
-		fmt.Printf("Error making a request with context %s: %v\n", ctx, err)
-		return
-	}
-	req.Header.Set("Proxyma-Secret", s.Secret)
-	resp, err := s.Client.Do(req)
+	body,err := s.peerClient.DownloadBlob(ctx, sourceAddr, fileInfo.Hash)
 	if err != nil {
 		fmt.Printf("Error downloading blob %s: %v\n", fileInfo.Name, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Error downloading blob%s: %s\n", fileInfo.Name, resp.Status)
-		return
-	}
-	savedHash, err := s.storage.SaveBlob(resp.Body)
+	savedHash, err := s.storage.SaveBlob(body)
 	if err != nil {
 		fmt.Printf("Error saving blob %s: %v\n", fileInfo.Name, err)
 		return
@@ -339,7 +291,7 @@ func getFileInfo(header *multipart.FileHeader) (int64, string, error) {
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clientSecret := r.Header.Get("Proxyma-Secret")
-		if clientSecret != s.Secret {
+		if clientSecret != s.peerClient.GetSecret() {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

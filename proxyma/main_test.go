@@ -40,12 +40,10 @@ func NewServer(id, storagePath, secret string, poolWorkers int) *Server {
 
 	s.server = httptest.NewServer(mux)
 	s.Address = s.server.URL
-	s.Client = s.server.Client()
-	s.Secret = secret
-
 	for range poolWorkers {
 		go s.downloadWorker()
 	}
+	s.peerClient = NewHTTPPeerClient(s.server.Client(), secret)
 
 	return s
 }
@@ -139,7 +137,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	resp, err := updatedServer.Client.Do(req)
+	resp, err := updatedServer.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -156,7 +154,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	req, err = http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	resp, err = updatedServer.Client.Do(req)
+	resp, err = updatedServer.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf := new(strings.Builder)
@@ -193,7 +191,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	resp, err := sv.Client.Do(req)
+	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -228,7 +226,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	resp, err := servers[0].Client.Do(req)
+	resp, err := servers[0].server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -260,7 +258,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
-	resp, err := sv.Client.Do(req)
+	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -273,7 +271,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	reqDL, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
 	reqDL.Header.Set("Proxyma-Secret", "test-secret")
-	respDL, err := sv.Client.Do(reqDL)
+	respDL, err := sv.server.Client().Do(reqDL)
 	require.NoError(t, err)
 	defer respDL.Body.Close()
 
@@ -350,7 +348,7 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Proxyma-Secret", "test-secret")
 
-	resp, err := sv.Client.Do(req)
+	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -376,7 +374,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Proxyma-Secret", "test-secret")
 
-	resp, err := sv1.Client.Do(req)
+	resp, err := sv1.server.Client().Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	defer resp.Body.Close()
@@ -412,7 +410,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	require.NoError(t, err)
 	req1.Header.Set("Content-Type", writer.FormDataContentType())
 	req1.Header.Set("Proxyma-Secret", "test-secret")
-	resp1, err := sv.Client.Do(req1)
+	resp1, err := sv.server.Client().Do(req1)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp1.StatusCode)
 	resp1.Body.Close()
@@ -434,7 +432,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	req2.Header.Set("Content-Type", writer2.FormDataContentType())
 	req2.Header.Set("Proxyma-Secret", "test-secret")
 
-	resp2, err := sv.Client.Do(req2)
+	resp2, err := sv.server.Client().Do(req2)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp2.StatusCode)
 	resp2.Body.Close()
@@ -488,7 +486,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 		body, _ := json.Marshal(notif)
 		req, _ := http.NewRequest("POST", sv.Address+"/notify", bytes.NewReader(body))
 		req.Header.Set("Proxyma-Secret", "test-secret")
-		resp, _ := sv.Client.Do(req)
+		resp, _ := sv.server.Client().Do(req)
 		resp.Body.Close()
 	}
 
@@ -513,7 +511,7 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	reqUp, _ := http.NewRequest("POST", sv.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
 	reqUp.Header.Set("Proxyma-Secret", "test-secret")
-	respUp, _ := sv.Client.Do(reqUp)
+	respUp, _ := sv.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
 	metaBefore, _ := sv.vfs.Get(fileName)
@@ -522,7 +520,7 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 
 	reqDel, _ := http.NewRequest("DELETE", sv.Address+"/file?name="+fileName, nil)
 	reqDel.Header.Set("Proxyma-Secret", "test-secret")
-	respDel, err := sv.Client.Do(reqDel)
+	respDel, err := sv.server.Client().Do(reqDel)
 	require.NoError(t, err)
 	defer respDel.Body.Close()
 	require.Equal(t, http.StatusOK, respDel.StatusCode, "The endpoint DELETE should return 200 OK")
@@ -553,7 +551,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	reqUp, _ := http.NewRequest("POST", sv1.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
 	reqUp.Header.Set("Proxyma-Secret", "test-secret")
-	respUp, _ := sv1.Client.Do(reqUp)
+	respUp, _ := sv1.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
 	require.Eventually(t, func() bool {
@@ -563,7 +561,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 
 	reqDel, _ := http.NewRequest("DELETE", sv1.Address+"/file?name="+fileName, nil)
 	reqDel.Header.Set("Proxyma-Secret", "test-secret")
-	respDel, _ := sv1.Client.Do(reqDel)
+	respDel, _ := sv1.server.Client().Do(reqDel)
 	respDel.Body.Close()
 
 	require.Eventually(t, func() bool {
