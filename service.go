@@ -121,7 +121,7 @@ func (s *Server) DeleteLocalFile(fileName string) error {
 func (s *Server) SaveLocalFile(fileName string, content io.Reader) error {
 	hash, fileSize, err := s.storage.SaveBlob(content)
 	if err != nil {
-		return fmt.Errorf("Error saving blob: "+err.Error())
+		return fmt.Errorf("Error saving blob: %s", err.Error())
 	}
 
 	newVersion := 1

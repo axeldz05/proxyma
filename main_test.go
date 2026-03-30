@@ -397,8 +397,10 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	require.NoError(t, err, "SyncStorage shouldn't fail")
 	require.Eventually(t, func() bool {
 		fileMeta, existsAfter := sv2.vfs.Get(fileName)
-		require.Equal(t, expectedHash, fileMeta.Hash)
-		return existsAfter
+		if !existsAfter {
+			return false
+		}
+		return fileMeta.Hash == expectedHash
 	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing SyncStorage")
 }
 

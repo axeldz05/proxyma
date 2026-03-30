@@ -41,7 +41,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	s.SaveLocalFile(header.Filename, file)
+	err = s.SaveLocalFile(header.Filename, file)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
