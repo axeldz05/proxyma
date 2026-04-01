@@ -19,6 +19,6 @@ func assertBlobDoesNotExists(t *testing.T, aStorage *Storage, hash string) {
 }
 
 func noErrorSavingBlob(t *testing.T, aStorage *Storage, content []byte) {
-	_, err := aStorage.SaveBlob(bytes.NewReader(content))
+	_, _, err := aStorage.SaveBlob(bytes.NewReader(content))
 	require.NoError(t, err)
 }

@@ -17,6 +17,9 @@ func (s *Server) SyncStorage() error {
 				return err
 			}
 			for logicalName, remoteFileInfo := range remoteManifest {
+				if _, subscribed := s.subscriptions.Load(logicalName); !subscribed {
+					continue
+				}
 				localFileInfo, exists := s.vfs.Get(logicalName)
 				if !exists || (exists && remoteFileInfo.Version > localFileInfo.Version) {
 					s.downloadQueue <- DownloadJob{

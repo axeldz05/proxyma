@@ -13,6 +13,7 @@ import (
 	"os"
 	"proxyma/storage"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,6 +79,7 @@ func NewServer(cfg NodeConfig) *Server {
 		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
+		subscriptions: &sync.Map{},
 	}
 
 	os.MkdirAll(cfg.StoragePath, 0755)
@@ -192,6 +194,8 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	noUpdatedServer.AddPeer("1", updatedServer.config.Address)
 	noUpdatedServer.AddPeer("2", noUpdatedServer.config.Address)
 	fileName := "test03.txt"
+	noUpdatedServer.subscriptions.Store(fileName, true)
+	noUpdatedServer2.subscriptions.Store(fileName, true)
 	_, _, fileContent := AnAcceptedFileForUpload(t, fileName)
 	
 	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
@@ -255,6 +259,9 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 		}
 	}
 	fileName := "test05.txt"
+	for _, srv := range servers {
+		srv.subscriptions.Store(fileName, true)
+	}
 	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t, fileName)
 	req, err := http.NewRequest("POST", servers[0].config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
@@ -420,6 +427,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	sv2 := NewServer(DefaultConfigFor(t, "2"))
 	defer sv2.Close()
 	sv2.AddPeer("1", sv1.config.Address)
+	sv2.subscriptions.Store(fileName, true)
 
 	_, existsBefore := sv2.vfs.Get(fileName)
 
@@ -496,8 +504,9 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 		hasher.Write([]byte(content))
 		hash := hex.EncodeToString(hasher.Sum(nil))
 		mockFiles[hash] = content
+		fileName := fmt.Sprintf("archivo_%d.txt", i)
 		notifications = append(notifications, PeerNotification{
-			File: IndexEntry{Name: fmt.Sprintf("archivo_%d.txt", i), Hash: hash, Version: 1},
+			File: IndexEntry{Name: fileName, Hash: hash, Version: 1},
 		})
 	}
 
@@ -513,6 +522,10 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 
 	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
+
+	for i := range 5 {
+		sv.subscriptions.Store(fmt.Sprintf("archivo_%d.txt", i), true)
+	}
 
 	start := time.Now()
 
@@ -582,6 +595,8 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	sv2.AddPeer("1", sv1.config.Address)
 
 	fileName := "test14.txt"
+	sv1.subscriptions.Store(fileName, true)
+	sv2.subscriptions.Store(fileName, true)
 	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
 	reqUp, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
@@ -603,4 +618,53 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 		meta, _ := sv2.vfs.Get(fileName)
 		return meta.Deleted && meta.Version == 2
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
+}
+
+func Test15SelectiveSynchronization(t *testing.T) {
+	t.Parallel()
+	sv1 := NewServer(DefaultConfigFor(t, "1"))
+	sv2 := NewServer(DefaultConfigFor(t, "2"))
+	defer sv1.Close()
+	defer sv2.Close()
+
+	fileAName := "fileA.txt"
+	fileBName := "fileB.txt"
+
+	requestBodyA, writerA, _ := AnAcceptedFileForUpload(t, fileAName)
+	reqUpA, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyA)
+	reqUpA.Header.Set("Content-Type", writerA.FormDataContentType())
+	reqUpA.Header.Set("Proxyma-Secret", sv1.config.Secret)
+	respUpA, _ := sv1.server.Client().Do(reqUpA)
+	respUpA.Body.Close()
+
+	requestBodyB, writerB, _ := AnAcceptedFileForUpload(t, fileBName)
+	reqUpB, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyB)
+	reqUpB.Header.Set("Content-Type", writerB.FormDataContentType())
+	reqUpB.Header.Set("Proxyma-Secret", sv1.config.Secret)
+	respUpB, _ := sv1.server.Client().Do(reqUpB)
+	respUpB.Body.Close()
+
+	// Sv2 subscribes ONLY to fileA via API
+	reqSub, _ := http.NewRequest("POST", sv2.config.Address+"/subscribe?name="+fileAName, nil)
+	reqSub.Header.Set("Proxyma-Secret", sv2.config.Secret)
+	respSub, err := sv2.server.Client().Do(reqSub)
+	require.NoError(t, err)
+	defer respSub.Body.Close()
+	require.Equal(t, http.StatusOK, respSub.StatusCode, "Subscribe API should return 200 OK")
+
+	// Connect peers
+	sv1.AddPeer("2", sv2.config.Address)
+	sv2.AddPeer("1", sv1.config.Address)
+	require.NoError(t, sv2.SyncStorage())
+
+	// Verify sv2 gets file A
+	require.Eventually(t, func() bool {
+		_, exists := sv2.vfs.Get(fileAName)
+		return exists
+	}, 2*time.Second, 100*time.Millisecond, "Server2 should have synced the subscribed file A")
+
+	// Verify sv2 DOES NOT get file B
+	time.Sleep(1 * time.Second) // wait to ensure no late sync happens
+	_, existsB := sv2.vfs.Get(fileBName)
+	require.False(t, existsB, "Server2 should NOT sync file B because it is not subscribed")
 }

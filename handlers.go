@@ -15,6 +15,7 @@ func (s *Server) MountHandlers() *http.ServeMux {
 	mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
 	mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
 	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
+	mux.HandleFunc("/subscribe", s.authMiddleware(s.handleSubscribe))
 	return mux
 }
 
@@ -65,13 +66,17 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	s.downloadQueue <- DownloadJob{
-		File:   notification.File,
-		Source: notification.Source,
+	if _, subscribed := s.subscriptions.Load(notification.File.Name); subscribed {
+		s.downloadQueue <- DownloadJob{
+			File:   notification.File,
+			Source: notification.Source,
+		}
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, "Notification received, downloading file")
+	} else {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "Notification ignored, not subscribed")
 	}
-
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprint(w, "Notification received, downloading file")
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +116,21 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fileName := r.URL.Query().Get("name")
+	if fileName == "" {
+		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
+		return
+	}
+	s.subscriptions.Store(fileName, true)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Subscribed to %s", fileName)
+}
+
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.vfs.Snapshot())
 }
@@ -135,4 +155,3 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("File deleted successfully"))
 }
-

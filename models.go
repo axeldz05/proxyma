@@ -3,6 +3,7 @@ package main
 import (
 	"net/http/httptest"
 	"proxyma/storage"
+	"sync"
 )
 
 type IndexEntry struct {
@@ -31,6 +32,7 @@ type Server struct {
 	vfs 			*VFS
 	downloadQueue 	chan DownloadJob
 	server 			*httptest.Server
+	subscriptions   *sync.Map
 }
 
 type NodeConfig struct {

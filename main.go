@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"proxyma/storage"
+	"sync"
 )
 
 func main() {
@@ -35,6 +36,7 @@ func main() {
 		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
+		subscriptions: &sync.Map{},
 	}
 
 	httpClient := &http.Client{} 
