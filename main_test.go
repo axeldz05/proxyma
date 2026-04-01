@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"proxyma/storage"
 	"strings"
 	"sync"
@@ -74,7 +76,7 @@ func DeleteFileSimulated(t *testing.T, sv *Server, fileName string) {
 
 func NewServer(cfg NodeConfig) *Server {
 	s := &Server{
-		config: 	   cfg,
+		config:        cfg,
 		Peers:         make(map[string]string),
 		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
@@ -84,12 +86,28 @@ func NewServer(cfg NodeConfig) *Server {
 
 	os.MkdirAll(cfg.StoragePath, 0755)
 
-	s.server = httptest.NewServer(s.MountHandlers())
-	s.config.Address = s.server.URL
-	for range s.config.Workers {
+	caFolderPath := filepath.Dir(cfg.StoragePath)
+	serverTLS, clientTLS, _ := GenerateOrLoadTLSConfig(caFolderPath, cfg.StoragePath, cfg.ID)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: clientTLS,
+		},
+	}
+	s.peerClient = NewHTTPPeerClient(httpClient, cfg.Secret)
+
+	s.server = httptest.NewUnstartedServer(s.MountHandlers())
+	s.server.TLS = serverTLS
+	s.server.StartTLS()
+
+	cfg.Address = s.server.URL
+	s.config = cfg
+
+	s.server.Client().Transport = httpClient.Transport
+
+	for i := 0; i < s.config.Workers; i++ {
 		go s.downloadWorker()
 	}
-	s.peerClient = NewHTTPPeerClient(s.server.Client(), s.config.Secret)
 
 	return s
 }
@@ -356,19 +374,16 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	sv := NewServer(DefaultConfigFor(t,"1"))
 	defer sv.Close()
 
-	resp, err := http.Get(sv.config.Address + "/peers")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "Reject requests without the Proxyma-Secret header")
-
-	req, err := http.NewRequest("GET", sv.config.Address+"/peers", nil)
-	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", "secreto-falso-de-un-hacker")
-
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "You must reject requests with the wrong secret")
+	clientWithoutCert := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	resp, err := clientWithoutCert.Get(sv.config.Address + "/peers")
+	require.Error(t, err, "Should fail at TLS handshake due to missing client certs")
+	if resp != nil {
+		resp.Body.Close()
+	}
 }
 
 func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {

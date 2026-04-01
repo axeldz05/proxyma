@@ -111,11 +111,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		clientSecret := r.Header.Get("Proxyma-Secret")
-		if clientSecret != s.config.Secret {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
 		next(w, r)
 	}
 }

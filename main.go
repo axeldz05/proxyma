@@ -47,7 +47,16 @@ func main() {
 		subscriptions: &sync.Map{},
 	}
 
-	httpClient := &http.Client{} 
+	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(cfg.StoragePath, cfg.StoragePath, cfg.ID)
+	if err != nil {
+		log.Fatalf("Fatal error loading TLS: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: clientTLS,
+		},
+	} 
 	s.peerClient = NewHTTPPeerClient(httpClient, cfg.Secret)
 
 	for i := 0; i < s.config.Workers; i++ {
@@ -61,7 +70,13 @@ func main() {
 	fmt.Printf("📡 Listening port %s\n", *port)
 	fmt.Printf("📁 CAS path: %s\n", cfg.StoragePath)
 	
-	err := http.ListenAndServe(addr, mux)
+	server := &http.Server{
+		Addr:      addr,
+		Handler:   mux,
+		TLSConfig: serverTLS,
+	}
+
+	err = server.ListenAndServeTLS("", "")
 	if err != nil {
 		log.Fatalf("The program closed unexpectedly: %v", err)
 	}
