@@ -28,6 +28,49 @@ func DefaultConfigFor(t *testing.T, id string) NodeConfig {
 	}
 }
 
+func CalculateHash(t *testing.T, content string) string {
+	t.Helper()
+	hasher := sha256.New()
+	hasher.Write([]byte(content))
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func UploadFileSimulated(t *testing.T, sv *Server, fileName, content string) string {
+	t.Helper()
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+	fileWriter, err := writer.CreateFormFile("file", fileName)
+	require.NoError(t, err)
+	_, err = io.WriteString(fileWriter, content)
+	require.NoError(t, err)
+	writer.Close()
+
+	reqUp, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
+	require.NoError(t, err)
+	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
+	reqUp.Header.Set("Proxyma-Secret", sv.config.Secret)
+	
+	respUp, err := sv.server.Client().Do(reqUp)
+	require.NoError(t, err)
+	defer respUp.Body.Close()
+	
+	require.Equal(t, http.StatusCreated, respUp.StatusCode, "The upload should have return status 201 Created")
+	return CalculateHash(t, content)
+}
+
+func DeleteFileSimulated(t *testing.T, sv *Server, fileName string) {
+	t.Helper()
+	reqDel, err := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
+	require.NoError(t, err)
+	reqDel.Header.Set("Proxyma-Secret", sv.config.Secret)
+	
+	respDel, err := sv.server.Client().Do(reqDel)
+	require.NoError(t, err)
+	defer respDel.Body.Close()
+	
+	require.Equal(t, http.StatusOK, respDel.StatusCode, "Delete should have return 200 OK")
+}
+
 func NewServer(cfg NodeConfig) *Server {
 	s := &Server{
 		config: 	   cfg,
@@ -110,6 +153,27 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 	require.NoError(t, sv2.SyncStorage())
 }
 
+func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, updatedServer *Server) {
+	t.Helper()
+	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.config.Address, expectedHash)
+	req, err := http.NewRequest("GET", downloadURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
+	resp, err := updatedServer.server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, resp.Body)
+	if err != nil {
+		t.Errorf("Could not copy fileContent from %s", resp.Body)
+	}
+	uploadedContent := buf.String()
+
+	if uploadedContent != fileContent {
+		t.Errorf("Expected content %s, got %s", fileContent, string(uploadedContent))
+	}
+}
+
 func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	t.Parallel()
 	updatedServer := NewServer(DefaultConfigFor(t, "1"))
@@ -128,50 +192,18 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	noUpdatedServer.AddPeer("1", updatedServer.config.Address)
 	noUpdatedServer.AddPeer("2", noUpdatedServer.config.Address)
 	fileName := "test03.txt"
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
+	_, _, fileContent := AnAcceptedFileForUpload(t, fileName)
+	
+	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
 
-	hasher := sha256.New()
-	hasher.Write([]byte(fileContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
-	req, err := http.NewRequest("POST", updatedServer.config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
-	resp, err := updatedServer.server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	if resp.StatusCode != http.StatusCreated {
-		t.Errorf("Expected status Created, got %v", resp.StatusCode)
-	}
 	_, exists := updatedServer.vfs.Get(fileName)
 	if !exists {
 		t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
 	}
 
-	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.config.Address, expectedHash)
-	req, err = http.NewRequest("GET", downloadURL, nil)
-	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
-	resp, err = updatedServer.server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy fileContent from %s", resp.Body)
-	}
-	uploadedContent := buf.String()
-
-	if uploadedContent != fileContent {
-		t.Errorf("Expected content %s, got %s", fileContent, string(uploadedContent))
-	}
+	assertRemoteHashToBeTheSameAs(t, expectedHash, fileContent, updatedServer)
 	require.Eventually(t, func() bool {
-
 		_, exists := noUpdatedServer.vfs.Get(fileName)
-
 		return exists
 	}, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
 }
