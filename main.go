@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"proxyma/storage"
+	"strings"
 	"sync"
 )
 
@@ -16,7 +17,13 @@ func main() {
 	storagePath := flag.String("storage", "./storage", "Path to physical folder of blobs")
 	secret := flag.String("secret", "default-secret", "Password for the cluster")
 	workers := flag.Int("workers", 5, "Limit of concurrent downloads")
+	servicesFlag := flag.String("services", "", "Comma separated list of services offered by node, e.g. ocr,llm")
 	flag.Parse()
+
+	var services []string
+	if *servicesFlag != "" {
+		services = strings.Split(*servicesFlag, ",")
+	}
 
 	cfg := NodeConfig{
 		ID:          *id,
@@ -24,6 +31,7 @@ func main() {
 		StoragePath: *storagePath,
 		Secret:      *secret,
 		Workers:     *workers,
+		Services:    services,
 	}
 
 	if err := os.MkdirAll(cfg.StoragePath, 0755); err != nil {

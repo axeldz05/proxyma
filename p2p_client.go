@@ -14,6 +14,8 @@ type PeerClient interface {
 	Notify(ctx context.Context, peerAddr string, notification PeerNotification) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	GetSecret() string
+	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
+	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
 }
 
 type HTTPPeerClient struct {
@@ -91,3 +93,42 @@ func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerAddr, hash string
 	}
 	return resp.Body, nil
 }
+
+func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerAddr string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", peerAddr+"/services", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Proxyma-Secret", c.secret)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var svcs []string
+	err = json.NewDecoder(resp.Body).Decode(&svcs)
+	if err != nil {
+		return nil, err
+	}
+	return svcs, nil
+}
+
+func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", peerAddr+"/services/execute?name="+serviceName, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Proxyma-Secret", c.secret)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result map[string]string
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+

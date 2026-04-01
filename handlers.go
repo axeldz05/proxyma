@@ -1,10 +1,12 @@
 package main
 
 import (
-	"net/http"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"proxyma/storage"
+	"time"
 )
 
 func (s *Server) MountHandlers() *http.ServeMux {
@@ -16,6 +18,8 @@ func (s *Server) MountHandlers() *http.ServeMux {
 	mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
 	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
 	mux.HandleFunc("/subscribe", s.authMiddleware(s.handleSubscribe))
+	mux.HandleFunc("/services", s.authMiddleware(s.handleListServices))
+	mux.HandleFunc("/services/execute", s.authMiddleware(s.handleExecuteService))
 	return mux
 }
 
@@ -114,6 +118,72 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(s.config.Services)
+}
+
+func (s *Server) handleExecuteService(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	serviceName := r.URL.Query().Get("name")
+	if serviceName == "" {
+        http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
+		return
+    }
+
+    offers := false
+    for _, srv := range s.config.Services {
+        if srv == serviceName {
+            offers = true
+            break
+        }
+    }
+
+    if !offers {
+		foundPeer := ""
+		for _, peerAddr := range s.getPeersCopy() {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			svcs, err := s.peerClient.DiscoverServices(ctx, peerAddr)
+			if err == nil {
+				for _, peerSvc := range svcs {
+					if peerSvc == serviceName {
+						foundPeer = peerAddr
+						break
+					}
+				}
+			}
+			if foundPeer != "" {
+				break
+			}
+		}
+
+		if foundPeer == "" {
+        	http.Error(w, "Service not implemented on this node or anywhere in the cluster", http.StatusNotImplemented)
+        	return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		result, err := s.peerClient.ExecuteService(ctx, foundPeer, serviceName)
+		if err != nil {
+			http.Error(w, "Failed to proxy execution", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(result)
+		return
+    }
+
+    w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+		"message": fmt.Sprintf("Service %s executed successfully", serviceName),
+	})
 }
 
 func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {

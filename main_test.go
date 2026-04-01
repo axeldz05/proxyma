@@ -668,3 +668,43 @@ func Test15SelectiveSynchronization(t *testing.T) {
 	_, existsB := sv2.vfs.Get(fileBName)
 	require.False(t, existsB, "Server2 should NOT sync file B because it is not subscribed")
 }
+
+func Test16ServicesDiscoveryAndExecution(t *testing.T) {
+	t.Parallel()
+	cfg1 := DefaultConfigFor(t, "1")
+	cfg1.Services = []string{"ocr"}
+	sv1 := NewServer(cfg1)
+	defer sv1.Close()
+
+	cfg2 := DefaultConfigFor(t, "2")
+	sv2 := NewServer(cfg2)
+	defer sv2.Close()
+
+	// Connect peers
+	sv1.AddPeer("2", sv2.config.Address)
+	sv2.AddPeer("1", sv1.config.Address)
+
+	// Attempt to execute an existing service explicitly on sv1
+	reqOcr, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=ocr", nil)
+	reqOcr.Header.Set("Proxyma-Secret", sv1.config.Secret)
+	respOcr, err := sv1.server.Client().Do(reqOcr)
+	require.NoError(t, err)
+	defer respOcr.Body.Close()
+	require.Equal(t, http.StatusOK, respOcr.StatusCode, "Existing service 'ocr' should return 200 OK")
+
+	// Attempt to execute an unexisting service on sv1
+	reqUnk, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=video_encoding", nil)
+	reqUnk.Header.Set("Proxyma-Secret", sv1.config.Secret)
+	respUnk, err := sv1.server.Client().Do(reqUnk)
+	require.NoError(t, err)
+	defer respUnk.Body.Close()
+	require.Equal(t, http.StatusNotImplemented, respUnk.StatusCode, "Unimplemented service should return 501 Not Implemented")
+
+	// Attempt to execute a service on sv2 that it doesn't have, but sv1 has
+	reqDisco, _ := http.NewRequest("POST", sv2.config.Address+"/services/execute?name=ocr", nil)
+	reqDisco.Header.Set("Proxyma-Secret", sv2.config.Secret)
+	respDisco, err := sv2.server.Client().Do(reqDisco)
+	require.NoError(t, err)
+	defer respDisco.Body.Close()
+	require.Equal(t, http.StatusOK, respDisco.StatusCode, "Service 'ocr' should be discovered in the cluster and proxied, returning 200 OK")
+}
