@@ -24,9 +24,9 @@ import (
 
 func DefaultConfigFor(t *testing.T, id string) NodeConfig {
 	return NodeConfig{
-		ID: id,
+		ID:          id,
 		StoragePath: t.TempDir(),
-		Secret: "secret-key",
+
 		Workers: 2,
 	}
 }
@@ -51,12 +51,11 @@ func UploadFileSimulated(t *testing.T, sv *Server, fileName, content string) str
 	reqUp, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-	reqUp.Header.Set("Proxyma-Secret", sv.config.Secret)
-	
+
 	respUp, err := sv.server.Client().Do(reqUp)
 	require.NoError(t, err)
 	defer respUp.Body.Close()
-	
+
 	require.Equal(t, http.StatusCreated, respUp.StatusCode, "The upload should have return status 201 Created")
 	return CalculateHash(t, content)
 }
@@ -65,12 +64,11 @@ func DeleteFileSimulated(t *testing.T, sv *Server, fileName string) {
 	t.Helper()
 	reqDel, err := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
 	require.NoError(t, err)
-	reqDel.Header.Set("Proxyma-Secret", sv.config.Secret)
-	
+
 	respDel, err := sv.server.Client().Do(reqDel)
 	require.NoError(t, err)
 	defer respDel.Body.Close()
-	
+
 	require.Equal(t, http.StatusOK, respDel.StatusCode, "Delete should have return 200 OK")
 }
 
@@ -94,7 +92,7 @@ func NewServer(cfg NodeConfig) *Server {
 			TLSClientConfig: clientTLS,
 		},
 	}
-	s.peerClient = NewHTTPPeerClient(httpClient, cfg.Secret)
+	s.peerClient = NewHTTPPeerClient(httpClient)
 
 	s.server = httptest.NewUnstartedServer(s.MountHandlers())
 	s.server.TLS = serverTLS
@@ -178,7 +176,7 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.config.Address, expectedHash)
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", updatedServer.config.Secret)
+
 	resp, err := updatedServer.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -215,7 +213,7 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	noUpdatedServer.subscriptions.Store(fileName, true)
 	noUpdatedServer2.subscriptions.Store(fileName, true)
 	_, _, fileContent := AnAcceptedFileForUpload(t, fileName)
-	
+
 	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
 
 	_, exists := updatedServer.vfs.Get(fileName)
@@ -245,7 +243,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -284,7 +282,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	req, err := http.NewRequest("POST", servers[0].config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", servers[0].config.Secret)
+
 	resp, err := servers[0].server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -309,14 +307,14 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 
 func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 	fileName := "test06.txt"
 	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
 	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -329,7 +327,7 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	downloadURL := fmt.Sprintf("%s/download/%s", sv.config.Address, expectedHash)
 	reqDL, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
-	reqDL.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	respDL, err := sv.server.Client().Do(reqDL)
 	require.NoError(t, err)
 	defer respDL.Body.Close()
@@ -350,7 +348,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	}))
 	defer slowPeer.Close()
 
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	fakeFile := IndexEntry{
@@ -371,7 +369,7 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 
 func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	clientWithoutCert := &http.Client{
@@ -388,7 +386,7 @@ func Test08UnauthorizedAccessIsRejected(t *testing.T) {
 
 func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	fakeHash := "hash-simulado-999"
@@ -402,7 +400,6 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	req, err := http.NewRequest("GET", sv.config.Address+"/manifest", nil)
 	require.NoError(t, err)
-	req.Header.Set("Proxyma-Secret", sv.config.Secret)
 
 	resp, err := sv.server.Client().Do(req)
 	require.NoError(t, err)
@@ -420,7 +417,7 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 
 func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer(DefaultConfigFor(t,"1"))
+	sv1 := NewServer(DefaultConfigFor(t, "1"))
 	defer sv1.Close()
 
 	fileName := "missingFile.txt"
@@ -428,7 +425,6 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	req, err := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Proxyma-Secret", sv1.config.Secret)
 
 	resp, err := sv1.server.Client().Do(req)
 	require.NoError(t, err)
@@ -461,14 +457,14 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 	fileName := "test11.txt"
 	requestBody, writer, content := AnAcceptedFileForUpload(t, fileName)
 	req1, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
 	req1.Header.Set("Content-Type", writer.FormDataContentType())
-	req1.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	resp1, err := sv.server.Client().Do(req1)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp1.StatusCode)
@@ -489,7 +485,6 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	req2, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody2)
 	require.NoError(t, err)
 	req2.Header.Set("Content-Type", writer2.FormDataContentType())
-	req2.Header.Set("Proxyma-Secret", sv.config.Secret)
 
 	resp2, err := sv.server.Client().Do(req2)
 	require.NoError(t, err)
@@ -535,7 +530,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	}))
 	defer slowPeer.Close()
 
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	for i := range 5 {
@@ -548,7 +543,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 		notif.Source = slowPeer.URL
 		body, _ := json.Marshal(notif)
 		req, _ := http.NewRequest("POST", sv.config.Address+"/notify", bytes.NewReader(body))
-		req.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 		resp, _ := sv.server.Client().Do(req)
 		resp.Body.Close()
 	}
@@ -566,14 +561,14 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 
 func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(DefaultConfigFor(t,"1"))
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
 	fileName := "test13.txt"
 	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
 	reqUp, _ := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-	reqUp.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	respUp, _ := sv.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
@@ -582,7 +577,7 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 
 	reqDel, _ := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
-	reqDel.Header.Set("Proxyma-Secret", sv.config.Secret)
+
 	respDel, err := sv.server.Client().Do(reqDel)
 	require.NoError(t, err)
 	defer respDel.Body.Close()
@@ -615,7 +610,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
 	reqUp, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-	reqUp.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respUp, _ := sv1.server.Client().Do(reqUp)
 	respUp.Body.Close()
 
@@ -625,7 +620,7 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	}, 2*time.Second, 100*time.Millisecond)
 
 	reqDel, _ := http.NewRequest("DELETE", sv1.config.Address+"/file?name="+fileName, nil)
-	reqDel.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respDel, _ := sv1.server.Client().Do(reqDel)
 	respDel.Body.Close()
 
@@ -648,20 +643,20 @@ func Test15SelectiveSynchronization(t *testing.T) {
 	requestBodyA, writerA, _ := AnAcceptedFileForUpload(t, fileAName)
 	reqUpA, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyA)
 	reqUpA.Header.Set("Content-Type", writerA.FormDataContentType())
-	reqUpA.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respUpA, _ := sv1.server.Client().Do(reqUpA)
 	respUpA.Body.Close()
 
 	requestBodyB, writerB, _ := AnAcceptedFileForUpload(t, fileBName)
 	reqUpB, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyB)
 	reqUpB.Header.Set("Content-Type", writerB.FormDataContentType())
-	reqUpB.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respUpB, _ := sv1.server.Client().Do(reqUpB)
 	respUpB.Body.Close()
 
 	// Sv2 subscribes ONLY to fileA via API
 	reqSub, _ := http.NewRequest("POST", sv2.config.Address+"/subscribe?name="+fileAName, nil)
-	reqSub.Header.Set("Proxyma-Secret", sv2.config.Secret)
+
 	respSub, err := sv2.server.Client().Do(reqSub)
 	require.NoError(t, err)
 	defer respSub.Body.Close()
@@ -701,7 +696,7 @@ func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 
 	// Attempt to execute an existing service explicitly on sv1
 	reqOcr, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=ocr", nil)
-	reqOcr.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respOcr, err := sv1.server.Client().Do(reqOcr)
 	require.NoError(t, err)
 	defer respOcr.Body.Close()
@@ -709,7 +704,7 @@ func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 
 	// Attempt to execute an unexisting service on sv1
 	reqUnk, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=video_encoding", nil)
-	reqUnk.Header.Set("Proxyma-Secret", sv1.config.Secret)
+
 	respUnk, err := sv1.server.Client().Do(reqUnk)
 	require.NoError(t, err)
 	defer respUnk.Body.Close()
@@ -717,7 +712,7 @@ func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 
 	// Attempt to execute a service on sv2 that it doesn't have, but sv1 has
 	reqDisco, _ := http.NewRequest("POST", sv2.config.Address+"/services/execute?name=ocr", nil)
-	reqDisco.Header.Set("Proxyma-Secret", sv2.config.Secret)
+
 	respDisco, err := sv2.server.Client().Do(reqDisco)
 	require.NoError(t, err)
 	defer respDisco.Body.Close()
@@ -733,7 +728,7 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("hyper secure connection"))
 	})
-	
+
 	secureServer := httptest.NewUnstartedServer(handler)
 	secureServer.TLS = serverTLS
 	secureServer.StartTLS()
@@ -752,7 +747,6 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
-
 	t.Run("Reject clients without a cert", func(t *testing.T) {
 		nakedClient := &http.Client{
 			Transport: &http.Transport{
@@ -765,10 +759,9 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.Contains(t, err.Error(), "certificate required", "The server must require a certificate")
 	})
 
-
 	t.Run("Reject certificates from an unknown CA", func(t *testing.T) {
 		hackerDir := t.TempDir()
-		
+
 		_, hackerClientTLS, err := GenerateOrLoadTLSConfig(hackerDir, hackerDir, "hacker-node")
 		require.NoError(t, err)
 

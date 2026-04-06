@@ -39,7 +39,6 @@ type NodeConfig struct {
 	ID          string
 	Address     string
 	StoragePath string
-	Secret      string
 	Workers     int
 	Services    []string
 }

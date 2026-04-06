@@ -15,7 +15,6 @@ func main() {
 	port := flag.String("port", "8080", "Node port")
 	id := flag.String("id", "node-1", "Unique ID for the node")
 	storagePath := flag.String("storage", "./storage", "Path to physical folder of blobs")
-	secret := flag.String("secret", "default-secret", "Password for the cluster")
 	workers := flag.Int("workers", 5, "Limit of concurrent downloads")
 	servicesFlag := flag.String("services", "", "Comma separated list of services offered by node, e.g. ocr,llm")
 	flag.Parse()
@@ -29,7 +28,6 @@ func main() {
 		ID:          *id,
 		Address:     fmt.Sprintf("http://localhost:%s", *port),
 		StoragePath: *storagePath,
-		Secret:      *secret,
 		Workers:     *workers,
 		Services:    services,
 	}
@@ -57,7 +55,7 @@ func main() {
 			TLSClientConfig: clientTLS,
 		},
 	} 
-	s.peerClient = NewHTTPPeerClient(httpClient, cfg.Secret)
+	s.peerClient = NewHTTPPeerClient(httpClient)
 
 	for i := 0; i < s.config.Workers; i++ {
 		go s.downloadWorker()

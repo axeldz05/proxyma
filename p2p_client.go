@@ -13,26 +13,18 @@ type PeerClient interface {
 	FetchManifest(ctx context.Context, peerAddr string) (map[string]IndexEntry, error)
 	Notify(ctx context.Context, peerAddr string, notification PeerNotification) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
-	GetSecret() string
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
 	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
 }
 
 type HTTPPeerClient struct {
 	client *http.Client
-	secret string
 }
 
-func NewHTTPPeerClient(client *http.Client, secret string) *HTTPPeerClient {
+func NewHTTPPeerClient(client *http.Client) *HTTPPeerClient {
 	return &HTTPPeerClient{
 		client: client,
-		secret: secret,
 	}
-}
-
-// TODO: Delete this function when implementing NodeConfig struct
-func (c *HTTPPeerClient) GetSecret() string {
-	return c.secret
 }
 
 func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (map[string]IndexEntry, error) {
@@ -40,7 +32,6 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Proxyma-Secret", c.secret)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -64,7 +55,6 @@ func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notificati
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Proxyma-Secret", c.secret)
 	req.Header.Set("content-type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -82,7 +72,6 @@ func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerAddr, hash string
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Proxyma-Secret", c.secret)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -99,7 +88,6 @@ func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerAddr string) 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Proxyma-Secret", c.secret)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -118,7 +106,6 @@ func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerAddr string, se
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Proxyma-Secret", c.secret)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err

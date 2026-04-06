@@ -11,15 +11,15 @@ import (
 
 func (s *Server) MountHandlers() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/upload", s.authMiddleware(s.handleUpload))
-	mux.HandleFunc("/notify", s.authMiddleware(s.handleNotification))
-	mux.HandleFunc("/download/", s.authMiddleware(s.handleDownload))
-	mux.HandleFunc("/peers", s.authMiddleware(s.GetPeers))
-	mux.HandleFunc("/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/file", s.authMiddleware(s.handleDelete))
-	mux.HandleFunc("/subscribe", s.authMiddleware(s.handleSubscribe))
-	mux.HandleFunc("/services", s.authMiddleware(s.handleListServices))
-	mux.HandleFunc("/services/execute", s.authMiddleware(s.handleExecuteService))
+	mux.HandleFunc("/upload", s.handleUpload)
+	mux.HandleFunc("/notify", s.handleNotification)
+	mux.HandleFunc("/download/", s.handleDownload)
+	mux.HandleFunc("/peers", s.GetPeers)
+	mux.HandleFunc("/manifest", s.handleManifest)
+	mux.HandleFunc("/file", s.handleDelete)
+	mux.HandleFunc("/subscribe", s.handleSubscribe)
+	mux.HandleFunc("/services", s.handleListServices)
+	mux.HandleFunc("/services/execute", s.handleExecuteService)
 	return mux
 }
 
@@ -107,12 +107,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(health)
-}
-
-func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		next(w, r)
-	}
 }
 
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
