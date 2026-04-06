@@ -723,3 +723,63 @@ func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 	defer respDisco.Body.Close()
 	require.Equal(t, http.StatusOK, respDisco.StatusCode, "Service 'ocr' should be discovered in the cluster and proxied, returning 200 OK")
 }
+
+func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
+	t.Parallel()
+	clusterDir := t.TempDir()
+	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(clusterDir, clusterDir, "legit-node")
+	require.NoError(t, err, "Should not fail while generating certs for the cluster")
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hyper secure connection"))
+	})
+	
+	secureServer := httptest.NewUnstartedServer(handler)
+	secureServer.TLS = serverTLS
+	secureServer.StartTLS()
+	defer secureServer.Close()
+
+	t.Run("Client succesfully connects to the server", func(t *testing.T) {
+		legitClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: clientTLS,
+			},
+		}
+
+		resp, err := legitClient.Get(secureServer.URL)
+		require.NoError(t, err, "The client should be able to connect")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+
+	t.Run("Reject clients without a cert", func(t *testing.T) {
+		nakedClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+
+		_, err := nakedClient.Get(secureServer.URL)
+		require.Error(t, err, "The client should not be able to connect")
+		require.Contains(t, err.Error(), "certificate required", "The server must require a certificate")
+	})
+
+
+	t.Run("Reject certificates from an unknown CA", func(t *testing.T) {
+		hackerDir := t.TempDir()
+		
+		_, hackerClientTLS, err := GenerateOrLoadTLSConfig(hackerDir, hackerDir, "hacker-node")
+		require.NoError(t, err)
+
+		hackerClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: hackerClientTLS,
+			},
+		}
+
+		_, err = hackerClient.Get(secureServer.URL)
+		require.Error(t, err, "Should fail because the CA is not the same from what the cluster use")
+		require.Contains(t, err.Error(), "bad certificate", "The server should reject unknown origin of certificates")
+	})
+}

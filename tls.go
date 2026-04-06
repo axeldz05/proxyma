@@ -85,7 +85,7 @@ func GenerateOrLoadTLSConfig(caFolderPath, nodeFolderPath, nodeID string) (*tls.
 					return nil 
 				}
 			}
-			return errors.New("peer certificate not signed by Proxyma CA")
+			return errors.New("bad certificate: peer certificate not signed by Proxyma CA")
 		},
 	}
 
