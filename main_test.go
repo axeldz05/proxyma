@@ -501,13 +501,8 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 
 	metaBefore, _ := sv.vfs.Get(fileName)
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
-
-	reqDel, _ := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
-	respDel, err := sv.server.Client().Do(reqDel)
-	require.NoError(t, err)
-	defer respDel.Body.Close()
-	require.Equal(t, http.StatusOK, respDel.StatusCode, "The endpoint DELETE should return 200 OK")
-
+	
+	DeleteFileSimulated(t, sv, fileName)
 	metaAfter, exists := sv.vfs.Get(fileName)
 
 	require.True(t, exists, "The IndexEntry of the file should still exist after deleting")
@@ -540,11 +535,8 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 		_, exists := sv2.vfs.Get(fileName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond)
-
-	reqDel, _ := http.NewRequest("DELETE", sv1.config.Address+"/file?name="+fileName, nil)
-
-	respDel, _ := sv1.server.Client().Do(reqDel)
-	respDel.Body.Close()
+	
+	DeleteFileSimulated(t, sv1, fileName)
 
 	require.Eventually(t, func() bool {
 		meta, _ := sv2.vfs.Get(fileName)
