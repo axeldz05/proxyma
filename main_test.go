@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"log"
+	"log/slog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +32,12 @@ func (w testLogWriter) Write(p []byte) (n int, err error) {
 }
 
 func DefaultConfigFor(t *testing.T, id string) NodeConfig {
-	testLogger := log.New(testLogWriter{t: t}, fmt.Sprintf("[Node %s] ", id), log.Ltime)
+	writer := testLogWriter{t: t}
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}
+	handler := slog.NewTextHandler(writer, opts)
+	testLogger := slog.New(handler).With("node", id)
 	return NodeConfig{
 		ID:          id,
 		StoragePath: t.TempDir(),
@@ -106,7 +111,7 @@ func NewServer(cfg NodeConfig) *Server {
 
 	s.server = httptest.NewUnstartedServer(s.MountHandlers())
 	s.server.TLS = serverTLS
-	s.server.Config.ErrorLog = s.config.Logger
+	s.server.Config.ErrorLog = slog.NewLogLogger(s.config.Logger.Handler(), slog.LevelError)
 	s.server.StartTLS()
 
 	cfg.Address = s.server.URL
@@ -119,22 +124,6 @@ func NewServer(cfg NodeConfig) *Server {
 	}
 
 	return s
-}
-
-func AnAcceptedFileForUpload(t *testing.T, fileName string) (bytes.Buffer, *multipart.Writer, string) {
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-	fileWriter, err := writer.CreateFormFile("file", fileName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileContent := "Hello!"
-	_, err = io.WriteString(fileWriter, fileContent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer.Close()
-	return requestBody, writer, fileContent
 }
 
 func Test01FirstServerIsAlreadySynced(t *testing.T) {
@@ -223,8 +212,8 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	fileName := "test03.txt"
 	noUpdatedServer.subscriptions.Store(fileName, true)
 	noUpdatedServer2.subscriptions.Store(fileName, true)
-	_, _, fileContent := AnAcceptedFileForUpload(t, fileName)
-
+	
+	fileContent := "Hello!!!"
 	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
 
 	_, exists := updatedServer.vfs.Get(fileName)
@@ -245,20 +234,8 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	defer sv.Close()
 
 	fileName := "test04.txt"
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-
-	hasher := sha256.New()
-	hasher.Write([]byte(fileContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
-	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := sv.server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	fileContent := "testing"
+	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
 
 	fileMeta, exists := sv.vfs.Get(fileName)
 
@@ -289,20 +266,8 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	for _, srv := range servers {
 		srv.subscriptions.Store(fileName, true)
 	}
-	requestBody, writer, expectedContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", servers[0].config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := servers[0].server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	hasher := sha256.New()
-	hasher.Write([]byte(expectedContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
+	fileContent := "everyone wants me"
+	expectedHash := UploadFileSimulated(t, servers[0], fileName, fileContent)
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
 
@@ -321,19 +286,8 @@ func Test06DownloadEndpointUsesHashInsteadOfName(t *testing.T) {
 	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 	fileName := "test06.txt"
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := sv.server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	hasher := sha256.New()
-	hasher.Write([]byte(fileContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+	fileContent := "Hello!!"
+	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
 
 	downloadURL := fmt.Sprintf("%s/download/%s", sv.config.Address, expectedHash)
 	reqDL, err := http.NewRequest("GET", downloadURL, nil)
@@ -432,19 +386,8 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	defer sv1.Close()
 
 	fileName := "missingFile.txt"
-	requestBody, writer, fileContent := AnAcceptedFileForUpload(t, fileName)
-	req, err := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := sv1.server.Client().Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	defer resp.Body.Close()
-
-	hasher := sha256.New()
-	hasher.Write([]byte(fileContent))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+	fileContent := "helloo from test10"
+	expectedHash := UploadFileSimulated(t, sv1, fileName, fileContent)
 
 	sv2 := NewServer(DefaultConfigFor(t, "2"))
 	defer sv2.Close()
@@ -455,7 +398,7 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 
 	require.False(t, existsBefore, "Node 2 shouldn't have any files")
 
-	err = sv2.SyncStorage()
+	err := sv2.SyncStorage()
 	require.NoError(t, err, "SyncStorage shouldn't fail")
 	require.Eventually(t, func() bool {
 		fileMeta, existsAfter := sv2.vfs.Get(fileName)
@@ -471,40 +414,10 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 	fileName := "test11.txt"
-	requestBody, writer, content := AnAcceptedFileForUpload(t, fileName)
-	req1, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	req1.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp1, err := sv.server.Client().Do(req1)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, resp1.StatusCode)
-	resp1.Body.Close()
-
-	hasher1 := sha256.New()
-	hasher1.Write([]byte(content))
-	hash1 := hex.EncodeToString(hasher1.Sum(nil))
-
-	var requestBody2 bytes.Buffer
-	writer2 := multipart.NewWriter(&requestBody2)
-	fileWriter2, err := writer2.CreateFormFile("file", fileName)
-	require.NoError(t, err)
-	content2 := "version 2!"
-	io.WriteString(fileWriter2, content2)
-	writer2.Close()
-
-	req2, err := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody2)
-	require.NoError(t, err)
-	req2.Header.Set("Content-Type", writer2.FormDataContentType())
-
-	resp2, err := sv.server.Client().Do(req2)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, resp2.StatusCode)
-	resp2.Body.Close()
-
-	hasher2 := sha256.New()
-	hasher2.Write([]byte(content2))
-	hash2 := hex.EncodeToString(hasher2.Sum(nil))
+	fileContent := "hello from test11"
+	hash1 := UploadFileSimulated(t, sv, fileName, fileContent)
+	fileContent2 := "goodbye from test11"
+	hash2 := UploadFileSimulated(t, sv, fileName, fileContent2)
 
 	meta, exists := sv.vfs.Get(fileName)
 
@@ -520,12 +433,12 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	var notifications []PeerNotification
 
 	for i := range 5 {
-		content := fmt.Sprintf("Contenido %d", i)
+		content := fmt.Sprintf("Content %d", i)
 		hasher := sha256.New()
 		hasher.Write([]byte(content))
 		hash := hex.EncodeToString(hasher.Sum(nil))
 		mockFiles[hash] = content
-		fileName := fmt.Sprintf("archivo_%d.txt", i)
+		fileName := fmt.Sprintf("file_%d.txt", i)
 		notifications = append(notifications, PeerNotification{
 			File: IndexEntry{Name: fileName, Hash: hash, Version: 1},
 		})
@@ -544,24 +457,31 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
 
-	for i := range 5 {
-		sv.subscriptions.Store(fmt.Sprintf("archivo_%d.txt", i), true)
-	}
-
 	start := time.Now()
 
 	for _, notif := range notifications {
+		sv.subscriptions.Store(notif.File.Name, true)
 		notif.Source = slowPeer.URL
 		body, _ := json.Marshal(notif)
 		req, _ := http.NewRequest("POST", sv.config.Address+"/notify", bytes.NewReader(body))
-
 		resp, _ := sv.server.Client().Do(req)
 		resp.Body.Close()
 	}
 
 	require.Eventually(t, func() bool {
-
-		return len(sv.vfs.Snapshot()) == 5
+		allContentIsDownloaded := true
+		for _, v := range sv.vfs.Snapshot() {
+			var buf bytes.Buffer
+			if err := sv.storage.ReadBlob(v.Hash, &buf); err != nil {
+				return false
+			}
+			if expectedContent, exists := mockFiles[v.Hash]; exists{
+				allContentIsDownloaded = allContentIsDownloaded && buf.String() == expectedContent
+			} else {
+				return false
+			}
+		}
+		return len(sv.vfs.Snapshot()) == 5 && allContentIsDownloaded
 	}, 5*time.Second, 100*time.Millisecond)
 
 	duration := time.Since(start)
@@ -576,19 +496,13 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	defer sv.Close()
 
 	fileName := "test13.txt"
-	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
-	reqUp, _ := http.NewRequest("POST", sv.config.Address+"/upload", &requestBody)
-	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-
-	respUp, _ := sv.server.Client().Do(reqUp)
-	respUp.Body.Close()
+	fileContent := "hello from test13!!"
+	UploadFileSimulated(t, sv, fileName, fileContent)
 
 	metaBefore, _ := sv.vfs.Get(fileName)
-
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 
 	reqDel, _ := http.NewRequest("DELETE", sv.config.Address+"/file?name="+fileName, nil)
-
 	respDel, err := sv.server.Client().Do(reqDel)
 	require.NoError(t, err)
 	defer respDel.Body.Close()
@@ -618,12 +532,9 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	fileName := "test14.txt"
 	sv1.subscriptions.Store(fileName, true)
 	sv2.subscriptions.Store(fileName, true)
-	requestBody, writer, _ := AnAcceptedFileForUpload(t, fileName)
-	reqUp, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBody)
-	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-
-	respUp, _ := sv1.server.Client().Do(reqUp)
-	respUp.Body.Close()
+	
+	fileContent := "hello from test14!!"
+	UploadFileSimulated(t, sv1, fileName, fileContent)
 
 	require.Eventually(t, func() bool {
 		_, exists := sv2.vfs.Get(fileName)
@@ -651,19 +562,8 @@ func Test15SelectiveSynchronization(t *testing.T) {
 	fileAName := "fileA.txt"
 	fileBName := "fileB.txt"
 
-	requestBodyA, writerA, _ := AnAcceptedFileForUpload(t, fileAName)
-	reqUpA, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyA)
-	reqUpA.Header.Set("Content-Type", writerA.FormDataContentType())
-
-	respUpA, _ := sv1.server.Client().Do(reqUpA)
-	respUpA.Body.Close()
-
-	requestBodyB, writerB, _ := AnAcceptedFileForUpload(t, fileBName)
-	reqUpB, _ := http.NewRequest("POST", sv1.config.Address+"/upload", &requestBodyB)
-	reqUpB.Header.Set("Content-Type", writerB.FormDataContentType())
-
-	respUpB, _ := sv1.server.Client().Do(reqUpB)
-	respUpB.Body.Close()
+	UploadFileSimulated(t, sv1, fileAName, "Exclusive File A content")
+	UploadFileSimulated(t, sv1, fileBName, "Another content, File B")
 
 	// Sv2 subscribes ONLY to fileA via API
 	reqSub, _ := http.NewRequest("POST", sv2.config.Address+"/subscribe?name="+fileAName, nil)
@@ -673,7 +573,6 @@ func Test15SelectiveSynchronization(t *testing.T) {
 	defer respSub.Body.Close()
 	require.Equal(t, http.StatusOK, respSub.StatusCode, "Subscribe API should return 200 OK")
 
-	// Connect peers
 	sv1.AddPeer("2", sv2.config.Address)
 	sv2.AddPeer("1", sv1.config.Address)
 	require.NoError(t, sv2.SyncStorage())
@@ -686,9 +585,10 @@ func Test15SelectiveSynchronization(t *testing.T) {
 
 	// Verify sv2 DOES NOT get file B
 	time.Sleep(1 * time.Second) // wait to ensure no late sync happens
-	_, existsB := sv2.vfs.Get(fileBName)
-	require.False(t, existsB, "Server2 should NOT sync file B because it is not subscribed")
-}
+	metaB, existsB := sv2.vfs.Get(fileBName)
+	require.True(t, existsB, "Server2 SHOULD have the metadata of file B in its VFS")
+	existsInDisk, _ := sv2.storage.BlobExists(metaB.Hash)
+	require.False(t, existsInDisk, "Server2 should NOT download the physical blob of file B because it is not subscribed")}
 
 func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 	t.Parallel()
@@ -701,7 +601,6 @@ func Test16ServicesDiscoveryAndExecution(t *testing.T) {
 	sv2 := NewServer(cfg2)
 	defer sv2.Close()
 
-	// Connect peers
 	sv1.AddPeer("2", sv2.config.Address)
 	sv2.AddPeer("1", sv1.config.Address)
 
@@ -735,15 +634,17 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	clusterDir := t.TempDir()
 	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(clusterDir, clusterDir, "legit-node")
 	require.NoError(t, err, "Should not fail while generating certs for the cluster")
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("hyper secure connection"))
 	})
 
-	secureServer := httptest.NewUnstartedServer(handler)
+	handler := slog.NewTextHandler(testLogWriter{t: t}, &slog.HandlerOptions{Level: slog.LevelDebug})
+	testSlog := slog.New(handler).With("node", "Test17-mTLS")
+	secureServer := httptest.NewUnstartedServer(handlerFunc)
 	secureServer.TLS = serverTLS
-	testLogger := log.New(testLogWriter{t: t}, "[Test17 mTLS] ", log.Ltime)
-	secureServer.Config.ErrorLog = testLogger
+
+	secureServer.Config.ErrorLog = slog.NewLogLogger(testSlog.Handler(), slog.LevelError)
 	secureServer.StartTLS()
 	defer secureServer.Close()
 

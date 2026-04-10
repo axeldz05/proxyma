@@ -70,17 +70,20 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if _, subscribed := s.subscriptions.Load(notification.File.Name); subscribed {
-		s.downloadQueue <- DownloadJob{
-			File:   notification.File,
-			Source: notification.Source,
+	updated := s.vfs.Upsert(notification.File)
+	if updated && !notification.File.Deleted {
+		if _, subscribed := s.subscriptions.Load(notification.File.Name); subscribed {
+			s.downloadQueue <- DownloadJob{
+				File:   notification.File,
+				Source: notification.Source,
+			}
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, "Notification received, downloading file")
+			return
 		}
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, "Notification received, downloading file")
-	} else {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "Notification ignored, not subscribed")
 	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Metadata updated, blob ignored (not subscribed or deleted)")
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -95,18 +98,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-}
-
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
-		"status":  "healthy",
-		"id":      s.config.ID,
-		"files":   len(s.vfs.Snapshot()),
-		"peers":   len(s.Peers),
-		"address": s.config.Address,
-	}
-
-	json.NewEncoder(w).Encode(health)
 }
 
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +178,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.subscriptions.Store(fileName, true)
 	w.WriteHeader(http.StatusOK)
+	s.config.Logger.Info("Subscription added", "file", fileName)
 	fmt.Fprintf(w, "Subscribed to %s", fileName)
 }
 

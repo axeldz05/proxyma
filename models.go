@@ -4,7 +4,7 @@ import (
 	"net/http/httptest"
 	"proxyma/storage"
 	"sync"
-	"log"
+	"log/slog"
 )
 
 type IndexEntry struct {
@@ -42,6 +42,7 @@ type NodeConfig struct {
 	StoragePath string
 	Workers     int
 	Services    []string
-	Logger		*log.Logger
+	Logger		*slog.Logger
+	DebugLogger *slog.Logger
 }
 
