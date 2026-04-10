@@ -31,7 +31,7 @@ func (s *Server) SyncStorage() error {
 			return nil
 		}(peerAddress)
 		if err != nil {
-			fmt.Printf("Warning: Failed to synchronize with peer %s: %v\n", peerAddress, err)
+			s.config.Logger.Printf("Warning: Failed to synchronize with peer %s: %v\n", peerAddress, err)
 		}
 	}
 	return nil
@@ -59,7 +59,7 @@ func (s *Server) notifyPeers(fileInfo IndexEntry) {
 		defer cancel()
 		err := s.peerClient.Notify(ctx, peerAddr, payload)
 		if err != nil {
-			fmt.Printf("Error notifying peer %s: %v\n", peerID, err)
+			s.config.Logger.Printf("Error notifying peer %s: %v\n", peerID, err)
 		}
 	}
 }
@@ -71,33 +71,33 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
 			if exists {
 				s.storage.DeleteBlob(savedFileInfo.Hash)
 			}
-			fmt.Printf("file %s deleted.\n", fileInfo.Name)
+			s.config.Logger.Printf("file %s deleted.\n", fileInfo.Name)
 		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	body,err := s.peerClient.DownloadBlob(ctx, sourceAddr, fileInfo.Hash)
+	body, err := s.peerClient.DownloadBlob(ctx, sourceAddr, fileInfo.Hash)
 	if err != nil {
-		fmt.Printf("Error downloading blob %s: %v\n", fileInfo.Name, err)
+		s.config.Logger.Printf("Error downloading blob %s: %v\n", fileInfo.Name, err)
 		return
 	}
 	defer body.Close()
 
 	savedHash, _, err := s.storage.SaveBlob(body)
 	if err != nil {
-		fmt.Printf("Error saving blob %s: %v\n", fileInfo.Name, err)
+		s.config.Logger.Printf("Error saving blob %s: %v\n", fileInfo.Name, err)
 		return
 	}
 	if savedHash != fileInfo.Hash {
-		fmt.Printf("SECURITY ALERT: Peer has sent corrupted or false hash. Expected hash: %s, got: %s\n", fileInfo.Hash, savedHash)
+		s.config.Logger.Printf("SECURITY ALERT: Peer has sent corrupted or false hash. Expected hash: %s, got: %s\n", fileInfo.Hash, savedHash)
 		return
 	}
 
 	if s.vfs.Upsert(fileInfo) {
-		fmt.Printf("Successfully downloaded and applied file %s\n", fileInfo.Name)
+		s.config.Logger.Printf("Successfully downloaded and applied file %s\n", fileInfo.Name)
 	} else {
-		fmt.Printf("Download discarded: %s went obsolete while downloading\n", fileInfo.Name)
+		s.config.Logger.Printf("Download discarded: %s went obsolete while downloading\n", fileInfo.Name)
 		s.storage.DeleteBlob(fileInfo.Hash)
 	}
 }
@@ -105,7 +105,7 @@ func (s *Server) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
 func (s *Server) DeleteLocalFile(fileName string) error {
 	entry, exists := s.vfs.Get(fileName)
 	if !exists {
-		return fmt.Errorf("file not found: %s", fileName)
+		return fmt.Errorf("file %s not found", fileName)
 	}
 	fileMeta := IndexEntry{
 		Name:    entry.Name,
@@ -124,7 +124,7 @@ func (s *Server) DeleteLocalFile(fileName string) error {
 func (s *Server) SaveLocalFile(fileName string, content io.Reader) error {
 	hash, fileSize, err := s.storage.SaveBlob(content)
 	if err != nil {
-		return fmt.Errorf("Error saving blob: %s", err.Error())
+		return fmt.Errorf("Error saving the blob %s: %v", fileName, err.Error())
 	}
 
 	newVersion := 1

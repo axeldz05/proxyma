@@ -72,6 +72,7 @@ func main() {
 		Addr:      addr,
 		Handler:   mux,
 		TLSConfig: serverTLS,
+		ErrorLog: cfg.Logger,
 	}
 
 	err = server.ListenAndServeTLS("", "")

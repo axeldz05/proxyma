@@ -18,16 +18,26 @@ import (
 	"sync"
 	"testing"
 	"time"
-
+	"log"
 	"github.com/stretchr/testify/require"
 )
 
+type testLogWriter struct {
+	t *testing.T
+}
+
+func (w testLogWriter) Write(p []byte) (n int, err error) {
+	w.t.Log(strings.TrimSpace(string(p))) 
+	return len(p), nil
+}
+
 func DefaultConfigFor(t *testing.T, id string) NodeConfig {
+	testLogger := log.New(testLogWriter{t: t}, fmt.Sprintf("[Node %s] ", id), log.Ltime)
 	return NodeConfig{
 		ID:          id,
 		StoragePath: t.TempDir(),
-
 		Workers: 2,
+		Logger: testLogger,
 	}
 }
 
@@ -96,6 +106,7 @@ func NewServer(cfg NodeConfig) *Server {
 
 	s.server = httptest.NewUnstartedServer(s.MountHandlers())
 	s.server.TLS = serverTLS
+	s.server.Config.ErrorLog = s.config.Logger
 	s.server.StartTLS()
 
 	cfg.Address = s.server.URL
@@ -261,7 +272,7 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	clusterSize := 3
 	servers := make([]*Server, clusterSize)
 	for i := 0; i < clusterSize; i++ {
-		serverName := fmt.Sprintf("node-%d", i)
+		serverName := fmt.Sprintf("%d", i)
 		servers[i] = NewServer(DefaultConfigFor(t, serverName))
 		defer servers[i].Close()
 	}
@@ -731,6 +742,8 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 
 	secureServer := httptest.NewUnstartedServer(handler)
 	secureServer.TLS = serverTLS
+	testLogger := log.New(testLogWriter{t: t}, "[Test17 mTLS] ", log.Ltime)
+	secureServer.Config.ErrorLog = testLogger
 	secureServer.StartTLS()
 	defer secureServer.Close()
 

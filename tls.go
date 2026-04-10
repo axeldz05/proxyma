@@ -29,12 +29,12 @@ func GenerateOrLoadTLSConfig(caFolderPath, nodeFolderPath, nodeID string) (*tls.
 	if fileExists(caPath) && fileExists(caKeyPath) {
 		caCert, caKey, err = loadCertAndKey(caPath, caKeyPath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error loading CA: %v", err)
+			return nil, nil, fmt.Errorf("error loading CA: %w", err)
 		}
 	} else {
 		caCert, caKey, err = generateCA()
 		if err != nil {
-			return nil, nil, fmt.Errorf("error generating CA: %v", err)
+			return nil, nil, fmt.Errorf("error generating CA: %w", err)
 		}
 		saveCertAndKey(caPath, caKeyPath, caCert, caKey)
 	}
@@ -46,12 +46,12 @@ func GenerateOrLoadTLSConfig(caFolderPath, nodeFolderPath, nodeID string) (*tls.
 	if fileExists(nodeCertPath) && fileExists(nodeKeyPath) {
 		nodeTLSCert, err = tls.LoadX509KeyPair(nodeCertPath, nodeKeyPath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error loading node cert: %v", err)
+			return nil, nil, fmt.Errorf("error loading node cert: %w", err)
 		}
 	} else {
 		nodeCert, nodePrivKey, err := generateNodeCert(caCert, caKey, nodeID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("error generating node cert: %v", err)
+			return nil, nil, fmt.Errorf("error generating node cert: %w", err)
 		}
 		saveCertAndKey(nodeCertPath, nodeKeyPath, nodeCert, nodePrivKey)
 		nodeTLSCert, err = tls.LoadX509KeyPair(nodeCertPath, nodeKeyPath)
