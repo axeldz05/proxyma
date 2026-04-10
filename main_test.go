@@ -133,6 +133,20 @@ func Test01FirstServerIsAlreadySynced(t *testing.T) {
 	require.NoError(t, sv.SyncStorage())
 }
 
+func GetPeersSimulated(t *testing.T, sv *Server) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/peers", nil)
+	w := httptest.NewRecorder()
+	sv.GetPeers(w, req)
+	resp := w.Result()
+	buf := new(strings.Builder)
+	_, err := io.Copy(buf, resp.Body)
+	if err != nil {
+		t.Errorf("Could not copy response from %s", resp.Body)
+	}
+	return buf.String()
+}
+
 func Test02AServerCanConnectToAnother(t *testing.T) {
 	t.Parallel()
 	sv1 := NewServer(DefaultConfigFor(t, "1"))
@@ -142,29 +156,11 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 	sv1.AddPeer("2", sv2.config.Address)
 	sv2.AddPeer("1", sv1.config.Address)
 
-	req := httptest.NewRequest("GET", "/peers", nil)
-	w := httptest.NewRecorder()
-	sv2.GetPeers(w, req)
-	resp := w.Result()
-	buf := new(strings.Builder)
-	_, err := io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy response from %s", resp.Body)
-	}
-	gotPeersOfSv2 := strings.TrimSpace(buf.String())
+	gotPeersOfSv2 := strings.TrimSpace(GetPeersSimulated(t, sv2))
 	expectedPeersOfSv2 := fmt.Sprintf(`{"1":"%s"}`, sv1.config.Address)
-
-	req = httptest.NewRequest("GET", "/peers", nil)
-	w = httptest.NewRecorder()
-	sv1.GetPeers(w, req)
-	resp = w.Result()
-	buf = new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy response from %s", resp.Body)
-	}
-	gotPeersOfSv1 := strings.TrimSpace(buf.String())
+	gotPeersOfSv1 := strings.TrimSpace(GetPeersSimulated(t, sv1))
 	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.config.Address)
+
 	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
 	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
 	require.NoError(t, sv1.SyncStorage())
