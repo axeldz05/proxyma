@@ -678,3 +678,42 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.Contains(t, err.Error(), "bad certificate", "The server should reject unknown origin of certificates")
 	})
 }
+
+func Test18NodeCannotRegisterDuplicateServices(t *testing.T) {
+	t.Parallel()
+	registry := NewServiceRegistry()
+	
+	savedParameters := map[string]ServiceParameter{
+		"image": {Type: "string", Required: true},
+		"language": {Type: "string", Required: false},
+		"output": {Type: "string", Required: false},
+	}
+	schema1 := ServiceSchema{
+		Name:        "ocr",
+		Description: "Standard Optical Character Recognition",
+		Parameters: savedParameters,
+	}
+
+	err := registry.Register(schema1)
+	require.NoError(t, err, "The first ServiceScheme should be registered")
+	
+	schemaImpostor := ServiceSchema{
+		Name:        "ocr",
+		Description: "A ocr impostor that should fail",
+		Parameters: map[string]ServiceParameter{
+			"image": {Type: "string", Required: true},
+			"language": {Type: "string", Required: true},
+			"output": {Type: "string", Required: true},
+		},
+	}
+
+	err = registry.Register(schemaImpostor)
+	
+	require.Error(t, err, "The Registry should reject repeated services")
+	require.ErrorIs(t, err, ErrServiceDuplicate)
+	
+	savedSchema, exists := registry.Get("ocr")
+	require.True(t, exists)
+	require.Equal(t, "Standard Optical Character Recognition", savedSchema.Description, "El esquema original no debe haber sido sobrescrito")
+	require.Equal(t, savedParameters, savedSchema.Parameters)
+}
