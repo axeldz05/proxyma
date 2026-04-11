@@ -1,8 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 )
 
 var ErrServiceDuplicate = errors.New("service is already registered")
@@ -31,4 +33,10 @@ func (r *ServiceRegistry) Get(name string) (ServiceSchema, bool) {
 	
 	schema, exists := r.schemas[name]
 	return schema, exists
+}
+
+func (r *ServiceRegistry) ListAll() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Collect(maps.Keys(r.schemas))
 }

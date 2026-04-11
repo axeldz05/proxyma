@@ -35,6 +35,7 @@ type Server struct {
 	server 			*httptest.Server
 	// TODO: try using BoltDB / Badger
 	subscriptions   *sync.Map
+	serviceRegistry *ServiceRegistry
 }
 
 type NodeConfig struct {
@@ -42,7 +43,6 @@ type NodeConfig struct {
 	Address     string
 	StoragePath string
 	Workers     int
-	Services    []string
 	Logger		*slog.Logger
 	DebugLogger *slog.Logger
 }

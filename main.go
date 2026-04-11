@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"proxyma/storage"
-	"strings"
 	"sync"
 	"log/slog"
 )
@@ -17,14 +16,8 @@ func main() {
 	id := flag.String("id", "node-1", "Unique ID for the node")
 	storagePath := flag.String("storage", "./storage", "Path to physical folder of blobs")
 	workers := flag.Int("workers", 5, "Limit of concurrent downloads")
-	servicesFlag := flag.String("services", "", "Comma separated list of services offered by node, e.g. ocr,llm")
 	debugMode := flag.Bool("debug", false, "Activate diagnostic logs")
 	flag.Parse()
-
-	var services []string
-	if *servicesFlag != "" {
-		services = strings.Split(*servicesFlag, ",")
-	}
 
 	logLevel := slog.LevelInfo
 	if *debugMode {
@@ -38,8 +31,7 @@ func main() {
 		Address:     fmt.Sprintf("http://localhost:%s", *port),
 		StoragePath: *storagePath,
 		Workers:     *workers,
-		Services:    services,
-		Logger: logger,
+		Logger: 	 logger,
 	}
 
 	if err := os.MkdirAll(cfg.StoragePath, 0755); err != nil {

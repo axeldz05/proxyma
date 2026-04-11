@@ -89,12 +89,13 @@ func DeleteFileSimulated(t *testing.T, sv *Server, fileName string) {
 
 func NewServer(cfg NodeConfig) *Server {
 	s := &Server{
-		config:        cfg,
-		Peers:         make(map[string]string),
-		storage:       *storage.NewStorage(cfg.StoragePath),
-		vfs:           NewVFS(),
-		downloadQueue: make(chan DownloadJob, 1000),
-		subscriptions: &sync.Map{},
+		config:        		cfg,
+		Peers:         		make(map[string]string),
+		storage:       		*storage.NewStorage(cfg.StoragePath),
+		vfs:           		NewVFS(),
+		downloadQueue: 		make(chan DownloadJob, 1000),
+		subscriptions: 		&sync.Map{},
+		serviceRegistry: 	NewServiceRegistry(),
 	}
 
 	os.MkdirAll(cfg.StoragePath, 0755)
@@ -578,46 +579,7 @@ func Test15SelectiveSynchronization(t *testing.T) {
 	existsInDisk, _ := sv2.storage.BlobExists(metaB.Hash)
 	require.False(t, existsInDisk, "Server2 should NOT download the physical blob of file B because it is not subscribed")}
 
-func Test16ServicesDiscoveryAndExecution(t *testing.T) {
-	t.Parallel()
-	cfg1 := DefaultConfigFor(t, "1")
-	cfg1.Services = []string{"ocr"}
-	sv1 := NewServer(cfg1)
-	defer sv1.Close()
-
-	cfg2 := DefaultConfigFor(t, "2")
-	sv2 := NewServer(cfg2)
-	defer sv2.Close()
-
-	sv1.AddPeer("2", sv2.config.Address)
-	sv2.AddPeer("1", sv1.config.Address)
-
-	// Attempt to execute an existing service explicitly on sv1
-	reqOcr, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=ocr", nil)
-
-	respOcr, err := sv1.server.Client().Do(reqOcr)
-	require.NoError(t, err)
-	defer respOcr.Body.Close()
-	require.Equal(t, http.StatusOK, respOcr.StatusCode, "Existing service 'ocr' should return 200 OK")
-
-	// Attempt to execute an unexisting service on sv1
-	reqUnk, _ := http.NewRequest("POST", sv1.config.Address+"/services/execute?name=video_encoding", nil)
-
-	respUnk, err := sv1.server.Client().Do(reqUnk)
-	require.NoError(t, err)
-	defer respUnk.Body.Close()
-	require.Equal(t, http.StatusNotImplemented, respUnk.StatusCode, "Unimplemented service should return 501 Not Implemented")
-
-	// Attempt to execute a service on sv2 that it doesn't have, but sv1 has
-	reqDisco, _ := http.NewRequest("POST", sv2.config.Address+"/services/execute?name=ocr", nil)
-
-	respDisco, err := sv2.server.Client().Do(reqDisco)
-	require.NoError(t, err)
-	defer respDisco.Body.Close()
-	require.Equal(t, http.StatusOK, respDisco.StatusCode, "Service 'ocr' should be discovered in the cluster and proxied, returning 200 OK")
-}
-
-func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
+func Test16mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	t.Parallel()
 	clusterDir := t.TempDir()
 	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(clusterDir, clusterDir, "legit-node")
@@ -679,9 +641,9 @@ func Test17mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	})
 }
 
-func Test18NodeCannotRegisterDuplicateServices(t *testing.T) {
+func Test17NodeCannotRegisterDuplicateServices(t *testing.T) {
 	t.Parallel()
-	registry := NewServiceRegistry()
+	sv := NewServer(DefaultConfigFor(t, "1"))
 	
 	savedParameters := map[string]ServiceParameter{
 		"image": {Type: "string", Required: true},
@@ -694,7 +656,7 @@ func Test18NodeCannotRegisterDuplicateServices(t *testing.T) {
 		Parameters: savedParameters,
 	}
 
-	err := registry.Register(schema1)
+	err := sv.RegisterNewService(schema1)
 	require.NoError(t, err, "The first ServiceScheme should be registered")
 	
 	schemaImpostor := ServiceSchema{
@@ -707,13 +669,13 @@ func Test18NodeCannotRegisterDuplicateServices(t *testing.T) {
 		},
 	}
 
-	err = registry.Register(schemaImpostor)
+	err = sv.RegisterNewService(schemaImpostor)
 	
 	require.Error(t, err, "The Registry should reject repeated services")
 	require.ErrorIs(t, err, ErrServiceDuplicate)
 	
-	savedSchema, exists := registry.Get("ocr")
+	savedSchema, exists := sv.serviceRegistry.Get("ocr")
 	require.True(t, exists)
-	require.Equal(t, "Standard Optical Character Recognition", savedSchema.Description, "El esquema original no debe haber sido sobrescrito")
+	require.Equal(t, "Standard Optical Character Recognition", savedSchema.Description)
 	require.Equal(t, savedParameters, savedSchema.Parameters)
 }

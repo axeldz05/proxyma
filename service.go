@@ -153,3 +153,10 @@ func (s *Server) downloadWorker() {
 		s.downloadFileFromPeer(job.File, job.Source)
 	}
 }
+
+func (s *Server) RegisterNewService(schema ServiceSchema) error {
+	if err := s.serviceRegistry.Register(schema); err != nil {
+		return err
+	}
+	return nil
+}
