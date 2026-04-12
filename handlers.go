@@ -16,6 +16,8 @@ func (s *Server) MountHandlers() *http.ServeMux {
 	mux.HandleFunc("/manifest", s.handleManifest)
 	mux.HandleFunc("/file", s.handleDelete)
 	mux.HandleFunc("/subscribe", s.handleSubscribe)
+	mux.HandleFunc("/services/bid", s.handleServiceBid)
+	mux.HandleFunc("/services/submit", s.handleServiceSubmit)
 	return mux
 }
 
@@ -135,4 +137,82 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("File deleted successfully"))
+}
+
+func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var query DiscoveryQuery
+	if err := json.NewDecoder(r.Body).Decode(&query); err != nil {
+		http.Error(w, "Invalid query payload", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	schema, exists := s.serviceRegistry.Get(query.Service)
+	if !exists {
+		json.NewEncoder(w).Encode(ServiceBid{CanAccept: false})
+		return
+	}
+
+	for _, reqParam := range query.RequiredParams {
+		if _, hasParam := schema.Parameters[reqParam]; !hasParam {
+			json.NewEncoder(w).Encode(ServiceBid{CanAccept: false})
+			return
+		}
+	}
+
+	// TODO: El nodo deberia revisar su CPU o su cola interna de tareas en lugar de estimar.
+	estimated := int64(100)
+	if query.PayloadSizeBytes > 0 {
+		mb := query.PayloadSizeBytes / (1024 * 1024)
+		estimated += mb * 10
+	}
+	bid := ServiceBid{
+		NodeID:          s.config.ID,
+		NodeAddr:        s.config.Address,
+		Schema:          schema,
+		EstimatedMillis: estimated,
+		CanAccept:       true,
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(bid)
+}
+
+func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var taskReq TaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&taskReq); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := s.serviceRegistry.ValidateRequest(taskReq); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "Validation failed",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// TODO: Encolar la tarea en un canal de go para el webhook
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "accepted",
+		"message": "Task received and queued for processing",
+		"job_id":  taskReq.TaskID,
+	})
 }

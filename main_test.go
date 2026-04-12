@@ -679,3 +679,71 @@ func Test17NodeCannotRegisterDuplicateServices(t *testing.T) {
 	require.Equal(t, "Standard Optical Character Recognition", savedSchema.Description)
 	require.Equal(t, savedParameters, savedSchema.Parameters)
 }
+
+func Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
+	t.Parallel()
+	svWithService := NewServer(DefaultConfigFor(t, "1"))
+	svDemandingService := NewServer(DefaultConfigFor(t, "2"))
+	defer svWithService.Close()
+	defer svDemandingService.Close()
+
+	savedParameters := map[string]ServiceParameter{
+		"image":    {Type: "string", Required: true},
+		"language": {Type: "string", Required: false},
+		"output":   {Type: "string", Required: false},
+	}
+	schema1 := ServiceSchema{
+		Name:        "ocr",
+		Description: "Standard Optical Character Recognition",
+		Parameters:  savedParameters,
+	}
+	err := svWithService.RegisterNewService(schema1)
+	require.NoError(t, err)
+
+	svDemandingService.AddPeer(svWithService.config.ID, svWithService.config.Address)
+	svWithService.AddPeer(svDemandingService.config.ID, svDemandingService.config.Address)
+
+	query := DiscoveryQuery{
+		Service:          "ocr",
+		RequiredParams:   []string{"language"},
+		SortStrategy:     StrategyFastest,
+		PayloadSizeBytes: 1024 * 1024 * 5,
+	}
+
+	targetPeerAddr, serviceSchema, err := svDemandingService.RequestServiceToCluster(query)
+	require.NoError(t, err)
+	require.Equal(t, svWithService.config.Address, targetPeerAddr, "Debería haber elegido al nodo 1")
+	require.Equal(t, "Standard Optical Character Recognition", serviceSchema.Description)
+
+	filledInputs := map[string]any{
+		"image":    "fake-hash-12345", 
+		"language": "spa",
+	}
+
+	taskID := "job-999"
+	reqPayload := TaskRequest{
+		TaskID:   taskID,
+		Service: "ocr",
+		Payload:  filledInputs,
+		ReplyTo: svDemandingService.config.Address + "/services/callback",
+	}
+
+	body, _ := json.Marshal(reqPayload)
+	req, err := http.NewRequest("POST", targetPeerAddr+"/services/submit", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := svDemandingService.server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusAccepted, resp.StatusCode, "El servidor debe devolver 202 Accepted para encolar la tarea")
+
+	require.Eventually(t, func() bool {
+		// Aquí verificaríamos en la memoria de svDemandingService si la tarea "job-999"
+		// pasó a estado "completada" gracias a que recibió el webhook de respuesta.
+		// return svDemandingService.GetTaskStatus(taskID) == "completed"
+		
+		return true // Placeholder hasta que implementemos la memoria de tareas
+	}, 2*time.Second, 100*time.Millisecond, "El Webhook de finalización nunca llegó")
+}

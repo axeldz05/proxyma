@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"sync"
 )
+
 func (s *Server) SyncStorage() error {
 	peers := s.getPeersCopy()
 	for _, peerAddress := range peers {
@@ -159,4 +164,56 @@ func (s *Server) RegisterNewService(schema ServiceSchema) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) RequestServiceToCluster(query DiscoveryQuery) (string, ServiceSchema, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	var bids []ServiceBid
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	queryJSON, _ := json.Marshal(query)
+
+	peers := s.getPeersCopy() 
+	for _, peerAddr := range peers {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+
+			req, err := http.NewRequestWithContext(ctx, "POST", addr+"/services/bid", bytes.NewReader(queryJSON))
+			if err != nil { return }
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := s.peerClient.(*HTTPPeerClient).client.Do(req)
+			if err != nil || resp.StatusCode != http.StatusOK { return }
+			defer resp.Body.Close()
+
+			var bid ServiceBid
+			if err := json.NewDecoder(resp.Body).Decode(&bid); err == nil && bid.CanAccept {
+				mu.Lock()
+				bids = append(bids, bid)
+				mu.Unlock()
+			}
+		}(peerAddr)
+	}
+
+	wg.Wait()
+
+	if len(bids) == 0 {
+		return "", ServiceSchema{}, fmt.Errorf("no nodes available for service '%s' fulfilling requirements", query.Service)
+	}
+
+	bestBid := bids[0]
+	
+	if query.SortStrategy == StrategyFastest {
+		for _, bid := range bids {
+			if bid.EstimatedMillis < bestBid.EstimatedMillis {
+				bestBid = bid
+			}
+		}
+	}
+
+	return bestBid.NodeAddr, bestBid.Schema, nil
 }

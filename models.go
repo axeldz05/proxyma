@@ -69,3 +69,25 @@ type ServiceRegistry struct {
 	mu		sync.RWMutex
 	schemas map[string]ServiceSchema
 }
+
+const (
+	StrategyFastest    = "proxyma/strategy/fastest"
+	StrategyCheapest   = "proxyma/strategy/cheapest"
+	StrategyLowPower   = "proxyma/strategy/low_power"
+)
+
+type DiscoveryQuery struct {
+	Service          string   `json:"service"`
+	RequiredParams   []string `json:"required_params"`
+	SortStrategy     string   `json:"sort_strategy"`
+	PayloadSizeBytes int64    `json:"payload_size_bytes"`
+}
+
+type ServiceBid struct {
+	NodeID          string        `json:"node_id"`
+	NodeAddr        string        `json:"node_addr"`
+	Schema          ServiceSchema `json:"schema"`
+	EstimatedMillis int64         `json:"estimated_millis"` 
+	CanAccept       bool          `json:"can_accept"`
+}
+
