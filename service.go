@@ -161,6 +161,7 @@ func (s *Server) downloadWorker() {
 
 func (s *Server) RegisterNewService(schema ServiceSchema) error {
 	if err := s.serviceRegistry.Register(schema); err != nil {
+		s.config.Logger.Error("[Service Registry] - Couldn't register new service", "error", err)
 		return err
 	}
 	return nil
@@ -216,4 +217,38 @@ func (s *Server) RequestServiceToCluster(query DiscoveryQuery) (string, ServiceS
 	}
 
 	return bestBid.NodeAddr, bestBid.Schema, nil
+}
+
+func (s *Server) GetTaskStatus(taskID string) (ServiceTaskResponse, bool) {
+	val, exists := s.taskStatuses.Load(taskID)
+	if !exists {
+		return ServiceTaskResponse{}, false
+	}
+	res, ok := val.(ServiceTaskResponse)
+	if !ok {
+		return ServiceTaskResponse{}, false
+	}
+	return res, true
+}
+
+func (s *Server) DispatchTask(targetPeerAddr string, req TaskRequest) error {
+	s.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
+		TaskID:  req.TaskID,
+		Service: req.Service,
+		Status:  "pending",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
+	if err != nil {
+		s.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
+			TaskID:  req.TaskID,
+			Service: req.Service,
+			Status:  "failed",
+			Error:   err.Error(),
+		})
+		return fmt.Errorf("failed to dispatch task to peer: %v", err)
+	}
+	return nil
 }

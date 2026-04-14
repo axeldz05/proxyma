@@ -44,7 +44,9 @@ func main() {
 		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
+		taskQueue: 	   make(chan TaskRequest, 10),
 		subscriptions: &sync.Map{},
+		taskStatuses:  &sync.Map{},
 	}
 
 	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(cfg.StoragePath, cfg.StoragePath, cfg.ID)
@@ -86,6 +88,7 @@ func main() {
 func (s *Server) Close() {
 	s.server.Close()
 	close(s.downloadQueue)
+	close(s.taskQueue)
 }
 
 func (s *Server) getPeersCopy() map[string]string{

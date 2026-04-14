@@ -32,9 +32,11 @@ type Server struct {
 	storage 		storage.Storage
 	vfs 			*VFS
 	downloadQueue 	chan DownloadJob
+	taskQueue 		chan TaskRequest
 	server 			*httptest.Server
-	// TODO: try using BoltDB / Badger
+	// TODO: try using BoltDB / Badger for sync.Map
 	subscriptions   *sync.Map
+	taskStatuses 	*sync.Map
 	serviceRegistry *ServiceRegistry
 }
 
@@ -91,3 +93,10 @@ type ServiceBid struct {
 	CanAccept       bool          `json:"can_accept"`
 }
 
+type ServiceTaskResponse struct {
+	TaskID    string         `json:"task_id"`
+	Service   string         `json:"service"`
+	Status    string         `json:"status"`
+	Error     string         `json:"error,omitempty"`
+	Outputs   map[string]any `json:"outputs,omitempty"`
+}

@@ -15,6 +15,7 @@ type PeerClient interface {
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
 	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
+	SubmitTask(ctx context.Context, peerAddr string, req TaskRequest) error
 }
 
 type HTTPPeerClient struct {
@@ -119,3 +120,30 @@ func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerAddr string, se
 	return result, nil
 }
 
+func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req TaskRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	url := peerAddr + "/services/submit"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		return fmt.Errorf("node is overloaded")
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+	return nil
+}

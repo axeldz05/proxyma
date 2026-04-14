@@ -94,6 +94,8 @@ func NewServer(cfg NodeConfig) *Server {
 		storage:       		*storage.NewStorage(cfg.StoragePath),
 		vfs:           		NewVFS(),
 		downloadQueue: 		make(chan DownloadJob, 1000),
+		taskQueue:	 		make(chan TaskRequest, 10),
+		taskStatuses:	 	&sync.Map{},
 		subscriptions: 		&sync.Map{},
 		serviceRegistry: 	NewServiceRegistry(),
 	}
@@ -122,6 +124,7 @@ func NewServer(cfg NodeConfig) *Server {
 
 	for i := 0; i < s.config.Workers; i++ {
 		go s.downloadWorker()
+		go s.serviceWorker()
 	}
 
 	return s
@@ -728,22 +731,11 @@ func Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		ReplyTo: svDemandingService.config.Address + "/services/callback",
 	}
 
-	body, _ := json.Marshal(reqPayload)
-	req, err := http.NewRequest("POST", targetPeerAddr+"/services/submit", bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := svDemandingService.server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	require.Equal(t, http.StatusAccepted, resp.StatusCode, "El servidor debe devolver 202 Accepted para encolar la tarea")
+	err = svDemandingService.DispatchTask(targetPeerAddr, reqPayload)
+	require.NoError(t, err, "The node worker should have accepted the task")
 
 	require.Eventually(t, func() bool {
-		// Aquí verificaríamos en la memoria de svDemandingService si la tarea "job-999"
-		// pasó a estado "completada" gracias a que recibió el webhook de respuesta.
-		// return svDemandingService.GetTaskStatus(taskID) == "completed"
-		
-		return true // Placeholder hasta que implementemos la memoria de tareas
-	}, 2*time.Second, 100*time.Millisecond, "El Webhook de finalización nunca llegó")
+		taskResult, exists := svDemandingService.GetTaskStatus(taskID)
+		return exists && taskResult.Status == "completed"
+	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
 }
