@@ -29,15 +29,13 @@ type Server struct {
 	config			NodeConfig
 	peerClient  	PeerClient
 	Peers   		map[string]string
+	compute 		*ComputeEngine
 	storage 		storage.Storage
 	vfs 			*VFS
 	downloadQueue 	chan DownloadJob
-	taskQueue 		chan TaskRequest
 	server 			*httptest.Server
 	// TODO: try using BoltDB / Badger for sync.Map
 	subscriptions   *sync.Map
-	taskStatuses 	*sync.Map
-	serviceRegistry *ServiceRegistry
 }
 
 type NodeConfig struct {

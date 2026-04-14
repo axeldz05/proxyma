@@ -94,10 +94,7 @@ func NewServer(cfg NodeConfig) *Server {
 		storage:       		*storage.NewStorage(cfg.StoragePath),
 		vfs:           		NewVFS(),
 		downloadQueue: 		make(chan DownloadJob, 1000),
-		taskQueue:	 		make(chan TaskRequest, 10),
-		taskStatuses:	 	&sync.Map{},
 		subscriptions: 		&sync.Map{},
-		serviceRegistry: 	NewServiceRegistry(),
 	}
 
 	os.MkdirAll(cfg.StoragePath, 0755)
@@ -111,6 +108,7 @@ func NewServer(cfg NodeConfig) *Server {
 		},
 	}
 	s.peerClient = NewHTTPPeerClient(httpClient)
+	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers)
 
 	s.server = httptest.NewUnstartedServer(s.MountHandlers())
 	s.server.TLS = serverTLS
@@ -124,7 +122,6 @@ func NewServer(cfg NodeConfig) *Server {
 
 	for i := 0; i < s.config.Workers; i++ {
 		go s.downloadWorker()
-		go s.serviceWorker()
 	}
 
 	return s
@@ -659,7 +656,7 @@ func Test17NodeCannotRegisterDuplicateServices(t *testing.T) {
 		Parameters: savedParameters,
 	}
 
-	err := sv.RegisterNewService(schema1)
+	err := sv.compute.RegisterNewService(schema1)
 	require.NoError(t, err, "The first ServiceScheme should be registered")
 	
 	schemaImpostor := ServiceSchema{
@@ -672,12 +669,12 @@ func Test17NodeCannotRegisterDuplicateServices(t *testing.T) {
 		},
 	}
 
-	err = sv.RegisterNewService(schemaImpostor)
+	err = sv.compute.RegisterNewService(schemaImpostor)
 	
 	require.Error(t, err, "The Registry should reject repeated services")
 	require.ErrorIs(t, err, ErrServiceDuplicate)
 	
-	savedSchema, exists := sv.serviceRegistry.Get("ocr")
+	savedSchema, exists := sv.compute.registry.Get("ocr")
 	require.True(t, exists)
 	require.Equal(t, "Standard Optical Character Recognition", savedSchema.Description)
 	require.Equal(t, savedParameters, savedSchema.Parameters)
@@ -700,7 +697,7 @@ func Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		Description: "Standard Optical Character Recognition",
 		Parameters:  savedParameters,
 	}
-	err := svWithService.RegisterNewService(schema1)
+	err := svWithService.compute.RegisterNewService(schema1)
 	require.NoError(t, err)
 
 	svDemandingService.AddPeer(svWithService.config.ID, svWithService.config.Address)
@@ -735,7 +732,7 @@ func Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	require.NoError(t, err, "The node worker should have accepted the task")
 
 	require.Eventually(t, func() bool {
-		taskResult, exists := svDemandingService.GetTaskStatus(taskID)
+		taskResult, exists := svDemandingService.compute.GetTaskStatus(taskID)
 		return exists && taskResult.Status == "completed"
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
 }

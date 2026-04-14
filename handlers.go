@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"proxyma/storage"
-	"time"
 )
 
 func (s *Server) MountHandlers() *http.ServeMux {
@@ -156,7 +154,7 @@ func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	schema, exists := s.serviceRegistry.Get(query.Service)
+	schema, exists := s.compute.registry.Get(query.Service)
 	if !exists {
 		json.NewEncoder(w).Encode(ServiceBid{CanAccept: false})
 		return
@@ -201,7 +199,7 @@ func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if err := s.serviceRegistry.ValidateRequest(taskReq); err != nil {
+	if err := s.compute.registry.ValidateRequest(taskReq); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error":   "Validation failed",
@@ -211,7 +209,7 @@ func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	select {
-		case s.taskQueue <- taskReq:
+		case s.compute.taskQueue <- taskReq:
 			w.WriteHeader(http.StatusAccepted)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "accepted",
@@ -235,39 +233,7 @@ func (s *Server) handleServiceCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	s.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)
+	s.compute.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)
 	s.config.Logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) serviceWorker() {
-	for task := range s.taskQueue {
-		s.config.Logger.Info("Working on task...", "job_id", task.TaskID)
-		// TODO: This is simulated, it should do the real work 
-		time.Sleep(500 * time.Millisecond)
-		responsePayload := ServiceTaskResponse{
-			TaskID:  task.TaskID,
-			Service: task.Service,
-			Status:  "completed",
-			Outputs: map[string]any{
-				// TODO: This is simulated hash for the vfs
-				"text_result": "vfs://result_hash", 
-			},
-		}
-		if task.ReplyTo != "" {
-			body, _ := json.Marshal(responsePayload)
-			req, err := http.NewRequest("POST", task.ReplyTo, bytes.NewReader(body))
-			if err == nil {
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := s.peerClient.(*HTTPPeerClient).client.Do(req)
-				if err != nil {
-					s.config.Logger.Error("Failed to deliver webhook", "job_id", task.TaskID, "error", err)
-				} else {
-					resp.Body.Close()
-				}
-			}
-		} else {
-			s.config.Logger.Warn("[TaskQueue] - There's no one to reply to", "taskID", task.TaskID)
-		}
-	}
 }

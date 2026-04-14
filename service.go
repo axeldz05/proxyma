@@ -159,14 +159,6 @@ func (s *Server) downloadWorker() {
 	}
 }
 
-func (s *Server) RegisterNewService(schema ServiceSchema) error {
-	if err := s.serviceRegistry.Register(schema); err != nil {
-		s.config.Logger.Error("[Service Registry] - Couldn't register new service", "error", err)
-		return err
-	}
-	return nil
-}
-
 func (s *Server) RequestServiceToCluster(query DiscoveryQuery) (string, ServiceSchema, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -219,20 +211,9 @@ func (s *Server) RequestServiceToCluster(query DiscoveryQuery) (string, ServiceS
 	return bestBid.NodeAddr, bestBid.Schema, nil
 }
 
-func (s *Server) GetTaskStatus(taskID string) (ServiceTaskResponse, bool) {
-	val, exists := s.taskStatuses.Load(taskID)
-	if !exists {
-		return ServiceTaskResponse{}, false
-	}
-	res, ok := val.(ServiceTaskResponse)
-	if !ok {
-		return ServiceTaskResponse{}, false
-	}
-	return res, true
-}
 
 func (s *Server) DispatchTask(targetPeerAddr string, req TaskRequest) error {
-	s.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
+	s.compute.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
 		TaskID:  req.TaskID,
 		Service: req.Service,
 		Status:  "pending",
@@ -242,7 +223,7 @@ func (s *Server) DispatchTask(targetPeerAddr string, req TaskRequest) error {
 
 	err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
 	if err != nil {
-		s.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
+		s.compute.taskStatuses.Store(req.TaskID, ServiceTaskResponse{
 			TaskID:  req.TaskID,
 			Service: req.Service,
 			Status:  "failed",

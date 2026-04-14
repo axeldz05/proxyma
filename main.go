@@ -44,9 +44,7 @@ func main() {
 		storage:       *storage.NewStorage(cfg.StoragePath),
 		vfs:           NewVFS(),
 		downloadQueue: make(chan DownloadJob, 1000),
-		taskQueue: 	   make(chan TaskRequest, 10),
 		subscriptions: &sync.Map{},
-		taskStatuses:  &sync.Map{},
 	}
 
 	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(cfg.StoragePath, cfg.StoragePath, cfg.ID)
@@ -60,6 +58,7 @@ func main() {
 		},
 	} 
 	s.peerClient = NewHTTPPeerClient(httpClient)
+	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers)
 
 	for i := 0; i < s.config.Workers; i++ {
 		go s.downloadWorker()
@@ -88,7 +87,7 @@ func main() {
 func (s *Server) Close() {
 	s.server.Close()
 	close(s.downloadQueue)
-	close(s.taskQueue)
+	close(s.compute.taskQueue)
 }
 
 func (s *Server) getPeersCopy() map[string]string{
