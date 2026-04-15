@@ -1,0 +1,1986 @@
+=== RUN   Test01FirstServerIsAlreadySynced
+=== PAUSE Test01FirstServerIsAlreadySynced
+=== RUN   Test02AServerCanConnectToAnother
+=== PAUSE Test02AServerCanConnectToAnother
+=== RUN   Test03AllServersSyncsToLastUpdated
+=== PAUSE Test03AllServersSyncsToLastUpdated
+=== RUN   Test04UploadEndpointReturnsAndRegistersHash
+=== PAUSE Test04UploadEndpointReturnsAndRegistersHash
+=== RUN   Test05P2PNetworkEventualConsistency
+=== PAUSE Test05P2PNetworkEventualConsistency
+=== RUN   Test06DownloadEndpointUsesHashInsteadOfName
+=== PAUSE Test06DownloadEndpointUsesHashInsteadOfName
+=== RUN   Test07NetworkRequestRespectsTimeouts
+=== PAUSE Test07NetworkRequestRespectsTimeouts
+=== RUN   Test08UnauthorizedAccessIsRejected
+=== PAUSE Test08UnauthorizedAccessIsRejected
+=== RUN   Test09ManifestEndpointReturnsCurrentState
+=== PAUSE Test09ManifestEndpointReturnsCurrentState
+=== RUN   Test10SyncStorageDownloadsMissingFiles
+=== PAUSE Test10SyncStorageDownloadsMissingFiles
+=== RUN   Test11VirtualFileSystemTracksFileUpdates
+=== PAUSE Test11VirtualFileSystemTracksFileUpdates
+=== RUN   Test12WorkerPoolLimitsConcurrency
+=== PAUSE Test12WorkerPoolLimitsConcurrency
+=== RUN   Test13LocalDeleteCreatesTombstone
+=== PAUSE Test13LocalDeleteCreatesTombstone
+=== RUN   Test14TombstonePropagatesToPeers
+=== PAUSE Test14TombstonePropagatesToPeers
+=== RUN   Test15SelectiveSynchronization
+=== PAUSE Test15SelectiveSynchronization
+=== RUN   Test16mTLSConnectionRejectsUnauthorizedPeers
+=== PAUSE Test16mTLSConnectionRejectsUnauthorizedPeers
+=== RUN   Test17NodeCannotRegisterDuplicateServices
+=== PAUSE Test17NodeCannotRegisterDuplicateServices
+=== RUN   Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest
+=== PAUSE Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest
+=== CONT  Test01FirstServerIsAlreadySynced
+=== CONT  Test10SyncStorageDownloadsMissingFiles
+=== CONT  Test15SelectiveSynchronization
+=== CONT  Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest
+=== CONT  Test06DownloadEndpointUsesHashInsteadOfName
+=== CONT  Test12WorkerPoolLimitsConcurrency
+=== CONT  Test09ManifestEndpointReturnsCurrentState
+=== CONT  Test13LocalDeleteCreatesTombstone
+=== CONT  Test08UnauthorizedAccessIsRejected
+=== CONT  Test04UploadEndpointReturnsAndRegistersHash
+=== CONT  Test05P2PNetworkEventualConsistency
+=== CONT  Test07NetworkRequestRespectsTimeouts
+--- PASS: Test01FirstServerIsAlreadySynced (0.00s)
+=== CONT  Test14TombstonePropagatesToPeers
+2026/04/15 01:19:02 http: TLS handshake error from 127.0.0.1:58534: tls: client didn't provide a certificate
+--- PASS: Test08UnauthorizedAccessIsRejected (0.01s)
+=== CONT  Test17NodeCannotRegisterDuplicateServices
+    main_test.go:32: time=2026-04-15T01:19:02.280-03:00 level=ERROR msg="[Compute Engine] - Couldn't register new service" node=1 error="failed to register 'ocr': 'service is already registered'"
+--- PASS: Test06DownloadEndpointUsesHashInsteadOfName (0.02s)
+=== CONT  Test03AllServersSyncsToLastUpdated
+--- PASS: Test04UploadEndpointReturnsAndRegistersHash (0.02s)
+=== CONT  Test16mTLSConnectionRejectsUnauthorizedPeers
+--- PASS: Test17NodeCannotRegisterDuplicateServices (0.01s)
+=== CONT  Test11VirtualFileSystemTracksFileUpdates
+--- PASS: Test13LocalDeleteCreatesTombstone (0.02s)
+=== CONT  Test02AServerCanConnectToAnother
+=== RUN   Test16mTLSConnectionRejectsUnauthorizedPeers/Client_succesfully_connects_to_the_server
+=== NAME  Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest
+    main_test.go:32: time=2026-04-15T01:19:02.281-03:00 level=INFO msg="[TaskQueue] - task was queued" node=1 taskID=job-999
+    main_test.go:32: time=2026-04-15T01:19:02.281-03:00 level=INFO msg="Working on task..." node=1 job_id=job-999
+=== NAME  Test10SyncStorageDownloadsMissingFiles
+    main_test.go:32: time=2026-04-15T01:19:02.282-03:00 level=DEBUG msg="DownloadJob added" node=2 file=missingFile.txt source=https://127.0.0.1:41143
+--- PASS: Test10SyncStorageDownloadsMissingFiles (0.02s)
+=== NAME  Test14TombstonePropagatesToPeers
+    main_test.go:32: time=2026-04-15T01:19:02.283-03:00 level=DEBUG msg="Successfully downloaded and applied file" node=2 file=test14.txt
+=== RUN   Test16mTLSConnectionRejectsUnauthorizedPeers/Reject_clients_without_a_cert
+=== NAME  Test05P2PNetworkEventualConsistency
+    main_test.go:32: time=2026-04-15T01:19:02.284-03:00 level=DEBUG msg="Successfully downloaded and applied file" node=1 file=test05.txt
+=== NAME  Test15SelectiveSynchronization
+    main_test.go:32: time=2026-04-15T01:19:02.284-03:00 level=INFO msg="Subscription added" node=2 file=fileA.txt
+=== NAME  Test16mTLSConnectionRejectsUnauthorizedPeers
+    main_test.go:32: time=2026-04-15T01:19:02.285-03:00 level=ERROR msg="http: TLS handshake error from 127.0.0.1:38628: tls: client didn't provide a certificate" node=Test17-mTLS
+=== RUN   Test16mTLSConnectionRejectsUnauthorizedPeers/Reject_certificates_from_an_unknown_CA
+=== NAME  Test05P2PNetworkEventualConsistency
+    main_test.go:32: time=2026-04-15T01:19:02.298-03:00 level=DEBUG msg="Successfully downloaded and applied file" node=2 file=test05.txt
+--- PASS: Test11VirtualFileSystemTracksFileUpdates (0.02s)
+=== NAME  Test15SelectiveSynchronization
+    main_test.go:32: time=2026-04-15T01:19:02.298-03:00 level=DEBUG msg="DownloadJob added" node=2 file=fileA.txt source=https://127.0.0.1:32865
+    main_test.go:32: time=2026-04-15T01:19:02.299-03:00 level=DEBUG msg="Successfully downloaded and applied file" node=2 file=fileA.txt
+--- PASS: Test02AServerCanConnectToAnother (0.02s)
+=== NAME  Test16mTLSConnectionRejectsUnauthorizedPeers
+    main_test.go:32: time=2026-04-15T01:19:02.299-03:00 level=ERROR msg="http: TLS handshake error from 127.0.0.1:38642: remote error: tls: bad certificate" node=Test17-mTLS
+--- PASS: Test16mTLSConnectionRejectsUnauthorizedPeers (0.02s)
+    --- PASS: Test16mTLSConnectionRejectsUnauthorizedPeers/Client_succesfully_connects_to_the_server (0.00s)
+    --- PASS: Test16mTLSConnectionRejectsUnauthorizedPeers/Reject_clients_without_a_cert (0.00s)
+    --- PASS: Test16mTLSConnectionRejectsUnauthorizedPeers/Reject_certificates_from_an_unknown_CA (0.01s)
+2026/04/15 01:19:02 http: TLS handshake error from 127.0.0.1:38204: read tcp 127.0.0.1:39717->127.0.0.1:38204: use of closed network connection
+=== NAME  Test03AllServersSyncsToLastUpdated
+    main_test.go:32: time=2026-04-15T01:19:02.299-03:00 level=ERROR msg="Error notifying peer" node=1 peerID=3 error="Post \"https://127.0.0.1:39717/notify\": EOF"
+    main_test.go:32: time=2026-04-15T01:19:02.300-03:00 level=ERROR msg="Failed to download blob" node=2 file=test03.txt error="Get \"https://127.0.0.1:45631/download/0f5c512c77798eeb751bf68ba2d1de815d10dd921da46c77968c5c16fa645a6f\": EOF"
+2026/04/15 01:19:02 http: TLS handshake error from 127.0.0.1:40936: write tcp 127.0.0.1:45631->127.0.0.1:40936: use of closed network connection
+--- PASS: Test03AllServersSyncsToLastUpdated (0.02s)
+--- PASS: Test05P2PNetworkEventualConsistency (0.12s)
+--- PASS: Test14TombstonePropagatesToPeers (0.22s)
+runtime: goroutine stack exceeds 1000000000-byte limit
+runtime: sp=0x2ec93dd92370 stack=[0x2ec93dd92000, 0x2ec95dd92000]
+fatal error: stack overflow
+
+runtime stack:
+runtime.throw({0x88ecfb?, 0x420e01?})
+	/usr/lib/go/src/runtime/panic.go:1229 +0x48 fp=0x7f0ee1ffacf0 sp=0x7f0ee1ffacc0 pc=0x48a8c8
+runtime.newstack()
+	/usr/lib/go/src/runtime/stack.go:1178 +0x5fd fp=0x7f0ee1ffae20 sp=0x7f0ee1ffacf0 pc=0x46e55d
+runtime.morestack()
+	/usr/lib/go/src/runtime/asm_amd64.s:681 +0x7d fp=0x7f0ee1ffae28 sp=0x7f0ee1ffae20 pc=0x4906dd
+
+goroutine 16 gp=0x2ec91d68d4a0 m=15 mp=0x2ec91da01008 [running]:
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8d60f0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:69 +0xd9 fp=0x2ec93dd92380 sp=0x2ec93dd92378 pc=0x73fc79
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92408 sp=0x2ec93dd92380 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92490 sp=0x2ec93dd92408 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92518 sp=0x2ec93dd92490 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd925a0 sp=0x2ec93dd92518 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92628 sp=0x2ec93dd925a0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd926b0 sp=0x2ec93dd92628 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92738 sp=0x2ec93dd926b0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd927c0 sp=0x2ec93dd92738 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92848 sp=0x2ec93dd927c0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd928d0 sp=0x2ec93dd92848 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92958 sp=0x2ec93dd928d0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd929e0 sp=0x2ec93dd92958 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92a68 sp=0x2ec93dd929e0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92af0 sp=0x2ec93dd92a68 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92b78 sp=0x2ec93dd92af0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92c00 sp=0x2ec93dd92b78 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92c88 sp=0x2ec93dd92c00 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92d10 sp=0x2ec93dd92c88 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92d98 sp=0x2ec93dd92d10 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92e20 sp=0x2ec93dd92d98 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92ea8 sp=0x2ec93dd92e20 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92f30 sp=0x2ec93dd92ea8 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd92fb8 sp=0x2ec93dd92f30 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec93dd93040 sp=0x2ec93dd92fb8 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+...7895045 frames elided...
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x10?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91260 sp=0x2ec95dd911d8 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x4?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd912e8 sp=0x2ec95dd91260 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91370 sp=0x2ec95dd912e8 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x7f0f5006bde0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd913f8 sp=0x2ec95dd91370 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91480 sp=0x2ec95dd913f8 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d980808?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91508 sp=0x2ec95dd91480 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x18?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91590 sp=0x2ec95dd91508 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8b7650?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91618 sp=0x2ec95dd91590 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8a462d?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd916a0 sp=0x2ec95dd91618 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d91e000?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91728 sp=0x2ec95dd916a0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd917b0 sp=0x2ec95dd91728 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8b7878?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91838 sp=0x2ec95dd917b0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x7f0f5006bde0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd918c0 sp=0x2ec95dd91838 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8b7988?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91948 sp=0x2ec95dd918c0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x46fc11?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd919d0 sp=0x2ec95dd91948 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x3?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91a58 sp=0x2ec95dd919d0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x488365?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91ae0 sp=0x2ec95dd91a58 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x88c2f4?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91b68 sp=0x2ec95dd91ae0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d6c0700?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91bf0 sp=0x2ec95dd91b68 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91c78 sp=0x2ec95dd91bf0 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8b7d30?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91d00 sp=0x2ec95dd91c78 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d8960c0?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91d88 sp=0x2ec95dd91d00 pc=0x73fc46
+proxyma/internal/storage.(*StorageEngine).Upsert(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70
+proxyma/internal/storage.(*StorageEngine).Upsert(0x2ec91d6bfb08?, {{0x88eaaf, 0xe}, 0x400, {0x890309, 0x11}, 0x0, 0x0})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:70 +0xa6 fp=0x2ec95dd91e10 sp=0x2ec95dd91d88 pc=0x73fc46
+command-line-arguments.Test09ManifestEndpointReturnsCurrentState(0x2ec91d6bfb08)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:366 +0x1d7 fp=0x2ec95dd91f70 sp=0x2ec95dd91e10 pc=0x75b8d7
+testing.tRunner(0x2ec91d6bfb08, 0x8b1760)
+	/usr/lib/go/src/testing/testing.go:2036 +0xea fp=0x2ec95dd91fc0 sp=0x2ec95dd91f70 pc=0x51e0aa
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x1b fp=0x2ec95dd91fe0 sp=0x2ec95dd91fc0 pc=0x51f23b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec95dd91fe8 sp=0x2ec95dd91fe0 pc=0x4921a1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0x4c5
+
+goroutine 1 gp=0x2ec91d55a1e0 m=nil [chan receive]:
+runtime.gopark(0x2ec91d5f6000?, 0x2ec91d6d19a8?, 0x7f?, 0x99?, 0xc0f1a0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d6d1918 sp=0x2ec91d6d18f8 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d588680, 0x0, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d6d1990 sp=0x2ec91d6d1918 pc=0x41ae4e
+runtime.chanrecv1(0x2ec91d6804d0?, 0x8c7640?)
+	/usr/lib/go/src/runtime/chan.go:509 +0x12 fp=0x2ec91d6d19b8 sp=0x2ec91d6d1990 pc=0x41a972
+testing.tRunner.func1()
+	/usr/lib/go/src/testing/testing.go:1993 +0x445 fp=0x2ec91d6d1b50 sp=0x2ec91d6d19b8 pc=0x51e5a5
+testing.tRunner(0x2ec91d6be6c8, 0x2ec91d6d1c58)
+	/usr/lib/go/src/testing/testing.go:2042 +0x123 fp=0x2ec91d6d1ba0 sp=0x2ec91d6d1b50 pc=0x51e0e3
+testing.runTests({0x0, 0x0}, {0x0, 0x0}, 0x2ec91d568108, {0xc07d60, 0x12, 0x12}, {0xc26fe2e38f7b0b35, 0x8bb2cd8342, ...})
+	/usr/lib/go/src/testing/testing.go:2583 +0x505 fp=0x2ec91d6d1c88 sp=0x2ec91d6d1ba0 pc=0x521385
+testing.(*M).Run(0x2ec91d68e960)
+	/usr/lib/go/src/testing/testing.go:2443 +0x6ac fp=0x2ec91d6d1ec8 sp=0x2ec91d6d1c88 pc=0x51fd2c
+main.main()
+	_testmain.go:80 +0x9b fp=0x2ec91d6d1f48 sp=0x2ec91d6d1ec8 pc=0x760d9b
+runtime.main()
+	/usr/lib/go/src/runtime/proc.go:290 +0x2d5 fp=0x2ec91d6d1fe0 sp=0x2ec91d6d1f48 pc=0x454015
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6d1fe8 sp=0x2ec91d6d1fe0 pc=0x4921a1
+
+goroutine 2 gp=0x2ec91d55ad20 m=nil [force gc (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5ccfa8 sp=0x2ec91d5ccf88 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.forcegchelper()
+	/usr/lib/go/src/runtime/proc.go:375 +0xb3 fp=0x2ec91d5ccfe0 sp=0x2ec91d5ccfa8 pc=0x454333
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5ccfe8 sp=0x2ec91d5ccfe0 pc=0x4921a1
+created by runtime.init.7 in goroutine 1
+	/usr/lib/go/src/runtime/proc.go:363 +0x1a
+
+goroutine 3 gp=0x2ec91d55b2c0 m=nil [GC sweep wait]:
+runtime.gopark(0x1?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cd788 sp=0x2ec91d5cd768 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.bgsweep(0x2ec91d588080)
+	/usr/lib/go/src/runtime/mgcsweep.go:324 +0x151 fp=0x2ec91d5cd7c8 sp=0x2ec91d5cd788 pc=0x43b851
+runtime.gcenable.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:214 +0x17 fp=0x2ec91d5cd7e0 sp=0x2ec91d5cd7c8 pc=0x42cbf7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cd7e8 sp=0x2ec91d5cd7e0 pc=0x4921a1
+created by runtime.gcenable in goroutine 1
+	/usr/lib/go/src/runtime/mgc.go:214 +0x66
+
+goroutine 4 gp=0x2ec91d55b4a0 m=nil [GC scavenge wait]:
+runtime.gopark(0x10000?, 0x3b9aca00?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cdf78 sp=0x2ec91d5cdf58 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.(*scavengerState).park(0xc0f8c0)
+	/usr/lib/go/src/runtime/mgcscavenge.go:425 +0x49 fp=0x2ec91d5cdfa8 sp=0x2ec91d5cdf78 pc=0x4392c9
+runtime.bgscavenge(0x2ec91d588080)
+	/usr/lib/go/src/runtime/mgcscavenge.go:658 +0x59 fp=0x2ec91d5cdfc8 sp=0x2ec91d5cdfa8 pc=0x439859
+runtime.gcenable.gowrap2()
+	/usr/lib/go/src/runtime/mgc.go:215 +0x17 fp=0x2ec91d5cdfe0 sp=0x2ec91d5cdfc8 pc=0x42cbb7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cdfe8 sp=0x2ec91d5cdfe0 pc=0x4921a1
+created by runtime.gcenable in goroutine 1
+	/usr/lib/go/src/runtime/mgc.go:215 +0xa5
+
+goroutine 5 gp=0x2ec91d55ba40 m=nil [GOMAXPROCS updater (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5ce788 sp=0x2ec91d5ce768 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.updateMaxProcsGoroutine()
+	/usr/lib/go/src/runtime/proc.go:7095 +0xe7 fp=0x2ec91d5ce7e0 sp=0x2ec91d5ce788 pc=0x4628c7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5ce7e8 sp=0x2ec91d5ce7e0 pc=0x4921a1
+created by runtime.defaultGOMAXPROCSUpdateEnable in goroutine 1
+	/usr/lib/go/src/runtime/proc.go:7083 +0x37
+
+goroutine 6 gp=0x2ec91d68c1e0 m=nil [finalizer wait]:
+runtime.gopark(0x463915?, 0x1c8?, 0x60?, 0x90?, 0x2ec91d5cc601?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cc620 sp=0x2ec91d5cc600 pc=0x48a9ee
+runtime.runFinalizers()
+	/usr/lib/go/src/runtime/mfinal.go:210 +0x107 fp=0x2ec91d5cc7e0 sp=0x2ec91d5cc620 pc=0x42bb67
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cc7e8 sp=0x2ec91d5cc7e0 pc=0x4921a1
+created by runtime.createfing in goroutine 1
+	/usr/lib/go/src/runtime/mfinal.go:172 +0x3d
+
+goroutine 7 gp=0x2ec91d68c3c0 m=nil [cleanup wait]:
+runtime.gopark(0x7f0f0078ca00?, 0x2ec91d5cef90?, 0x75?, 0xb?, 0x7f0f0078ca00?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cef68 sp=0x2ec91d5cef48 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.(*cleanupQueue).dequeue(0xc0fc40)
+	/usr/lib/go/src/runtime/mcleanup.go:522 +0xd4 fp=0x2ec91d5cefa0 sp=0x2ec91d5cef68 pc=0x4289b4
+runtime.runCleanups()
+	/usr/lib/go/src/runtime/mcleanup.go:718 +0x45 fp=0x2ec91d5cefe0 sp=0x2ec91d5cefa0 pc=0x429025
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cefe8 sp=0x2ec91d5cefe0 pc=0x4921a1
+created by runtime.(*cleanupQueue).createGs in goroutine 1
+	/usr/lib/go/src/runtime/mcleanup.go:672 +0xa5
+
+goroutine 14 gp=0x2ec91d68d0e0 m=nil [sleep]:
+runtime.gopark(0x1b4640eb3b5?, 0x756810?, 0x20?, 0x14?, 0x2ec91d6bf688?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e08bd78 sp=0x2ec91e08bd58 pc=0x48a9ee
+time.Sleep(0xb2d05e00)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91e08bdd0 sp=0x2ec91e08bd78 pc=0x48e9c5
+command-line-arguments.Test07NetworkRequestRespectsTimeouts(0x2ec91d6bf688)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:332 +0x3a9 fp=0x2ec91e08bf70 sp=0x2ec91e08bdd0 pc=0x75b269
+testing.tRunner(0x2ec91d6bf688, 0x8b1750)
+	/usr/lib/go/src/testing/testing.go:2036 +0xea fp=0x2ec91e08bfc0 sp=0x2ec91e08bf70 pc=0x51e0aa
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x1b fp=0x2ec91e08bfe0 sp=0x2ec91e08bfc0 pc=0x51f23b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e08bfe8 sp=0x2ec91e08bfe0 pc=0x4921a1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0x4c5
+
+goroutine 212 gp=0x2ec91d68d2c0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e8c7d30 sp=0x2ec91e8c7d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93f1f0, 0x2ec91e02ff80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91e8c7da8 sp=0x2ec91e8c7d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91e8c7dd0 sp=0x2ec91e8c7da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91dd045f0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91e8c7fc8 sp=0x2ec91e8c7dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91e8c7fe0 sp=0x2ec91e8c7fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e8c7fe8 sp=0x2ec91e8c7fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 25
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 20 gp=0x2ec91d68da40 m=nil [select]:
+runtime.gopark(0x2ec91db2fba8?, 0x3?, 0x70?, 0x0?, 0x2ec91db2fb82?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db2fa10 sp=0x2ec91db2f9f0 pc=0x48a9ee
+runtime.selectgo(0x2ec91db2fba8, 0x2ec91db2fb7c, 0x2ec91db2fb60?, 0x0, 0x47a4e0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91db2fb40 sp=0x2ec91db2fa10 pc=0x467725
+github.com/stretchr/testify/assert.Eventually({0x7f0f093e1420, 0x2ec91d6fc248}, 0x2ec91d99a258, 0x12a05f200, 0x5f5e100, {0x0, 0x0, 0x0})
+	/home/drusila/go/pkg/mod/github.com/stretchr/testify@v1.11.1/assert/assertions.go:2008 +0x1f4 fp=0x2ec91db2fc18 sp=0x2ec91db2fb40 pc=0x754874
+github.com/stretchr/testify/require.Eventually({0x8b9bc8, 0x2ec91d6fc248}, 0x2ec91d99a258, 0x12a05f200, 0x5f5e100, {0x0, 0x0, 0x0})
+	/home/drusila/go/pkg/mod/github.com/stretchr/testify@v1.11.1/require/require.go:412 +0xca fp=0x2ec91db2fc68 sp=0x2ec91db2fc18 pc=0x755eca
+command-line-arguments.Test12WorkerPoolLimitsConcurrency(0x2ec91d6fc248)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:474 +0x8ac fp=0x2ec91db2ff70 sp=0x2ec91db2fc68 pc=0x75d2ec
+testing.tRunner(0x2ec91d6fc248, 0x8b1778)
+	/usr/lib/go/src/testing/testing.go:2036 +0xea fp=0x2ec91db2ffc0 sp=0x2ec91db2ff70 pc=0x51e0aa
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x1b fp=0x2ec91db2ffe0 sp=0x2ec91db2ffc0 pc=0x51f23b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db2ffe8 sp=0x2ec91db2ffe0 pc=0x4921a1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0x4c5
+
+goroutine 23 gp=0x2ec91d6fe1e0 m=nil [sleep]:
+runtime.gopark(0x1b465694f2b?, 0x7f0f093e1420?, 0x8?, 0xc9?, 0x2ec91e148020?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d8b3be8 sp=0x2ec91d8b3bc8 pc=0x48a9ee
+time.Sleep(0x3b9aca00)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91d8b3c40 sp=0x2ec91d8b3be8 pc=0x48e9c5
+command-line-arguments.Test15SelectiveSynchronization(0x2ec91d6fc908)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:582 +0x751 fp=0x2ec91d8b3f70 sp=0x2ec91d8b3c40 pc=0x75ebd1
+testing.tRunner(0x2ec91d6fc908, 0x8b1790)
+	/usr/lib/go/src/testing/testing.go:2036 +0xea fp=0x2ec91d8b3fc0 sp=0x2ec91d8b3f70 pc=0x51e0aa
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x1b fp=0x2ec91d8b3fe0 sp=0x2ec91d8b3fc0 pc=0x51f23b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d8b3fe8 sp=0x2ec91d8b3fe0 pc=0x4921a1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0x4c5
+
+goroutine 26 gp=0x2ec91d6fe780 m=nil [select]:
+runtime.gopark(0x2ec91d9dfd30?, 0x3?, 0x70?, 0x0?, 0x2ec91d9dfd0a?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d9dfb98 sp=0x2ec91d9dfb78 pc=0x48a9ee
+runtime.selectgo(0x2ec91d9dfd30, 0x2ec91d9dfd04, 0x2ec91dae1ce8?, 0x0, 0x47a4e0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91d9dfcc8 sp=0x2ec91d9dfb98 pc=0x467725
+github.com/stretchr/testify/assert.Eventually({0x7f0f093e1420, 0x2ec91d6fcfc8}, 0x2ec91da1a7e0, 0x77359400, 0x5f5e100, {0x2ec91d9dff00, 0x1, 0x1})
+	/home/drusila/go/pkg/mod/github.com/stretchr/testify@v1.11.1/assert/assertions.go:2008 +0x1f4 fp=0x2ec91d9dfda0 sp=0x2ec91d9dfcc8 pc=0x754874
+github.com/stretchr/testify/require.Eventually({0x8b9bc8, 0x2ec91d6fcfc8}, 0x2ec91da1a7e0, 0x77359400, 0x5f5e100, {0x2ec91dae1f00, 0x1, 0x1})
+	/home/drusila/go/pkg/mod/github.com/stretchr/testify@v1.11.1/require/require.go:412 +0xca fp=0x2ec91d9dfdf0 sp=0x2ec91d9dfda0 pc=0x755eca
+command-line-arguments.Test18ANodeReceivesSatisfactoryAnswerFromServiceRequest(0x2ec91d6fcfc8)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:740 +0x94e fp=0x2ec91d9dff70 sp=0x2ec91d9dfdf0 pc=0x7608ce
+testing.tRunner(0x2ec91d6fcfc8, 0x8b17a8)
+	/usr/lib/go/src/testing/testing.go:2036 +0xea fp=0x2ec91d9dffc0 sp=0x2ec91d9dff70 pc=0x51e0aa
+testing.(*T).Run.gowrap1()
+	/usr/lib/go/src/testing/testing.go:2101 +0x1b fp=0x2ec91d9dffe0 sp=0x2ec91d9dffc0 pc=0x51f23b
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d9dffe8 sp=0x2ec91d9dffe0 pc=0x4921a1
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2101 +0x4c5
+
+goroutine 34 gp=0x2ec91d83e000 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d700bf0 sp=0x2ec91d700bd0 pc=0x48a9ee
+runtime.netpollblock(0x2ec91d700c40?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d700c28 sp=0x2ec91d700bf0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f093da600, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d700c48 sp=0x2ec91d700c28 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d81c000?, 0x900000036?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d700c70 sp=0x2ec91d700c48 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d81c000)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d700d18 sp=0x2ec91d700c70 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d81c000)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d700dd0 sp=0x2ec91d700d18 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d832000)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d700e20 sp=0x2ec91d700dd0 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d832000)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d700e50 sp=0x2ec91d700e20 pc=0x5efef0
+net/http.(*onceCloseListener).Accept(0x2ec91da1ebd0?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d700e68 sp=0x2ec91d700e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d836000, {0x8bbd00, 0x2ec91d832000})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d700f98 sp=0x2ec91d700e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d700fe0 sp=0x2ec91d700f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d700fe8 sp=0x2ec91d700fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 20
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 162 gp=0x2ec91d6fed20 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d6f4bb0 sp=0x2ec91d6f4b90 pc=0x48a9ee
+runtime.netpollblock(0xf80008?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d6f4be8 sp=0x2ec91d6f4bb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f093da000, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d6f4c08 sp=0x2ec91d6f4be8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d8de180?, 0x7f0f50069a00?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d6f4c30 sp=0x2ec91d6f4c08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d8de180)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d6f4cd8 sp=0x2ec91d6f4c30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d8de180)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d6f4d90 sp=0x2ec91d6f4cd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d8ac2c0)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d6f4de0 sp=0x2ec91d6f4d90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d8ac2c0)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d6f4e10 sp=0x2ec91d6f4de0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91dd100a8)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91d6f4e50 sp=0x2ec91d6f4e10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x8bbff8?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d6f4e68 sp=0x2ec91d6f4e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d8fa000, {0x8bb708, 0x2ec91dd100a8})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d6f4f98 sp=0x2ec91d6f4e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d6f4fe0 sp=0x2ec91d6f4f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6f4fe8 sp=0x2ec91d6f4fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 16
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 50 gp=0x2ec91d604b40 m=nil [sleep]:
+runtime.gopark(0x1b464618b42?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db13d78 sp=0x2ec91db13d58 pc=0x48a9ee
+time.Sleep(0x1dcd6500)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91db13dd0 sp=0x2ec91db13d78 pc=0x48e9c5
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d6600a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:79 +0x165 fp=0x2ec91db13fc8 sp=0x2ec91db13dd0 pc=0x73b1e5
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91db13fe0 sp=0x2ec91db13fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db13fe8 sp=0x2ec91db13fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 51 gp=0x2ec91d604d20 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db16d30 sp=0x2ec91db16d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d6561c0, 0x2ec91db16f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91db16da8 sp=0x2ec91db16d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91db16dd0 sp=0x2ec91db16da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d6600a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91db16fc8 sp=0x2ec91db16dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91db16fe0 sp=0x2ec91db16fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db16fe8 sp=0x2ec91db16fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 52 gp=0x2ec91d604f00 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d675640 sp=0x2ec91d675620 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d656230, 0x2ec91d675788, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d6756b8 sp=0x2ec91d675640 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d6756e0 sp=0x2ec91d6756b8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d6757e0 sp=0x2ec91d6756e0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6757e8 sp=0x2ec91d6757e0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 98 gp=0x2ec91d6ff0e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d670740 sp=0x2ec91d670720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91d6707c8 sp=0x2ec91d670740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91d6707e0 sp=0x2ec91d6707c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6707e8 sp=0x2ec91d6707e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 53 gp=0x2ec91d6050e0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d675e40 sp=0x2ec91d675e20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d656230, 0x2ec91d675f88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d675eb8 sp=0x2ec91d675e40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d675ee0 sp=0x2ec91d675eb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d675fe0 sp=0x2ec91d675ee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d675fe8 sp=0x2ec91d675fe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 82 gp=0x2ec91d882780 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7dc530 sp=0x2ec91d7dc510 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d8cc1c0, 0x2ec91d7dc780, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7dc5a8 sp=0x2ec91d7dc530 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7dc5d0 sp=0x2ec91d7dc5a8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d8d60a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d7dc7c8 sp=0x2ec91d7dc5d0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d7dc7e0 sp=0x2ec91d7dc7c8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7dc7e8 sp=0x2ec91d7dc7e0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 16
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 83 gp=0x2ec91d882960 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7dcd30 sp=0x2ec91d7dcd10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d8cc1c0, 0x2ec91d7dcf80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7dcda8 sp=0x2ec91d7dcd30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7dcdd0 sp=0x2ec91d7dcda8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d8d60a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d7dcfc8 sp=0x2ec91d7dcdd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d7dcfe0 sp=0x2ec91d7dcfc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7dcfe8 sp=0x2ec91d7dcfe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 16
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 84 gp=0x2ec91d882b40 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7dd640 sp=0x2ec91d7dd620 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d8cc230, 0x2ec91d7dd788, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7dd6b8 sp=0x2ec91d7dd640 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7dd6e0 sp=0x2ec91d7dd6b8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d7dd7e0 sp=0x2ec91d7dd6e0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7dd7e8 sp=0x2ec91d7dd7e0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 16
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 85 gp=0x2ec91d882d20 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7dde40 sp=0x2ec91d7dde20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d8cc230, 0x2ec91d7ddf88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7ddeb8 sp=0x2ec91d7dde40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7ddee0 sp=0x2ec91d7ddeb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d7ddfe0 sp=0x2ec91d7ddee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7ddfe8 sp=0x2ec91d7ddfe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 16
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 54 gp=0x2ec91d605680 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db17bb0 sp=0x2ec91db17b90 pc=0x48a9ee
+runtime.netpollblock(0x2ec91db17c00?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91db17be8 sp=0x2ec91db17bb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f093da400, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91db17c08 sp=0x2ec91db17be8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d66c180?, 0x2ec91db17c68?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91db17c30 sp=0x2ec91db17c08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d66c180)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91db17cd8 sp=0x2ec91db17c30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d66c180)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91db17d90 sp=0x2ec91db17cd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d638300)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91db17de0 sp=0x2ec91db17d90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d638300)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91db17e10 sp=0x2ec91db17de0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91d623968)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91db17e50 sp=0x2ec91db17e10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x2ec91db282d0?)
+	<autogenerated>:1 +0x1b fp=0x2ec91db17e68 sp=0x2ec91db17e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d67e000, {0x8bb708, 0x2ec91d623968})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91db17f98 sp=0x2ec91db17e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91db17fe0 sp=0x2ec91db17f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db17fe8 sp=0x2ec91db17fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 26
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 251 gp=0x2ec91d6ff860 m=nil [select]:
+runtime.gopark(0x2ec91e1a5f48?, 0x2?, 0x20?, 0x61?, 0x2ec91e1a5ef4?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91ea1fd88 sp=0x2ec91ea1fd68 pc=0x48a9ee
+runtime.selectgo(0x2ec91ea1ff48, 0x2ec91e1a5ef0, 0x2ec91d928980?, 0x0, 0x2ec91d8d9650?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91ea1feb8 sp=0x2ec91ea1fd88 pc=0x467725
+net/http.(*persistConn).writeLoop(0x2ec91ddbaf00)
+	/usr/lib/go/src/net/http/transport.go:2652 +0xe6 fp=0x2ec91ea1ffc8 sp=0x2ec91ea1feb8 pc=0x725fe6
+net/http.(*Transport).dialConn.gowrap3()
+	/usr/lib/go/src/net/http/transport.go:1995 +0x17 fp=0x2ec91ea1ffe0 sp=0x2ec91ea1ffc8 pc=0x723017
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91ea1ffe8 sp=0x2ec91ea1ffe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 232
+	/usr/lib/go/src/net/http/transport.go:1995 +0x16fe
+
+goroutine 35 gp=0x2ec91d83e5a0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5c8d30 sp=0x2ec91d5c8d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d834230, 0x2ec91d5c8f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d5c8da8 sp=0x2ec91d5c8d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d5c8dd0 sp=0x2ec91d5c8da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d8140f0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d5c8fc8 sp=0x2ec91d5c8dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d5c8fe0 sp=0x2ec91d5c8fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5c8fe8 sp=0x2ec91d5c8fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 20
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 36 gp=0x2ec91d83e780 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5c9530 sp=0x2ec91d5c9510 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d834230, 0x2ec91d5c9780, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d5c95a8 sp=0x2ec91d5c9530 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d5c95d0 sp=0x2ec91d5c95a8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d8140f0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d5c97c8 sp=0x2ec91d5c95d0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d5c97e0 sp=0x2ec91d5c97c8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5c97e8 sp=0x2ec91d5c97e0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 20
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 37 gp=0x2ec91d83e960 m=nil [select]:
+runtime.gopark(0x2ec91dbf9498?, 0x5?, 0xc0?, 0x26?, 0x2ec91dbf933e?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91dbf91d0 sp=0x2ec91dbf91b0 pc=0x48a9ee
+runtime.selectgo(0x2ec91dbf9498, 0x2ec91dbf9334, 0x88f6f9?, 0x0, 0x2ec91d918690?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91dbf9300 sp=0x2ec91dbf91d0 pc=0x467725
+net/http.(*persistConn).roundTrip(0x2ec91ddbaf00, 0x2ec91dd04b90)
+	/usr/lib/go/src/net/http/transport.go:2911 +0x83d fp=0x2ec91dbf9530 sp=0x2ec91dbf9300 pc=0x72701d
+net/http.(*Transport).roundTrip(0x2ec91d8381a0, 0x2ec91ddbadc0)
+	/usr/lib/go/src/net/http/transport.go:704 +0xaba fp=0x2ec91dbf9710 sp=0x2ec91dbf9530 pc=0x71ab5a
+net/http.(*Transport).RoundTrip(0x5000000890309?, 0x8b7ea0?)
+	/usr/lib/go/src/net/http/roundtrip.go:33 +0x18 fp=0x2ec91dbf9730 sp=0x2ec91dbf9710 pc=0x729cf8
+net/http.send(0x2ec91ddbadc0, {0x8b7ea0, 0x2ec91d8381a0}, {0x2ec91e08a9a8?, 0x48d306?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:264 +0x64b fp=0x2ec91dbf9920 sp=0x2ec91dbf9730 pc=0x6c53cb
+net/http.(*Client).send(0x2ec91d872570, 0x2ec91ddbadc0, {0x2ec91e08aa01?, 0x2ec91e08aa30?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:185 +0x258 fp=0x2ec91dbf99b8 sp=0x2ec91dbf9920 pc=0x6c4c18
+net/http.(*Client).do(0x2ec91d872570, 0x2ec91ddbadc0)
+	/usr/lib/go/src/net/http/client.go:733 +0x9d7 fp=0x2ec91dbf9ba8 sp=0x2ec91dbf99b8 pc=0x6c7177
+net/http.(*Client).Do(...)
+	/usr/lib/go/src/net/http/client.go:592
+proxyma/internal/p2p.(*HTTPPeerClient).DownloadBlob(0x2ec91d81e060, {0x8bc180, 0x2ec91d93f340}, {0x2ec91d7ae2e8?, 0x0?}, {0x2ec91e195380, 0x40})
+	/home/drusila/Projects/proxyma/internal/p2p/p2p_client.go:84 +0x105 fp=0x2ec91dbf9c30 sp=0x2ec91dbf9ba8 pc=0x738145
+proxyma/internal/storage.(*StorageEngine).downloadFileFromPeer(0x2ec91d814140, {{0x2ec91dd0a360, 0xa}, 0x0, {0x2ec91e195380, 0x40}, 0x1, 0x0}, {0x2ec91d7ae2e8, 0x16})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:162 +0x295 fp=0x2ec91dbf9ee0 sp=0x2ec91dbf9c30 pc=0x740d75
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:191
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0xf9 fp=0x2ec91dbf9fe0 sp=0x2ec91dbf9ee0 pc=0x73f899
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91dbf9fe8 sp=0x2ec91dbf9fe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 20
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 38 gp=0x2ec91d83eb40 m=nil [select]:
+runtime.gopark(0x2ec91dadf498?, 0x5?, 0x1?, 0xf2?, 0x2ec91dadf33e?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91dadf1d0 sp=0x2ec91dadf1b0 pc=0x48a9ee
+runtime.selectgo(0x2ec91dadf498, 0x2ec91dadf334, 0x88f6f9?, 0x0, 0x2ec91dcda460?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91dadf300 sp=0x2ec91dadf1d0 pc=0x467725
+net/http.(*persistConn).roundTrip(0x2ec91d878780, 0x2ec91d9d0cd0)
+	/usr/lib/go/src/net/http/transport.go:2911 +0x83d fp=0x2ec91dadf530 sp=0x2ec91dadf300 pc=0x72701d
+net/http.(*Transport).roundTrip(0x2ec91d8381a0, 0x2ec91d878640)
+	/usr/lib/go/src/net/http/transport.go:704 +0xaba fp=0x2ec91dadf710 sp=0x2ec91dadf530 pc=0x71ab5a
+net/http.(*Transport).RoundTrip(0x5000000000003?, 0x8b7ea0?)
+	/usr/lib/go/src/net/http/roundtrip.go:33 +0x18 fp=0x2ec91dadf730 sp=0x2ec91dadf710 pc=0x729cf8
+net/http.send(0x2ec91d878640, {0x8b7ea0, 0x2ec91d8381a0}, {0x2ec91d7069a8?, 0x48d306?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:264 +0x64b fp=0x2ec91dadf920 sp=0x2ec91dadf730 pc=0x6c53cb
+net/http.(*Client).send(0x2ec91d872570, 0x2ec91d878640, {0x2ec91d706a01?, 0x2ec91d706a30?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:185 +0x258 fp=0x2ec91dadf9b8 sp=0x2ec91dadf920 pc=0x6c4c18
+net/http.(*Client).do(0x2ec91d872570, 0x2ec91d878640)
+	/usr/lib/go/src/net/http/client.go:733 +0x9d7 fp=0x2ec91dadfba8 sp=0x2ec91dadf9b8 pc=0x6c7177
+net/http.(*Client).Do(...)
+	/usr/lib/go/src/net/http/client.go:592
+proxyma/internal/p2p.(*HTTPPeerClient).DownloadBlob(0x2ec91d81e060, {0x8bc180, 0x2ec91d7c0c40}, {0x2ec91d9f2120?, 0x0?}, {0x2ec91d9a7e00, 0x40})
+	/home/drusila/Projects/proxyma/internal/p2p/p2p_client.go:84 +0x105 fp=0x2ec91dadfc30 sp=0x2ec91dadfba8 pc=0x738145
+proxyma/internal/storage.(*StorageEngine).downloadFileFromPeer(0x2ec91d814140, {{0x2ec91d8c8660, 0xa}, 0x0, {0x2ec91d9a7e00, 0x40}, 0x1, 0x0}, {0x2ec91d9f2120, 0x16})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:162 +0x295 fp=0x2ec91dadfee0 sp=0x2ec91dadfc30 pc=0x740d75
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:191
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0xf9 fp=0x2ec91dadffe0 sp=0x2ec91dadfee0 pc=0x73f899
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91dadffe8 sp=0x2ec91dadffe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 20
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 99 gp=0x2ec91db045a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x8bb920?, 0x2ec91db1e000?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d676740 sp=0x2ec91d676720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91d6767c8 sp=0x2ec91d676740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91d6767e0 sp=0x2ec91d6767c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6767e8 sp=0x2ec91d6767e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 100 gp=0x2ec91db04780 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d674f40 sp=0x2ec91d674f20 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91d674fc8 sp=0x2ec91d674f40 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91d674fe0 sp=0x2ec91d674fc8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d674fe8 sp=0x2ec91d674fe0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 101 gp=0x2ec91db04960 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db46740 sp=0x2ec91db46720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db467c8 sp=0x2ec91db46740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db467e0 sp=0x2ec91db467c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db467e8 sp=0x2ec91db467e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 102 gp=0x2ec91db04b40 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db46f40 sp=0x2ec91db46f20 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db46fc8 sp=0x2ec91db46f40 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db46fe0 sp=0x2ec91db46fc8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db46fe8 sp=0x2ec91db46fe0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 103 gp=0x2ec91db04d20 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db47740 sp=0x2ec91db47720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db477c8 sp=0x2ec91db47740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db477e0 sp=0x2ec91db477c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db477e8 sp=0x2ec91db477e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 104 gp=0x2ec91db04f00 m=nil [GC worker (idle)]:
+runtime.gopark(0x1b465093503?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db47f40 sp=0x2ec91db47f20 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db47fc8 sp=0x2ec91db47f40 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db47fe0 sp=0x2ec91db47fc8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db47fe8 sp=0x2ec91db47fe0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 105 gp=0x2ec91db050e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x1b465616bda?, 0x1?, 0x73?, 0x50?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db48740 sp=0x2ec91db48720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db487c8 sp=0x2ec91db48740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db487e0 sp=0x2ec91db487c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db487e8 sp=0x2ec91db487e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 106 gp=0x2ec91db052c0 m=nil [GC worker (idle)]:
+runtime.gopark(0xc326c0?, 0x1?, 0xeb?, 0x74?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db48f40 sp=0x2ec91db48f20 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db48fc8 sp=0x2ec91db48f40 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db48fe0 sp=0x2ec91db48fc8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db48fe8 sp=0x2ec91db48fe0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 107 gp=0x2ec91db054a0 m=nil [GC worker (idle)]:
+runtime.gopark(0xc326c0?, 0x1?, 0x66?, 0x9f?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db49740 sp=0x2ec91db49720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db497c8 sp=0x2ec91db49740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db497e0 sp=0x2ec91db497c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db497e8 sp=0x2ec91db497e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 108 gp=0x2ec91db05680 m=nil [GC worker (idle)]:
+runtime.gopark(0x1b4650945bb?, 0x1?, 0xf7?, 0xb1?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db49f40 sp=0x2ec91db49f20 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db49fc8 sp=0x2ec91db49f40 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db49fe0 sp=0x2ec91db49fc8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db49fe8 sp=0x2ec91db49fe0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 109 gp=0x2ec91db05860 m=nil [GC worker (idle)]:
+runtime.gopark(0x1b465094a43?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db42740 sp=0x2ec91db42720 pc=0x48a9ee
+runtime.gcBgMarkWorker(0x2ec91db3e000)
+	/usr/lib/go/src/runtime/mgc.go:1791 +0xeb fp=0x2ec91db427c8 sp=0x2ec91db42740 pc=0x42f6cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x17 fp=0x2ec91db427e0 sp=0x2ec91db427c8 pc=0x42f5b7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db427e8 sp=0x2ec91db427e0 pc=0x4921a1
+created by runtime.gcBgMarkStartWorkers in goroutine 18
+	/usr/lib/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 114 gp=0x2ec91d904780 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d95e530 sp=0x2ec91d95e510 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e1c0, 0x2ec91d95e780, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d95e5a8 sp=0x2ec91d95e530 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d95e5d0 sp=0x2ec91d95e5a8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d94a0a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d95e7c8 sp=0x2ec91d95e5d0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d95e7e0 sp=0x2ec91d95e7c8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d95e7e8 sp=0x2ec91d95e7e0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 115 gp=0x2ec91d904960 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d95ed30 sp=0x2ec91d95ed10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e1c0, 0x2ec91d95ef80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d95eda8 sp=0x2ec91d95ed30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d95edd0 sp=0x2ec91d95eda8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d94a0a0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d95efc8 sp=0x2ec91d95edd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d95efe0 sp=0x2ec91d95efc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d95efe8 sp=0x2ec91d95efe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 116 gp=0x2ec91d904b40 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d95f640 sp=0x2ec91d95f620 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e230, 0x2ec91d95f788, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d95f6b8 sp=0x2ec91d95f640 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d95f6e0 sp=0x2ec91d95f6b8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d95f7e0 sp=0x2ec91d95f6e0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d95f7e8 sp=0x2ec91d95f7e0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 117 gp=0x2ec91d904d20 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d95fe40 sp=0x2ec91d95fe20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e230, 0x2ec91d95ff88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d95feb8 sp=0x2ec91d95fe40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d95fee0 sp=0x2ec91d95feb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d95ffe0 sp=0x2ec91d95fee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d95ffe8 sp=0x2ec91d95ffe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 118 gp=0x2ec91d9052c0 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db12bb0 sp=0x2ec91db12b90 pc=0x48a9ee
+runtime.netpollblock(0x2ec91db12c30?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91db12be8 sp=0x2ec91db12bb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f093da800, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91db12c08 sp=0x2ec91db12be8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91db62000?, 0x2ec91db12c68?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91db12c30 sp=0x2ec91db12c08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91db62000)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91db12cd8 sp=0x2ec91db12c30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91db62000)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91db12d90 sp=0x2ec91db12cd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91db22040)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91db12de0 sp=0x2ec91db12d90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91db22040)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91db12e10 sp=0x2ec91db12de0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91d91dad0)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91db12e50 sp=0x2ec91db12e10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x2ec91d790fc0?)
+	<autogenerated>:1 +0x1b fp=0x2ec91db12e68 sp=0x2ec91db12e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91db64000, {0x8bb708, 0x2ec91d91dad0})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91db12f98 sp=0x2ec91db12e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91db12fe0 sp=0x2ec91db12f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db12fe8 sp=0x2ec91db12fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 20
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 146 gp=0x2ec91dd26000 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d9e0bf0 sp=0x2ec91d9e0bd0 pc=0x48a9ee
+runtime.netpollblock(0xf00c91d9e0c40?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d9e0c28 sp=0x2ec91d9e0bf0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081e3000, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d9e0c48 sp=0x2ec91d9e0c28 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dd14000?, 0x846980?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d9e0c70 sp=0x2ec91d9e0c48 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91dd14000)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d9e0d18 sp=0x2ec91d9e0c70 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91dd14000)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d9e0dd0 sp=0x2ec91d9e0d18 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91dd18000)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d9e0e20 sp=0x2ec91d9e0dd0 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91dd18000)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d9e0e50 sp=0x2ec91d9e0e20 pc=0x5efef0
+net/http.(*onceCloseListener).Accept(0x2ec91e3a6000?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d9e0e68 sp=0x2ec91d9e0e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91dd1c000, {0x8bbd00, 0x2ec91dd18000})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d9e0f98 sp=0x2ec91d9e0e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d9e0fe0 sp=0x2ec91d9e0f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d9e0fe8 sp=0x2ec91d9e0fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 14
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 119 gp=0x2ec91d8834a0 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d6f7bb0 sp=0x2ec91d6f7b90 pc=0x48a9ee
+runtime.netpollblock(0x2ec91d6f7c00?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d6f7be8 sp=0x2ec91d6f7bb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f093d9c00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d6f7c08 sp=0x2ec91d6f7be8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d956180?, 0x900000036?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d6f7c30 sp=0x2ec91d6f7c08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d956180)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d6f7cd8 sp=0x2ec91d6f7c30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d956180)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d6f7d90 sp=0x2ec91d6f7cd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d9282c0)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d6f7de0 sp=0x2ec91d6f7d90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d9282c0)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d6f7e10 sp=0x2ec91d6f7de0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91d8980a8)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91d6f7e50 sp=0x2ec91d6f7e10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x2ec91e3a6750?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d6f7e68 sp=0x2ec91d6f7e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d97a000, {0x8bb708, 0x2ec91d8980a8})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d6f7f98 sp=0x2ec91d6f7e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d6f7fe0 sp=0x2ec91d6f7f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6f7fe8 sp=0x2ec91d6f7fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 23
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 71 gp=0x2ec91d83f0e0 m=nil [chan receive]:
+runtime.gopark(0x4386a5?, 0xc326c0?, 0x0?, 0x0?, 0x2ec91d5c8588?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d702d30 sp=0x2ec91d702d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a4d0, 0x2ec91d702f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d702da8 sp=0x2ec91d702d30 pc=0x41ae4e
+runtime.chanrecv2(0x2ec91d5c85e8?, 0x710ac6?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d702dd0 sp=0x2ec91d702da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d6606e0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d702fc8 sp=0x2ec91d702dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d702fe0 sp=0x2ec91d702fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d702fe8 sp=0x2ec91d702fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 72 gp=0x2ec91d83f2c0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cad30 sp=0x2ec91d5cad10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a4d0, 0x2ec91d5caf80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d5cada8 sp=0x2ec91d5cad30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d5cadd0 sp=0x2ec91d5cada8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d6606e0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d5cafc8 sp=0x2ec91d5cadd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d5cafe0 sp=0x2ec91d5cafc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cafe8 sp=0x2ec91d5cafe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 73 gp=0x2ec91d83f4a0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cb640 sp=0x2ec91d5cb620 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a540, 0x2ec91d5cb788, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d5cb6b8 sp=0x2ec91d5cb640 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d5cb6e0 sp=0x2ec91d5cb6b8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d5cb7e0 sp=0x2ec91d5cb6e0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cb7e8 sp=0x2ec91d5cb7e0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 74 gp=0x2ec91d83f680 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5cbe40 sp=0x2ec91d5cbe20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a540, 0x2ec91d5cbf88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d5cbeb8 sp=0x2ec91d5cbe40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d5cbee0 sp=0x2ec91d5cbeb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d5cbfe0 sp=0x2ec91d5cbee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5cbfe8 sp=0x2ec91d5cbfe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 26
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 286 gp=0x2ec91d984d20 m=nil [select]:
+runtime.gopark(0x2ec91e81df48?, 0x2?, 0x20?, 0x61?, 0x2ec91e81def4?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e94bd88 sp=0x2ec91e94bd68 pc=0x48a9ee
+runtime.selectgo(0x2ec91e94bf48, 0x2ec91e81def0, 0x2ec91d9e50c0?, 0x0, 0x2ec91e3790e0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91e94beb8 sp=0x2ec91e94bd88 pc=0x467725
+net/http.(*persistConn).writeLoop(0x2ec91d8792c0)
+	/usr/lib/go/src/net/http/transport.go:2652 +0xe6 fp=0x2ec91e94bfc8 sp=0x2ec91e94beb8 pc=0x725fe6
+net/http.(*Transport).dialConn.gowrap3()
+	/usr/lib/go/src/net/http/transport.go:1995 +0x17 fp=0x2ec91e94bfe0 sp=0x2ec91e94bfc8 pc=0x723017
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e94bfe8 sp=0x2ec91e94bfe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 282
+	/usr/lib/go/src/net/http/transport.go:1995 +0x16fe
+
+goroutine 177 gp=0x2ec91dd26780 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e7cbdd8 sp=0x2ec91e7cbdb8 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e7cbe10 sp=0x2ec91e7cbdd8 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f08399e00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e7cbe30 sp=0x2ec91e7cbe10 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d81ca00?, 0x2ec91db22961?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e7cbe58 sp=0x2ec91e7cbe30 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91d81ca00, {0x2ec91db22961, 0x1, 0x1})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e7cbef0 sp=0x2ec91e7cbe58 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91d81ca00, {0x2ec91db22961?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e7cbf38 sp=0x2ec91e7cbef0 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d78e2a0, {0x2ec91db22961?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e7cbf80 sp=0x2ec91e7cbf38 pc=0x5e9065
+net/http.(*connReader).backgroundRead(0x2ec91db22940)
+	/usr/lib/go/src/net/http/server.go:702 +0x33 fp=0x2ec91e7cbfc8 sp=0x2ec91e7cbf80 pc=0x704b53
+net/http.(*connReader).startBackgroundRead.gowrap2()
+	/usr/lib/go/src/net/http/server.go:698 +0x17 fp=0x2ec91e7cbfe0 sp=0x2ec91e7cbfc8 pc=0x704ab7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e7cbfe8 sp=0x2ec91e7cbfe0 pc=0x4921a1
+created by net/http.(*connReader).startBackgroundRead in goroutine 207
+	/usr/lib/go/src/net/http/server.go:698 +0xb6
+
+goroutine 120 gp=0x2ec91d883c20 m=nil [chan receive]:
+runtime.gopark(0x82ec80?, 0x423605?, 0x0?, 0xc6?, 0x2ec91d7e2570?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7e2530 sp=0x2ec91d7e2510 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e690, 0x2ec91d7e2780, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7e25a8 sp=0x2ec91d7e2530 pc=0x41ae4e
+runtime.chanrecv2(0x2ec91d7e2600?, 0x5efef0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7e25d0 sp=0x2ec91d7e25a8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d94a6e0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d7e27c8 sp=0x2ec91d7e25d0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d7e27e0 sp=0x2ec91d7e27c8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7e27e8 sp=0x2ec91d7e27e0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 121 gp=0x2ec91d7545a0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7e2d30 sp=0x2ec91d7e2d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e690, 0x2ec91d7e2f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7e2da8 sp=0x2ec91d7e2d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7e2dd0 sp=0x2ec91d7e2da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d94a6e0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d7e2fc8 sp=0x2ec91d7e2dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d7e2fe0 sp=0x2ec91d7e2fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7e2fe8 sp=0x2ec91d7e2fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 122 gp=0x2ec91d754780 m=nil [chan receive]:
+runtime.gopark(0x2ec91db1abd0?, 0x741560?, 0x60?, 0xaa?, 0x2ec91d8bc100?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91dbf7e40 sp=0x2ec91dbf7e20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e700, 0x2ec91dbf7f88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91dbf7eb8 sp=0x2ec91dbf7e40 pc=0x41ae4e
+runtime.chanrecv2(0x2ec91dd24030?, 0x17?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91dbf7ee0 sp=0x2ec91dbf7eb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91dbf7fe0 sp=0x2ec91dbf7ee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91dbf7fe8 sp=0x2ec91dbf7fe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 123 gp=0x2ec91d754960 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7e3e40 sp=0x2ec91d7e3e20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93e700, 0x2ec91d7e3f88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d7e3eb8 sp=0x2ec91d7e3e40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d7e3ee0 sp=0x2ec91d7e3eb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d7e3fe0 sp=0x2ec91d7e3ee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7e3fe8 sp=0x2ec91d7e3fe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 23
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 75 gp=0x2ec91d83fc20 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91db18bb0 sp=0x2ec91db18b90 pc=0x48a9ee
+runtime.netpollblock(0xf80008?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91db18be8 sp=0x2ec91db18bb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081e2a00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91db18c08 sp=0x2ec91db18be8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d8de380?, 0x7f0f50078800?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91db18c30 sp=0x2ec91db18c08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d8de380)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91db18cd8 sp=0x2ec91db18c30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d8de380)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91db18d90 sp=0x2ec91db18cd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d7a8140)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91db18de0 sp=0x2ec91db18d90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d7a8140)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91db18e10 sp=0x2ec91db18de0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91db39260)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91db18e50 sp=0x2ec91db18e10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x8bbff8?)
+	<autogenerated>:1 +0x1b fp=0x2ec91db18e68 sp=0x2ec91db18e50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91db64100, {0x8bb708, 0x2ec91db39260})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91db18f98 sp=0x2ec91db18e68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91db18fe0 sp=0x2ec91db18f98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91db18fe8 sp=0x2ec91db18fe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 26
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 213 gp=0x2ec91dd270e0 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91ea27d30 sp=0x2ec91ea27d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93f1f0, 0x2ec91e0c9f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91ea27da8 sp=0x2ec91ea27d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91ea27dd0 sp=0x2ec91ea27da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91dd045f0)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91ea27fc8 sp=0x2ec91ea27dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91ea27fe0 sp=0x2ec91ea27fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91ea27fe8 sp=0x2ec91ea27fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 25
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 189 gp=0x2ec91dd274a0 m=nil [select]:
+runtime.gopark(0x2ec91df2ff48?, 0x2?, 0x20?, 0x61?, 0x2ec91df2fef4?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d85bd88 sp=0x2ec91d85bd68 pc=0x48a9ee
+runtime.selectgo(0x2ec91d85bf48, 0x2ec91df2fef0, 0x2ec91d7a8a40?, 0x0, 0x2ec91d9512c0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91d85beb8 sp=0x2ec91d85bd88 pc=0x467725
+net/http.(*persistConn).writeLoop(0x2ec91d878780)
+	/usr/lib/go/src/net/http/transport.go:2652 +0xe6 fp=0x2ec91d85bfc8 sp=0x2ec91d85beb8 pc=0x725fe6
+net/http.(*Transport).dialConn.gowrap3()
+	/usr/lib/go/src/net/http/transport.go:1995 +0x17 fp=0x2ec91d85bfe0 sp=0x2ec91d85bfc8 pc=0x723017
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d85bfe8 sp=0x2ec91d85bfe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 46
+	/usr/lib/go/src/net/http/transport.go:1995 +0x16fe
+
+goroutine 250 gp=0x2ec91d985a40 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x2ec91e241b60?, 0x52?, 0xfd?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e953b28 sp=0x2ec91e953b08 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e953b60 sp=0x2ec91e953b28 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081e2c00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e953b80 sp=0x2ec91e953b60 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dc9e480?, 0x2ec91db6e000?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e953ba8 sp=0x2ec91e953b80 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91dc9e480, {0x2ec91db6e000, 0x1000, 0x1000})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e953c40 sp=0x2ec91e953ba8 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91dc9e480, {0x2ec91db6e000?, 0x5?, 0x2ec91d56ad90?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e953c88 sp=0x2ec91e953c40 pc=0x5dfea5
+net.(*conn).Read(0x2ec91da02160, {0x2ec91db6e000?, 0x7f0f500790f8?, 0x70?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e953cd0 sp=0x2ec91e953c88 pc=0x5e9065
+net/http.(*persistConn).Read(0x2ec91ddbaf00, {0x2ec91db6e000?, 0x70?, 0x0?})
+	/usr/lib/go/src/net/http/transport.go:2174 +0x47 fp=0x2ec91e953d30 sp=0x2ec91e953cd0 pc=0x723b27
+bufio.(*Reader).fill(0x2ec91dc98060)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91e953d68 sp=0x2ec91e953d30 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91dc98060, 0x1)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91e953d80 sp=0x2ec91e953d68 pc=0x508293
+net/http.(*persistConn).readLoop(0x2ec91ddbaf00)
+	/usr/lib/go/src/net/http/transport.go:2330 +0x172 fp=0x2ec91e953fc8 sp=0x2ec91e953d80 pc=0x724632
+net/http.(*Transport).dialConn.gowrap2()
+	/usr/lib/go/src/net/http/transport.go:1994 +0x17 fp=0x2ec91e953fe0 sp=0x2ec91e953fc8 pc=0x723057
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e953fe8 sp=0x2ec91e953fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 232
+	/usr/lib/go/src/net/http/transport.go:1994 +0x16ac
+
+goroutine 133 gp=0x2ec91dab6960 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d961530 sp=0x2ec91d961510 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a380, 0x2ec91d961780, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d9615a8 sp=0x2ec91d961530 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d9615d0 sp=0x2ec91d9615a8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d7ca640)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d9617c8 sp=0x2ec91d9615d0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d9617e0 sp=0x2ec91d9617c8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d9617e8 sp=0x2ec91d9617e0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 14
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 134 gp=0x2ec91dab6b40 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d961d30 sp=0x2ec91d961d10 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a380, 0x2ec91d961f80, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d961da8 sp=0x2ec91d961d30 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d961dd0 sp=0x2ec91d961da8 pc=0x41a992
+proxyma/internal/compute.(*ComputeEngine).serviceWorker(0x2ec91d7ca640)
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:76 +0x66 fp=0x2ec91d961fc8 sp=0x2ec91d961dd0 pc=0x73b0e6
+proxyma/internal/compute.NewComputeEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x17 fp=0x2ec91d961fe0 sp=0x2ec91d961fc8 pc=0x73ac57
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d961fe8 sp=0x2ec91d961fe0 pc=0x4921a1
+created by proxyma/internal/compute.NewComputeEngine in goroutine 14
+	/home/drusila/Projects/proxyma/internal/compute/compute.go:37 +0x16b
+
+goroutine 135 gp=0x2ec91dab6d20 m=nil [select]:
+runtime.gopark(0x2ec91dadd498?, 0x5?, 0x28?, 0xe3?, 0x2ec91dadd33e?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91dadd1d0 sp=0x2ec91dadd1b0 pc=0x48a9ee
+runtime.selectgo(0x2ec91dadd498, 0x2ec91dadd334, 0x88f6f9?, 0x0, 0x2ec91daa6a80?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91dadd300 sp=0x2ec91dadd1d0 pc=0x467725
+net/http.(*persistConn).roundTrip(0x2ec91e392000, 0x2ec91d7cbd10)
+	/usr/lib/go/src/net/http/transport.go:2911 +0x83d fp=0x2ec91dadd530 sp=0x2ec91dadd300 pc=0x72701d
+net/http.(*Transport).roundTrip(0x2ec91d6c8340, 0x2ec91dc68780)
+	/usr/lib/go/src/net/http/transport.go:704 +0xaba fp=0x2ec91dadd710 sp=0x2ec91dadd530 pc=0x71ab5a
+net/http.(*Transport).RoundTrip(0x5000000000000?, 0x8b7ea0?)
+	/usr/lib/go/src/net/http/roundtrip.go:33 +0x18 fp=0x2ec91dadd730 sp=0x2ec91dadd710 pc=0x729cf8
+net/http.send(0x2ec91dc68780, {0x8b7ea0, 0x2ec91d6c8340}, {0x2ec91d9e19a8?, 0x48d306?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:264 +0x64b fp=0x2ec91dadd920 sp=0x2ec91dadd730 pc=0x6c53cb
+net/http.(*Client).send(0x2ec91dc9c000, 0x2ec91dc68780, {0x2ec91d9e1a01?, 0x2ec91d9e1a30?, 0x0?})
+	/usr/lib/go/src/net/http/client.go:185 +0x258 fp=0x2ec91dadd9b8 sp=0x2ec91dadd920 pc=0x6c4c18
+net/http.(*Client).do(0x2ec91dc9c000, 0x2ec91dc68780)
+	/usr/lib/go/src/net/http/client.go:733 +0x9d7 fp=0x2ec91daddba8 sp=0x2ec91dadd9b8 pc=0x6c7177
+net/http.(*Client).Do(...)
+	/usr/lib/go/src/net/http/client.go:592
+proxyma/internal/p2p.(*HTTPPeerClient).DownloadBlob(0x2ec91d558148, {0x8bc180, 0x2ec91d8cccb0}, {0x2ec91d7ae2d0?, 0x4683f7?}, {0x2ec91d784b90, 0xc})
+	/home/drusila/Projects/proxyma/internal/p2p/p2p_client.go:84 +0x105 fp=0x2ec91daddc30 sp=0x2ec91daddba8 pc=0x738145
+proxyma/internal/storage.(*StorageEngine).downloadFileFromPeer(0x2ec91d7cad70, {{0x2ec91d784b80, 0xa}, 0x64, {0x2ec91d784b90, 0xc}, 0x0, 0x0}, {0x2ec91d7ae2d0, 0x16})
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:162 +0x295 fp=0x2ec91daddee0 sp=0x2ec91daddc30 pc=0x740d75
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:191
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0xf9 fp=0x2ec91daddfe0 sp=0x2ec91daddee0 pc=0x73f899
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91daddfe8 sp=0x2ec91daddfe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 14
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 136 gp=0x2ec91dab6f00 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d95ae40 sp=0x2ec91d95ae20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91db1a3f0, 0x2ec91d95af88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91d95aeb8 sp=0x2ec91d95ae40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91d95aee0 sp=0x2ec91d95aeb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91d95afe0 sp=0x2ec91d95aee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d95afe8 sp=0x2ec91d95afe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 14
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 215 gp=0x2ec91d754b40 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x2ec91d934280?, 0xe0?, 0xe?, 0x8b8e40?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91df2fe40 sp=0x2ec91df2fe20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93f260, 0x2ec91dd67f88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91df2feb8 sp=0x2ec91df2fe40 pc=0x41ae4e
+runtime.chanrecv2(0x2ec91d680e70?, 0x1?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91df2fee0 sp=0x2ec91df2feb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91df2ffe0 sp=0x2ec91df2fee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91df2ffe8 sp=0x2ec91df2ffe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 25
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 77 gp=0x2ec91dd32960 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5dfbb0 sp=0x2ec91d5dfb90 pc=0x48a9ee
+runtime.netpollblock(0x2ec91d5dfc00?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d5dfbe8 sp=0x2ec91d5dfbb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081e2600, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d5dfc08 sp=0x2ec91d5dfbe8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d956480?, 0x7f0f5006c6d8?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d5dfc30 sp=0x2ec91d5dfc08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d956480)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d5dfcd8 sp=0x2ec91d5dfc30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d956480)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d5dfd90 sp=0x2ec91d5dfcd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d8323c0)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d5dfde0 sp=0x2ec91d5dfd90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d8323c0)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d5dfe10 sp=0x2ec91d5dfde0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91d80ad80)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91d5dfe50 sp=0x2ec91d5dfe10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x2ec91db28ea0?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d5dfe68 sp=0x2ec91d5dfe50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d97a100, {0x8bb708, 0x2ec91d80ad80})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d5dff98 sp=0x2ec91d5dfe68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d5dffe0 sp=0x2ec91d5dff98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5dffe8 sp=0x2ec91d5dffe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 23
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 233 gp=0x2ec91d7d9680 m=nil [sleep]:
+runtime.gopark(0x1b4645dfed0?, 0x2ec91e09dae8?, 0xc9?, 0xf9?, 0x7f0f08399000?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e963a88 sp=0x2ec91e963a68 pc=0x48a9ee
+time.Sleep(0x3b9aca00)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91e963ae0 sp=0x2ec91e963a88 pc=0x48e9c5
+command-line-arguments.Test12WorkerPoolLimitsConcurrency.func1({0x8bb950, 0x2ec91e1b42d0}, 0x2ec91ddbb040)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:450 +0x34 fp=0x2ec91e963b38 sp=0x2ec91e963ae0 pc=0x75d774
+net/http.HandlerFunc.ServeHTTP(0x4876d9?, {0x8bb950?, 0x2ec91e1b42d0?}, 0x2ec91e09db68?)
+	/usr/lib/go/src/net/http/server.go:2286 +0x29 fp=0x2ec91e963b60 sp=0x2ec91e963b38 pc=0x70ca29
+net/http.serverHandler.ServeHTTP({0x2ec91db22880?}, {0x8bb950?, 0x2ec91e1b42d0?}, 0x1?)
+	/usr/lib/go/src/net/http/server.go:3311 +0x8e fp=0x2ec91e963b90 sp=0x2ec91e963b60 pc=0x729dce
+net/http.(*conn).serve(0x2ec91da1ebd0, {0x8bc0d8, 0x2ec91da14120})
+	/usr/lib/go/src/net/http/server.go:2073 +0x650 fp=0x2ec91e963fb8 sp=0x2ec91e963b90 pc=0x70ae90
+net/http.(*Server).Serve.gowrap3()
+	/usr/lib/go/src/net/http/server.go:3464 +0x1f fp=0x2ec91e963fe0 sp=0x2ec91e963fb8 pc=0x7100df
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e963fe8 sp=0x2ec91e963fe0 pc=0x4921a1
+created by net/http.(*Server).Serve in goroutine 34
+	/usr/lib/go/src/net/http/server.go:3464 +0x485
+
+goroutine 188 gp=0x2ec91e1163c0 m=nil [IO wait]:
+runtime.gopark(0x890309?, 0x11?, 0xb2?, 0x5?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e7d3b28 sp=0x2ec91e7d3b08 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e7d3b60 sp=0x2ec91e7d3b28 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f08106a00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e7d3b80 sp=0x2ec91e7d3b60 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91ddc2280?, 0x2ec91dfb0000?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e7d3ba8 sp=0x2ec91e7d3b80 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91ddc2280, {0x2ec91dfb0000, 0x1000, 0x1000})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e7d3c40 sp=0x2ec91e7d3ba8 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91ddc2280, {0x2ec91dfb0000?, 0x7f0f081a9c80?, 0x13?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e7d3c88 sp=0x2ec91e7d3c40 pc=0x5dfea5
+net.(*conn).Read(0x2ec91dda6088, {0x2ec91dfb0000?, 0x7f0f500799f0?, 0x70?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e7d3cd0 sp=0x2ec91e7d3c88 pc=0x5e9065
+net/http.(*persistConn).Read(0x2ec91d878780, {0x2ec91dfb0000?, 0x70?, 0x0?})
+	/usr/lib/go/src/net/http/transport.go:2174 +0x47 fp=0x2ec91e7d3d30 sp=0x2ec91e7d3cd0 pc=0x723b27
+bufio.(*Reader).fill(0x2ec91d65b3e0)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91e7d3d68 sp=0x2ec91e7d3d30 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91d65b3e0, 0x1)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91e7d3d80 sp=0x2ec91e7d3d68 pc=0x508293
+net/http.(*persistConn).readLoop(0x2ec91d878780)
+	/usr/lib/go/src/net/http/transport.go:2330 +0x172 fp=0x2ec91e7d3fc8 sp=0x2ec91e7d3d80 pc=0x724632
+net/http.(*Transport).dialConn.gowrap2()
+	/usr/lib/go/src/net/http/transport.go:1994 +0x17 fp=0x2ec91e7d3fe0 sp=0x2ec91e7d3fc8 pc=0x723057
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e7d3fe8 sp=0x2ec91e7d3fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 46
+	/usr/lib/go/src/net/http/transport.go:1994 +0x16ac
+
+goroutine 235 gp=0x2ec91d905c20 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e57bdd8 sp=0x2ec91e57bdb8 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e57be10 sp=0x2ec91e57bdd8 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f08399000, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e57be30 sp=0x2ec91e57be10 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dc9e500?, 0x2ec91db228a1?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e57be58 sp=0x2ec91e57be30 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91dc9e500, {0x2ec91db228a1, 0x1, 0x1})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e57bef0 sp=0x2ec91e57be58 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91dc9e500, {0x2ec91db228a1?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e57bf38 sp=0x2ec91e57bef0 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d5581a0, {0x2ec91db228a1?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e57bf80 sp=0x2ec91e57bf38 pc=0x5e9065
+net/http.(*connReader).backgroundRead(0x2ec91db22880)
+	/usr/lib/go/src/net/http/server.go:702 +0x33 fp=0x2ec91e57bfc8 sp=0x2ec91e57bf80 pc=0x704b53
+net/http.(*connReader).startBackgroundRead.gowrap2()
+	/usr/lib/go/src/net/http/server.go:698 +0x17 fp=0x2ec91e57bfe0 sp=0x2ec91e57bfc8 pc=0x704ab7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e57bfe8 sp=0x2ec91e57bfe0 pc=0x4921a1
+created by net/http.(*connReader).startBackgroundRead in goroutine 233
+	/usr/lib/go/src/net/http/server.go:698 +0xb6
+
+goroutine 285 gp=0x2ec91d605c20 m=nil [select]:
+runtime.gopark(0x2ec91dbf3f08?, 0x3?, 0x60?, 0x2e?, 0x2ec91dbf3dca?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91ea37c50 sp=0x2ec91ea37c30 pc=0x48a9ee
+runtime.selectgo(0x2ec91ea37f08, 0x2ec91dbf3dc4, 0x2ec91d87e8c0?, 0x0, 0x0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91ea37d80 sp=0x2ec91ea37c50 pc=0x467725
+net/http.(*persistConn).readLoop(0x2ec91d8792c0)
+	/usr/lib/go/src/net/http/transport.go:2450 +0xc05 fp=0x2ec91ea37fc8 sp=0x2ec91ea37d80 pc=0x7250c5
+net/http.(*Transport).dialConn.gowrap2()
+	/usr/lib/go/src/net/http/transport.go:1994 +0x17 fp=0x2ec91ea37fe0 sp=0x2ec91ea37fc8 pc=0x723057
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91ea37fe8 sp=0x2ec91ea37fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 282
+	/usr/lib/go/src/net/http/transport.go:1994 +0x16ac
+
+goroutine 96 gp=0x2ec91dcc90e0 m=nil [cleanup wait]:
+runtime.gopark(0x7f0f0078ca00?, 0x2ec91d5c8790?, 0x75?, 0xb?, 0x7f0f0078ca00?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5c8768 sp=0x2ec91d5c8748 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.(*cleanupQueue).dequeue(0xc0fc40)
+	/usr/lib/go/src/runtime/mcleanup.go:522 +0xd4 fp=0x2ec91d5c87a0 sp=0x2ec91d5c8768 pc=0x4289b4
+runtime.runCleanups()
+	/usr/lib/go/src/runtime/mcleanup.go:718 +0x45 fp=0x2ec91d5c87e0 sp=0x2ec91d5c87a0 pc=0x429025
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5c87e8 sp=0x2ec91d5c87e0 pc=0x4921a1
+created by runtime.(*cleanupQueue).createGs in goroutine 12
+	/usr/lib/go/src/runtime/mcleanup.go:672 +0xa5
+
+goroutine 97 gp=0x2ec91dcc92c0 m=nil [cleanup wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d7de768 sp=0x2ec91d7de748 pc=0x48a9ee
+runtime.goparkunlock(...)
+	/usr/lib/go/src/runtime/proc.go:468
+runtime.(*cleanupQueue).dequeue(0xc0fc40)
+	/usr/lib/go/src/runtime/mcleanup.go:522 +0xd4 fp=0x2ec91d7de7a0 sp=0x2ec91d7de768 pc=0x4289b4
+runtime.runCleanups()
+	/usr/lib/go/src/runtime/mcleanup.go:718 +0x45 fp=0x2ec91d7de7e0 sp=0x2ec91d7de7a0 pc=0x429025
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d7de7e8 sp=0x2ec91d7de7e0 pc=0x4921a1
+created by runtime.(*cleanupQueue).createGs in goroutine 12
+	/usr/lib/go/src/runtime/mcleanup.go:672 +0xa5
+
+goroutine 80 gp=0x2ec91dd334a0 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d6fabb0 sp=0x2ec91d6fab90 pc=0x48a9ee
+runtime.netpollblock(0x2ec91d6fac00?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d6fabe8 sp=0x2ec91d6fabb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f08106800, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d6fac08 sp=0x2ec91d6fabe8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d8de600?, 0x7f0f500790f8?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d6fac30 sp=0x2ec91d6fac08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91d8de600)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d6facd8 sp=0x2ec91d6fac30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91d8de600)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d6fad90 sp=0x2ec91d6facd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d638000)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d6fade0 sp=0x2ec91d6fad90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d638000)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d6fae10 sp=0x2ec91d6fade0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91d80af00)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91d6fae50 sp=0x2ec91d6fae10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x2ec91da1e630?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d6fae68 sp=0x2ec91d6fae50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d7fc200, {0x8bb708, 0x2ec91d80af00})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d6faf98 sp=0x2ec91d6fae68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d6fafe0 sp=0x2ec91d6faf98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d6fafe8 sp=0x2ec91d6fafe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 14
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 458 gp=0x2ec91dab7a40 m=nil [select]:
+runtime.gopark(0x2ec91e60ff48?, 0x2?, 0x20?, 0x61?, 0x2ec91e60fef4?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e60fd88 sp=0x2ec91e60fd68 pc=0x48a9ee
+runtime.selectgo(0x2ec91e60ff48, 0x2ec91e60fef0, 0x2ec91d8adc40?, 0x0, 0x2ec91e6800f0?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91e60feb8 sp=0x2ec91e60fd88 pc=0x467725
+net/http.(*persistConn).writeLoop(0x2ec91de03900)
+	/usr/lib/go/src/net/http/transport.go:2652 +0xe6 fp=0x2ec91e60ffc8 sp=0x2ec91e60feb8 pc=0x725fe6
+net/http.(*Transport).dialConn.gowrap3()
+	/usr/lib/go/src/net/http/transport.go:1995 +0x17 fp=0x2ec91e60ffe0 sp=0x2ec91e60ffc8 pc=0x723017
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e60ffe8 sp=0x2ec91e60ffe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 390
+	/usr/lib/go/src/net/http/transport.go:1995 +0x16fe
+
+goroutine 214 gp=0x2ec91d6ffc20 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x0?, 0x30?, 0x69?, 0x8b7d40?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91eb0fe40 sp=0x2ec91eb0fe20 pc=0x48a9ee
+runtime.chanrecv(0x2ec91d93f260, 0x2ec91e28ff88, 0x1)
+	/usr/lib/go/src/runtime/chan.go:667 +0x4ae fp=0x2ec91eb0feb8 sp=0x2ec91eb0fe40 pc=0x41ae4e
+runtime.chanrecv2(0x0?, 0x0?)
+	/usr/lib/go/src/runtime/chan.go:514 +0x12 fp=0x2ec91eb0fee0 sp=0x2ec91eb0feb8 pc=0x41a992
+proxyma/internal/storage.(*StorageEngine).downloadWorker(...)
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:190
+proxyma/internal/storage.NewStorageEngine.gowrap1()
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x10e fp=0x2ec91eb0ffe0 sp=0x2ec91eb0fee0 pc=0x73f8ae
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91eb0ffe8 sp=0x2ec91eb0ffe0 pc=0x4921a1
+created by proxyma/internal/storage.NewStorageEngine in goroutine 25
+	/home/drusila/Projects/proxyma/internal/storage/storage_engine.go:43 +0x1a5
+
+goroutine 207 gp=0x2ec91da65680 m=nil [sleep]:
+runtime.gopark(0x1b4640f517b?, 0x2ec91d9dcae8?, 0xc9?, 0xf9?, 0x7f0f08399e00?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d9dca88 sp=0x2ec91d9dca68 pc=0x48a9ee
+time.Sleep(0x3b9aca00)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91d9dcae0 sp=0x2ec91d9dca88 pc=0x48e9c5
+command-line-arguments.Test12WorkerPoolLimitsConcurrency.func1({0x8bb950, 0x2ec91d7fea50}, 0x2ec91d82e8c0)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:450 +0x34 fp=0x2ec91d9dcb38 sp=0x2ec91d9dcae0 pc=0x75d774
+net/http.HandlerFunc.ServeHTTP(0x4876d9?, {0x8bb950?, 0x2ec91d7fea50?}, 0x2ec91d9dcb68?)
+	/usr/lib/go/src/net/http/server.go:2286 +0x29 fp=0x2ec91d9dcb60 sp=0x2ec91d9dcb38 pc=0x70ca29
+net/http.serverHandler.ServeHTTP({0x2ec91db22940?}, {0x8bb950?, 0x2ec91d7fea50?}, 0x1?)
+	/usr/lib/go/src/net/http/server.go:3311 +0x8e fp=0x2ec91d9dcb90 sp=0x2ec91d9dcb60 pc=0x729dce
+net/http.(*conn).serve(0x2ec91d89ce10, {0x8bc0d8, 0x2ec91da14120})
+	/usr/lib/go/src/net/http/server.go:2073 +0x650 fp=0x2ec91d9dcfb8 sp=0x2ec91d9dcb90 pc=0x70ae90
+net/http.(*Server).Serve.gowrap3()
+	/usr/lib/go/src/net/http/server.go:3464 +0x1f fp=0x2ec91d9dcfe0 sp=0x2ec91d9dcfb8 pc=0x7100df
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d9dcfe8 sp=0x2ec91d9dcfe0 pc=0x4921a1
+created by net/http.(*Server).Serve in goroutine 34
+	/usr/lib/go/src/net/http/server.go:3464 +0x485
+
+goroutine 246 gp=0x2ec91e2163c0 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91eb2fdd8 sp=0x2ec91eb2fdb8 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91eb2fe10 sp=0x2ec91eb2fdd8 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f08399800, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91eb2fe30 sp=0x2ec91eb2fe10 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dd30380?, 0x2ec91da18221?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91eb2fe58 sp=0x2ec91eb2fe30 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91dd30380, {0x2ec91da18221, 0x1, 0x1})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91eb2fef0 sp=0x2ec91eb2fe58 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91dd30380, {0x2ec91da18221?, 0x2ec91d87e0e0?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91eb2ff38 sp=0x2ec91eb2fef0 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d81e0c0, {0x2ec91da18221?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91eb2ff80 sp=0x2ec91eb2ff38 pc=0x5e9065
+net/http.(*connReader).backgroundRead(0x2ec91da18200)
+	/usr/lib/go/src/net/http/server.go:702 +0x33 fp=0x2ec91eb2ffc8 sp=0x2ec91eb2ff80 pc=0x704b53
+net/http.(*connReader).startBackgroundRead.gowrap2()
+	/usr/lib/go/src/net/http/server.go:698 +0x17 fp=0x2ec91eb2ffe0 sp=0x2ec91eb2ffc8 pc=0x704ab7
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91eb2ffe8 sp=0x2ec91eb2ffe0 pc=0x4921a1
+created by net/http.(*connReader).startBackgroundRead in goroutine 293
+	/usr/lib/go/src/net/http/server.go:698 +0xb6
+
+goroutine 293 gp=0x2ec91e390000 m=nil [sleep]:
+runtime.gopark(0x1b464130706?, 0x2ec91da00008?, 0xf0?, 0x24?, 0x2ec91ddddb08?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91ea47ac0 sp=0x2ec91ea47aa0 pc=0x48a9ee
+time.Sleep(0x12a05f200)
+	/usr/lib/go/src/runtime/time.go:363 +0x165 fp=0x2ec91ea47b18 sp=0x2ec91ea47ac0 pc=0x48e9c5
+command-line-arguments.Test07NetworkRequestRespectsTimeouts.func1({0x8bb950, 0x2ec91d9761e0}, 0x0?)
+	/home/drusila/Projects/proxyma/cmd/proxyma/main_test.go:305 +0x27 fp=0x2ec91ea47b38 sp=0x2ec91ea47b18 pc=0x760bc7
+net/http.HandlerFunc.ServeHTTP(0x4876d9?, {0x8bb950?, 0x2ec91d9761e0?}, 0x2ec91ddddb68?)
+	/usr/lib/go/src/net/http/server.go:2286 +0x29 fp=0x2ec91ea47b60 sp=0x2ec91ea47b38 pc=0x70ca29
+net/http.serverHandler.ServeHTTP({0x2ec91da18200?}, {0x8bb950?, 0x2ec91d9761e0?}, 0x1?)
+	/usr/lib/go/src/net/http/server.go:3311 +0x8e fp=0x2ec91ea47b90 sp=0x2ec91ea47b60 pc=0x729dce
+net/http.(*conn).serve(0x2ec91e3a6000, {0x8bc0d8, 0x2ec91d7382a0})
+	/usr/lib/go/src/net/http/server.go:2073 +0x650 fp=0x2ec91ea47fb8 sp=0x2ec91ea47b90 pc=0x70ae90
+net/http.(*Server).Serve.gowrap3()
+	/usr/lib/go/src/net/http/server.go:3464 +0x1f fp=0x2ec91ea47fe0 sp=0x2ec91ea47fb8 pc=0x7100df
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91ea47fe8 sp=0x2ec91ea47fe0 pc=0x4921a1
+created by net/http.(*Server).Serve in goroutine 146
+	/usr/lib/go/src/net/http/server.go:3464 +0x485
+
+goroutine 291 gp=0x2ec91e3901e0 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e223b28 sp=0x2ec91e223b08 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e223b60 sp=0x2ec91e223b28 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f0839ac00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e223b80 sp=0x2ec91e223b60 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dd30300?, 0x2ec91e3a2000?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e223ba8 sp=0x2ec91e223b80 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91dd30300, {0x2ec91e3a2000, 0x1000, 0x1000})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e223c40 sp=0x2ec91e223ba8 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91dd30300, {0x2ec91e3a2000?, 0x0?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e223c88 sp=0x2ec91e223c40 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d81e0b8, {0x2ec91e3a2000?, 0x7f0f500799f0?, 0x70?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e223cd0 sp=0x2ec91e223c88 pc=0x5e9065
+net/http.(*persistConn).Read(0x2ec91e392000, {0x2ec91e3a2000?, 0x70?, 0x0?})
+	/usr/lib/go/src/net/http/transport.go:2174 +0x47 fp=0x2ec91e223d30 sp=0x2ec91e223cd0 pc=0x723b27
+bufio.(*Reader).fill(0x2ec91e3a0000)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91e223d68 sp=0x2ec91e223d30 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91e3a0000, 0x1)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91e223d80 sp=0x2ec91e223d68 pc=0x508293
+net/http.(*persistConn).readLoop(0x2ec91e392000)
+	/usr/lib/go/src/net/http/transport.go:2330 +0x172 fp=0x2ec91e223fc8 sp=0x2ec91e223d80 pc=0x724632
+net/http.(*Transport).dialConn.gowrap2()
+	/usr/lib/go/src/net/http/transport.go:1994 +0x17 fp=0x2ec91e223fe0 sp=0x2ec91e223fc8 pc=0x723057
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e223fe8 sp=0x2ec91e223fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 290
+	/usr/lib/go/src/net/http/transport.go:1994 +0x16ac
+
+goroutine 292 gp=0x2ec91e3903c0 m=nil [select]:
+runtime.gopark(0x2ec91e224f48?, 0x2?, 0x20?, 0x61?, 0x2ec91e224ef4?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e224d88 sp=0x2ec91e224d68 pc=0x48a9ee
+runtime.selectgo(0x2ec91e224f48, 0x2ec91e224ef0, 0x2ec91da18180?, 0x0, 0x2ec91db1e420?, 0x1)
+	/usr/lib/go/src/runtime/select.go:351 +0xaa5 fp=0x2ec91e224eb8 sp=0x2ec91e224d88 pc=0x467725
+net/http.(*persistConn).writeLoop(0x2ec91e392000)
+	/usr/lib/go/src/net/http/transport.go:2652 +0xe6 fp=0x2ec91e224fc8 sp=0x2ec91e224eb8 pc=0x725fe6
+net/http.(*Transport).dialConn.gowrap3()
+	/usr/lib/go/src/net/http/transport.go:1995 +0x17 fp=0x2ec91e224fe0 sp=0x2ec91e224fc8 pc=0x723017
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e224fe8 sp=0x2ec91e224fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 290
+	/usr/lib/go/src/net/http/transport.go:1995 +0x16fe
+
+goroutine 259 gp=0x2ec91e390780 m=nil [IO wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91d5dbbb0 sp=0x2ec91d5dbb90 pc=0x48a9ee
+runtime.netpollblock(0x0?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91d5dbbe8 sp=0x2ec91d5dbbb0 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f0810ec00, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91d5dbc08 sp=0x2ec91d5dbbe8 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dd14500?, 0x2ec91d5dbc70?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91d5dbc30 sp=0x2ec91d5dbc08 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x2ec91dd14500)
+	/usr/lib/go/src/internal/poll/fd_unix.go:613 +0x28c fp=0x2ec91d5dbcd8 sp=0x2ec91d5dbc30 pc=0x4c0dcc
+net.(*netFD).accept(0x2ec91dd14500)
+	/usr/lib/go/src/net/fd_unix.go:150 +0x29 fp=0x2ec91d5dbd90 sp=0x2ec91d5dbcd8 pc=0x5e0de9
+net.(*TCPListener).accept(0x2ec91d57b440)
+	/usr/lib/go/src/net/tcpsock_posix.go:159 +0x1b fp=0x2ec91d5dbde0 sp=0x2ec91d5dbd90 pc=0x5f0b1b
+net.(*TCPListener).Accept(0x2ec91d57b440)
+	/usr/lib/go/src/net/tcpsock.go:387 +0x30 fp=0x2ec91d5dbe10 sp=0x2ec91d5dbde0 pc=0x5efef0
+crypto/tls.(*listener).Accept(0x2ec91db92150)
+	/usr/lib/go/src/crypto/tls/tls.go:78 +0x24 fp=0x2ec91d5dbe50 sp=0x2ec91d5dbe10 pc=0x691e64
+net/http.(*onceCloseListener).Accept(0x8bbff8?)
+	<autogenerated>:1 +0x1b fp=0x2ec91d5dbe68 sp=0x2ec91d5dbe50 pc=0x7320fb
+net/http.(*Server).Serve(0x2ec91d7fc400, {0x8bb708, 0x2ec91db92150})
+	/usr/lib/go/src/net/http/server.go:3434 +0x30c fp=0x2ec91d5dbf98 sp=0x2ec91d5dbe68 pc=0x70fcec
+net/http/httptest.(*Server).goServe.func1()
+	/usr/lib/go/src/net/http/httptest/server.go:341 +0x55 fp=0x2ec91d5dbfe0 sp=0x2ec91d5dbf98 pc=0x737735
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91d5dbfe8 sp=0x2ec91d5dbfe0 pc=0x4921a1
+created by net/http/httptest.(*Server).goServe in goroutine 25
+	/usr/lib/go/src/net/http/httptest/server.go:339 +0x65
+
+goroutine 284 gp=0x2ec91e116000 m=nil [IO wait]:
+runtime.gopark(0x4a3d4d?, 0x775f4f?, 0xc9?, 0x67?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91eb37618 sp=0x2ec91eb375f8 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91eb37650 sp=0x2ec91eb37618 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f0810e200, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91eb37670 sp=0x2ec91eb37650 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d81cd80?, 0x2ec91df69000?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91eb37698 sp=0x2ec91eb37670 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91d81cd80, {0x2ec91df69000, 0x800, 0x800})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91eb37730 sp=0x2ec91eb37698 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91d81cd80, {0x2ec91df69000?, 0x35?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91eb37778 sp=0x2ec91eb37730 pc=0x5dfea5
+net.(*conn).Read(0x2ec91db02210, {0x2ec91df69000?, 0x7f0f080a13e8?, 0x7f0f5007a2e8?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91eb377c0 sp=0x2ec91eb37778 pc=0x5e9065
+crypto/tls.(*atLeastReader).Read(0x2ec91dd10df8, {0x2ec91df69000?, 0x2ec91e116000?, 0x2ec91e4f18b0?})
+	/usr/lib/go/src/crypto/tls/conn.go:815 +0x3b fp=0x2ec91eb37808 sp=0x2ec91eb377c0 pc=0x64b9bb
+bytes.(*Buffer).ReadFrom(0x2ec91d6a9ea8, {0x8b8480, 0x2ec91dd10df8})
+	/usr/lib/go/src/bytes/buffer.go:229 +0x98 fp=0x2ec91eb37860 sp=0x2ec91eb37808 pc=0x503f58
+crypto/tls.(*Conn).readFromUntil(0x2ec91d6a9c08, {0x8b93e0, 0x2ec91db02210}, 0x2ec91e4f1a70?)
+	/usr/lib/go/src/crypto/tls/conn.go:837 +0xde fp=0x2ec91eb37898 sp=0x2ec91eb37860 pc=0x64bb9e
+crypto/tls.(*Conn).readRecordOrCCS(0x2ec91d6a9c08, 0x0)
+	/usr/lib/go/src/crypto/tls/conn.go:626 +0x3db fp=0x2ec91eb37a80 sp=0x2ec91eb37898 pc=0x648c7b
+crypto/tls.(*Conn).readRecord(...)
+	/usr/lib/go/src/crypto/tls/conn.go:588
+crypto/tls.(*Conn).Read(0x2ec91d6a9c08, {0x2ec91e59e000, 0x1000, 0x2ec91e4f1af0?})
+	/usr/lib/go/src/crypto/tls/conn.go:1393 +0x145 fp=0x2ec91eb37ae8 sp=0x2ec91eb37a80 pc=0x64f385
+net/http.(*connReader).Read(0x2ec91d929940, {0x2ec91e59e000, 0x1000, 0x1000})
+	/usr/lib/go/src/net/http/server.go:812 +0x154 fp=0x2ec91eb37b40 sp=0x2ec91eb37ae8 pc=0x704fb4
+bufio.(*Reader).fill(0x2ec91e59c000)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91eb37b78 sp=0x2ec91eb37b40 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91e59c000, 0x4)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91eb37b90 sp=0x2ec91eb37b78 pc=0x508293
+net/http.(*conn).serve(0x2ec91db28ea0, {0x8bc0d8, 0x2ec91daafda0})
+	/usr/lib/go/src/net/http/server.go:2109 +0x7b3 fp=0x2ec91eb37fb8 sp=0x2ec91eb37b90 pc=0x70aff3
+net/http.(*Server).Serve.gowrap3()
+	/usr/lib/go/src/net/http/server.go:3464 +0x1f fp=0x2ec91eb37fe0 sp=0x2ec91eb37fb8 pc=0x7100df
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91eb37fe8 sp=0x2ec91eb37fe0 pc=0x4921a1
+created by net/http.(*Server).Serve in goroutine 77
+	/usr/lib/go/src/net/http/server.go:3464 +0x485
+
+goroutine 451 gp=0x2ec91dcccb40 m=nil [IO wait]:
+runtime.gopark(0x4a3d4d?, 0x775f4f?, 0xc9?, 0x67?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e5b1618 sp=0x2ec91e5b15f8 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e5b1650 sp=0x2ec91e5b1618 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081fc200, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e5b1670 sp=0x2ec91e5b1650 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91d7d6f80?, 0x2ec91df69800?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e5b1698 sp=0x2ec91e5b1670 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91d7d6f80, {0x2ec91df69800, 0x800, 0x800})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e5b1730 sp=0x2ec91e5b1698 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91d7d6f80, {0x2ec91df69800?, 0x37?, 0x0?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e5b1778 sp=0x2ec91e5b1730 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d9b41a8, {0x2ec91df69800?, 0x7f0f0811f048?, 0x7f0f500790f8?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e5b17c0 sp=0x2ec91e5b1778 pc=0x5e9065
+crypto/tls.(*atLeastReader).Read(0x2ec91d99a060, {0x2ec91df69800?, 0x2ec91dcccb40?, 0x2ec91e5b18b0?})
+	/usr/lib/go/src/crypto/tls/conn.go:815 +0x3b fp=0x2ec91e5b1808 sp=0x2ec91e5b17c0 pc=0x64b9bb
+bytes.(*Buffer).ReadFrom(0x2ec91db617a8, {0x8b8480, 0x2ec91d99a060})
+	/usr/lib/go/src/bytes/buffer.go:229 +0x98 fp=0x2ec91e5b1860 sp=0x2ec91e5b1808 pc=0x503f58
+crypto/tls.(*Conn).readFromUntil(0x2ec91db61508, {0x8b93e0, 0x2ec91d9b41a8}, 0x2ec91e5b1a70?)
+	/usr/lib/go/src/crypto/tls/conn.go:837 +0xde fp=0x2ec91e5b1898 sp=0x2ec91e5b1860 pc=0x64bb9e
+crypto/tls.(*Conn).readRecordOrCCS(0x2ec91db61508, 0x0)
+	/usr/lib/go/src/crypto/tls/conn.go:626 +0x3db fp=0x2ec91e5b1a80 sp=0x2ec91e5b1898 pc=0x648c7b
+crypto/tls.(*Conn).readRecord(...)
+	/usr/lib/go/src/crypto/tls/conn.go:588
+crypto/tls.(*Conn).Read(0x2ec91db61508, {0x2ec91e864000, 0x1000, 0x2ec91e5b1af0?})
+	/usr/lib/go/src/crypto/tls/conn.go:1393 +0x145 fp=0x2ec91e5b1ae8 sp=0x2ec91e5b1a80 pc=0x64f385
+net/http.(*connReader).Read(0x2ec91d9b1940, {0x2ec91e864000, 0x1000, 0x1000})
+	/usr/lib/go/src/net/http/server.go:812 +0x154 fp=0x2ec91e5b1b40 sp=0x2ec91e5b1ae8 pc=0x704fb4
+bufio.(*Reader).fill(0x2ec91e854780)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91e5b1b78 sp=0x2ec91e5b1b40 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91e854780, 0x4)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91e5b1b90 sp=0x2ec91e5b1b78 pc=0x508293
+net/http.(*conn).serve(0x2ec91e3a6750, {0x8bc0d8, 0x2ec91d99c660})
+	/usr/lib/go/src/net/http/server.go:2109 +0x7b3 fp=0x2ec91e5b1fb8 sp=0x2ec91e5b1b90 pc=0x70aff3
+net/http.(*Server).Serve.gowrap3()
+	/usr/lib/go/src/net/http/server.go:3464 +0x1f fp=0x2ec91e5b1fe0 sp=0x2ec91e5b1fb8 pc=0x7100df
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e5b1fe8 sp=0x2ec91e5b1fe0 pc=0x4921a1
+created by net/http.(*Server).Serve in goroutine 119
+	/usr/lib/go/src/net/http/server.go:3464 +0x485
+
+goroutine 457 gp=0x2ec91e117c20 m=nil [IO wait]:
+runtime.gopark(0x2ec91d91faa0?, 0x0?, 0x0?, 0x0?, 0xb?)
+	/usr/lib/go/src/runtime/proc.go:462 +0xce fp=0x2ec91e543800 sp=0x2ec91e5437e0 pc=0x48a9ee
+runtime.netpollblock(0x4a2678?, 0x417b86?, 0x0?)
+	/usr/lib/go/src/runtime/netpoll.go:575 +0xf7 fp=0x2ec91e543838 sp=0x2ec91e543800 pc=0x44cad7
+internal/poll.runtime_pollWait(0x7f0f081fc400, 0x72)
+	/usr/lib/go/src/runtime/netpoll.go:351 +0x85 fp=0x2ec91e543858 sp=0x2ec91e543838 pc=0x489bc5
+internal/poll.(*pollDesc).wait(0x2ec91dd30c00?, 0x2ec91e938a80?, 0x0)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x2ec91e543880 sp=0x2ec91e543858 pc=0x4bf607
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/lib/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x2ec91dd30c00, {0x2ec91e938a80, 0xa80, 0xa80})
+	/usr/lib/go/src/internal/poll/fd_unix.go:165 +0x2ae fp=0x2ec91e543918 sp=0x2ec91e543880 pc=0x4c02ae
+net.(*netFD).Read(0x2ec91dd30c00, {0x2ec91e938a80?, 0x0?, 0x2ec91e5439c8?})
+	/usr/lib/go/src/net/fd_posix.go:68 +0x25 fp=0x2ec91e543960 sp=0x2ec91e543918 pc=0x5dfea5
+net.(*conn).Read(0x2ec91d78e3a8, {0x2ec91e938a80?, 0x7f0f0819e148?, 0x7f0f5007abe0?})
+	/usr/lib/go/src/net/net.go:196 +0x45 fp=0x2ec91e5439a8 sp=0x2ec91e543960 pc=0x5e9065
+crypto/tls.(*atLeastReader).Read(0x2ec91e88e2e8, {0x2ec91e938a80?, 0x2ec91e117c20?, 0x2ec91e543a98?})
+	/usr/lib/go/src/crypto/tls/conn.go:815 +0x3b fp=0x2ec91e5439f0 sp=0x2ec91e5439a8 pc=0x64b9bb
+bytes.(*Buffer).ReadFrom(0x2ec91e9b2628, {0x8b8480, 0x2ec91e88e2e8})
+	/usr/lib/go/src/bytes/buffer.go:229 +0x98 fp=0x2ec91e543a48 sp=0x2ec91e5439f0 pc=0x503f58
+crypto/tls.(*Conn).readFromUntil(0x2ec91e9b2388, {0x8b93e0, 0x2ec91d78e3a8}, 0x2ec91e543c58?)
+	/usr/lib/go/src/crypto/tls/conn.go:837 +0xde fp=0x2ec91e543a80 sp=0x2ec91e543a48 pc=0x64bb9e
+crypto/tls.(*Conn).readRecordOrCCS(0x2ec91e9b2388, 0x0)
+	/usr/lib/go/src/crypto/tls/conn.go:626 +0x3db fp=0x2ec91e543c68 sp=0x2ec91e543a80 pc=0x648c7b
+crypto/tls.(*Conn).readRecord(...)
+	/usr/lib/go/src/crypto/tls/conn.go:588
+crypto/tls.(*Conn).Read(0x2ec91e9b2388, {0x2ec91eb65000, 0x1000, 0x820900?})
+	/usr/lib/go/src/crypto/tls/conn.go:1393 +0x145 fp=0x2ec91e543cd0 sp=0x2ec91e543c68 pc=0x64f385
+net/http.(*persistConn).Read(0x2ec91de03900, {0x2ec91eb65000?, 0x8b7d40?, 0xbfa590?})
+	/usr/lib/go/src/net/http/transport.go:2174 +0x47 fp=0x2ec91e543d30 sp=0x2ec91e543cd0 pc=0x723b27
+bufio.(*Reader).fill(0x2ec91eb60fc0)
+	/usr/lib/go/src/bufio/bufio.go:113 +0x103 fp=0x2ec91e543d68 sp=0x2ec91e543d30 pc=0x508163
+bufio.(*Reader).Peek(0x2ec91eb60fc0, 0x1)
+	/usr/lib/go/src/bufio/bufio.go:152 +0x53 fp=0x2ec91e543d80 sp=0x2ec91e543d68 pc=0x508293
+net/http.(*persistConn).readLoop(0x2ec91de03900)
+	/usr/lib/go/src/net/http/transport.go:2330 +0x172 fp=0x2ec91e543fc8 sp=0x2ec91e543d80 pc=0x724632
+net/http.(*Transport).dialConn.gowrap2()
+	/usr/lib/go/src/net/http/transport.go:1994 +0x17 fp=0x2ec91e543fe0 sp=0x2ec91e543fc8 pc=0x723057
+runtime.goexit({})
+	/usr/lib/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x2ec91e543fe8 sp=0x2ec91e543fe0 pc=0x4921a1
+created by net/http.(*Transport).dialConn in goroutine 390
+	/usr/lib/go/src/net/http/transport.go:1994 +0x16ac
+FAIL	command-line-arguments	0.961s
+FAIL

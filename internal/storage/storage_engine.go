@@ -1,13 +1,15 @@
-package main
+package storage
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
-	"proxyma/storage"
 	"sync"
 	"time"
+	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
+	"proxyma/internal/storage/physical"
 )
 
 type StorageEngine struct {
@@ -17,11 +19,16 @@ type StorageEngine struct {
 	subscriptions *sync.Map
 	downloadQueue chan DownloadJob
 	logger        *slog.Logger
-	peerClient    PeerClient
-	notifyFunc    func(IndexEntry)
+	peerClient    p2p.PeerClient
+	notifyFunc    func(protocol.IndexEntry)
 }
 
-func NewStorageEngine(logger *slog.Logger, path string, pc PeerClient, workers int, notify func(IndexEntry)) *StorageEngine {
+type DownloadJob struct {
+	File   protocol.IndexEntry
+	Source string
+}
+
+func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, workers int, notify func(protocol.IndexEntry)) *StorageEngine {
 	engine := &StorageEngine{
 		physical:      *storage.NewStorage(path),
 		vfs:           NewVFS(),
@@ -32,11 +39,35 @@ func NewStorageEngine(logger *slog.Logger, path string, pc PeerClient, workers i
 		notifyFunc:    notify,
 	}
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go engine.downloadWorker()
 	}
 
 	return engine
+}
+
+func (se *StorageEngine) GetFileMeta(logicalName string) (protocol.IndexEntry, bool) {
+	return se.vfs.Get(logicalName)
+}
+
+func (se *StorageEngine) HasPhysicalBlob(hash string) (bool, error) {
+	return se.physical.BlobExists(hash)
+}
+
+func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
+	return se.physical.ReadBlob(hash, w)
+}
+
+func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
+	se.subscriptions.Store(fileName, isSubscribed)
+}
+
+func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {
+	return se.vfs.Snapshot()
+}
+
+func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
+	return se.vfs.Upsert(entry)
 }
 
 func (se *StorageEngine) SyncStorage(peers map[string]string) error {
@@ -75,7 +106,7 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 	if !exists {
 		return fmt.Errorf("file %se not found", fileName)
 	}
-	fileMeta := IndexEntry{
+	fileMeta := protocol.IndexEntry{
 		Name:    entry.Name,
 		Size:    entry.Size,
 		Hash:    entry.Hash,
@@ -99,7 +130,7 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 	if existingMeta, exists := se.vfs.Get(fileName); exists {
 		newVersion = existingMeta.Version + 1
 	}
-	fileMeta := IndexEntry{
+	fileMeta := protocol.IndexEntry{
 		Name:    fileName,
 		Size:    fileSize,
 		Hash:    hash,
@@ -115,7 +146,7 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 }
 
 
-func (se *StorageEngine) downloadFileFromPeer(fileInfo IndexEntry, sourceAddr string) {
+func (se *StorageEngine) downloadFileFromPeer(fileInfo protocol.IndexEntry, sourceAddr string) {
 	if fileInfo.Deleted {
 		savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
 		if se.vfs.Upsert(fileInfo) {
@@ -159,4 +190,8 @@ func (se *StorageEngine) downloadWorker() {
 	for job := range se.downloadQueue {
 		se.downloadFileFromPeer(job.File, job.Source)
 	}
+}
+
+func (c *StorageEngine) Close() {
+	close(c.downloadQueue)
 }

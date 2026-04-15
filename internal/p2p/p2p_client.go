@@ -1,4 +1,4 @@
-package main
+package p2p
 
 import (
 	"bytes"
@@ -7,15 +7,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"proxyma/internal/protocol"
 )
 
 type PeerClient interface {
-	FetchManifest(ctx context.Context, peerAddr string) (map[string]IndexEntry, error)
+	FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error)
 	Notify(ctx context.Context, peerAddr string, notification PeerNotification) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
 	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
-	SubmitTask(ctx context.Context, peerAddr string, req TaskRequest) error
+	SubmitTask(ctx context.Context, peerAddr string, req protocol.TaskRequest) error
+	SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	FetchServiceBid(ctx context.Context, peerAddr string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error)
+}
+
+type PeerNotification struct {
+	File   protocol.IndexEntry `json:"file"`
+	Source string     `json:"source"`
 }
 
 type HTTPPeerClient struct {
@@ -28,7 +36,7 @@ func NewHTTPPeerClient(client *http.Client) *HTTPPeerClient {
 	}
 }
 
-func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (map[string]IndexEntry, error) {
+func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", peerAddr+"/manifest", nil)
 	if err != nil {
 		return nil, err
@@ -38,7 +46,7 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var manifest map[string]IndexEntry
+	var manifest map[string]protocol.IndexEntry
 	err = json.NewDecoder(resp.Body).Decode(&manifest)
 	if err != nil {
 		return nil, err
@@ -120,7 +128,7 @@ func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerAddr string, se
 	return result, nil
 }
 
-func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req TaskRequest) error {
+func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req protocol.TaskRequest) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -146,4 +154,53 @@ func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req Ta
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error {
+    body, err := json.Marshal(resp)
+    if err != nil {
+        return err
+    }
+
+    req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+    if err != nil {
+        return err
+    }
+    req.Header.Set("Content-Type", "application/json")
+
+    httpResp, err := c.client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer httpResp.Body.Close()
+
+    return nil
+}
+
+func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerAddr string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
+    queryJSON, _ := json.Marshal(query)
+    
+    url := peerAddr + "/services/bid"
+    req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(queryJSON))
+    if err != nil {
+        return protocol.ServiceBid{}, err
+    }
+    req.Header.Set("Content-Type", "application/json")
+
+    resp, err := c.client.Do(req)
+    if err != nil {
+        return protocol.ServiceBid{}, err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return protocol.ServiceBid{}, fmt.Errorf("peer returned status %d", resp.StatusCode)
+    }
+
+    var bid protocol.ServiceBid
+    if err := json.NewDecoder(resp.Body).Decode(&bid); err != nil {
+        return protocol.ServiceBid{}, err
+    }
+
+    return bid, nil
 }

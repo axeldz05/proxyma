@@ -1,9 +1,10 @@
-package main
+package compute
 
 import (
 	"errors"
 	"fmt"
 	"maps"
+	"proxyma/internal/protocol"
 	"slices"
 )
 
@@ -11,11 +12,11 @@ var ErrServiceDuplicate = errors.New("service is already registered")
 
 func NewServiceRegistry() *ServiceRegistry {
 	return &ServiceRegistry{
-		schemas: make(map[string]ServiceSchema),
+		schemas: make(map[string]protocol.ServiceSchema),
 	}
 }
 
-func (r *ServiceRegistry) Register(schema ServiceSchema) error {
+func (r *ServiceRegistry) Register(schema protocol.ServiceSchema) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -27,7 +28,7 @@ func (r *ServiceRegistry) Register(schema ServiceSchema) error {
 	return nil
 }
 
-func (r *ServiceRegistry) Get(name string) (ServiceSchema, bool) {
+func (r *ServiceRegistry) Get(name string) (protocol.ServiceSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	
@@ -41,7 +42,7 @@ func (r *ServiceRegistry) ListAll() []string {
 	return slices.Collect(maps.Keys(r.schemas))
 }
 
-func (r *ServiceRegistry) ValidateRequest(req TaskRequest) error {
+func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
 	schema, exists := r.Get(req.Service)
 	if !exists {
 		return fmt.Errorf("validation failed: service '%s' is not supported by this node", req.Service)
