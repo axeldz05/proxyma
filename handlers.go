@@ -9,16 +9,21 @@ import (
 
 func (s *Server) MountHandlers() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/upload", s.handleUpload)
-	mux.HandleFunc("/notify", s.handleNotification)
-	mux.HandleFunc("/download/", s.handleDownload)
+	// --- DOMINIO DE ALMACENAMIENTO (StorageEngine) ---
+	mux.HandleFunc("/upload", s.storage.HandleUpload)
+	mux.HandleFunc("/download/", s.storage.HandleDownload)
+	mux.HandleFunc("/file", s.storage.HandleDelete)
+	mux.HandleFunc("/manifest", s.storage.HandleManifest)
+	mux.HandleFunc("/subscribe", s.storage.HandleSubscribe)
+	mux.HandleFunc("/notify", s.storage.HandleNotification)
+
+	// --- DOMINIO DE CÓMPUTO (ComputeEngine) ---
+	mux.HandleFunc("/services/bid", s.compute.HandleServiceBid)
+	mux.HandleFunc("/services/submit", s.compute.HandleServiceSubmit)
+	mux.HandleFunc("/services/callback", s.compute.HandleServiceCallback)
+
+	// --- DOMINIO DE RED/ESTADO (Aún en el Server por ahora) ---
 	mux.HandleFunc("/peers", s.GetPeers)
-	mux.HandleFunc("/manifest", s.handleManifest)
-	mux.HandleFunc("/file", s.handleDelete)
-	mux.HandleFunc("/subscribe", s.handleSubscribe)
-	mux.HandleFunc("/services/bid", s.handleServiceBid)
-	mux.HandleFunc("/services/submit", s.handleServiceSubmit)
-	mux.HandleFunc("/services/callback", s.handleServiceCallback)
 	return mux
 }
 
@@ -26,7 +31,7 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.Peers)
 }
 
-func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -58,36 +63,36 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNotification handles notifications from peers about new files
-func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
+func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	var notification PeerNotification
-	err := json.NewDecoder(r.Body).Decode(&notification)
+
+	notification, err := DecodeJSON[PeerNotification](r)
 	if err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	updated := s.vfs.Upsert(notification.File)
+
+	updated := se.vfs.Upsert(notification.File)
 	if updated && !notification.File.Deleted {
-		if _, subscribed := s.subscriptions.Load(notification.File.Name); subscribed {
-			s.downloadQueue <- DownloadJob{
+		if _, subscribed := se.subscriptions.Load(notification.File.Name); subscribed {
+			se.downloadQueue <- DownloadJob{
 				File:   notification.File,
 				Source: notification.Source,
 			}
-			w.WriteHeader(http.StatusAccepted)
-			fmt.Fprint(w, "Notification received, downloading file")
+			RespondJSON(w, http.StatusAccepted, map[string]string{"message": "Downloading file"})
 			return
 		}
 	}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "Metadata updated, blob ignored (not subscribed or deleted)")
+	
+	RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
 }
 
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	requestedHash := r.URL.Path[len("/download/"):]
-	err := s.storage.ReadBlob(requestedHash, w)
+	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {
 		if err == storage.ErrFileDoesNotExist {
 			http.Error(w, "Blob not found", http.StatusNotFound)
@@ -99,7 +104,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 }
 
-func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
+func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -111,15 +116,15 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.subscriptions.Store(fileName, true)
 	w.WriteHeader(http.StatusOK)
-	s.config.Logger.Info("Subscription added", "file", fileName)
+	s.logger.Info("Subscription added", "file", fileName)
 	fmt.Fprintf(w, "Subscribed to %s", fileName)
 }
 
-func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.vfs.Snapshot())
 }
 
-func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -140,7 +145,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("File deleted successfully"))
 }
 
-func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
+func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -154,7 +159,7 @@ func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	schema, exists := s.compute.registry.Get(query.Service)
+	schema, exists := s.registry.Get(query.Service)
 	if !exists {
 		json.NewEncoder(w).Encode(ServiceBid{CanAccept: false})
 		return
@@ -174,8 +179,8 @@ func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
 		estimated += mb * 10
 	}
 	bid := ServiceBid{
-		NodeID:          s.config.ID,
-		NodeAddr:        s.config.Address,
+		NodeID:          s.nodeID,
+		NodeAddr:        s.nodeAddr,
 		Schema:          schema,
 		EstimatedMillis: estimated,
 		CanAccept:       true,
@@ -185,7 +190,7 @@ func (s *Server) handleServiceBid(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(bid)
 }
 
-func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
+func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -199,7 +204,7 @@ func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if err := s.compute.registry.ValidateRequest(taskReq); err != nil {
+	if err := s.registry.ValidateRequest(taskReq); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error":   "Validation failed",
@@ -209,21 +214,21 @@ func (s *Server) handleServiceSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	select {
-		case s.compute.taskQueue <- taskReq:
+		case s.taskQueue <- taskReq:
 			w.WriteHeader(http.StatusAccepted)
 			json.NewEncoder(w).Encode(map[string]string{
 				"status":  "accepted",
 				"message": "Task received and queued for processing",
 				"job_id":  taskReq.TaskID,
 			})
-			s.config.Logger.Info("[TaskQueue] - task was queued", "taskID", taskReq.TaskID)
+			s.logger.Info("[TaskQueue] - task was queued", "taskID", taskReq.TaskID)
 		default:
 		    http.Error(w, "Node is overloaded", http.StatusServiceUnavailable)
 		    return
 	}
 }
 
-func (s *Server) handleServiceCallback(w http.ResponseWriter, r *http.Request) {
+func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -233,7 +238,7 @@ func (s *Server) handleServiceCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	s.compute.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)
-	s.config.Logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
+	s.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)
+	s.logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
 	w.WriteHeader(http.StatusOK)
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http/httptest"
-	"proxyma/storage"
 	"sync"
 	"log/slog"
 )
@@ -30,12 +29,8 @@ type Server struct {
 	peerClient  	PeerClient
 	Peers   		map[string]string
 	compute 		*ComputeEngine
-	storage 		storage.Storage
-	vfs 			*VFS
-	downloadQueue 	chan DownloadJob
+	storage 		*StorageEngine
 	server 			*httptest.Server
-	// TODO: try using BoltDB / Badger for sync.Map
-	subscriptions   *sync.Map
 }
 
 type NodeConfig struct {

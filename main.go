@@ -6,8 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"proxyma/storage"
-	"sync"
 	"log/slog"
 )
 
@@ -41,10 +39,6 @@ func main() {
 	s := &Server{
 		config:        cfg,
 		Peers:         make(map[string]string),
-		storage:       *storage.NewStorage(cfg.StoragePath),
-		vfs:           NewVFS(),
-		downloadQueue: make(chan DownloadJob, 1000),
-		subscriptions: &sync.Map{},
 	}
 
 	serverTLS, clientTLS, err := GenerateOrLoadTLSConfig(cfg.StoragePath, cfg.StoragePath, cfg.ID)
@@ -58,12 +52,8 @@ func main() {
 		},
 	} 
 	s.peerClient = NewHTTPPeerClient(httpClient)
-	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers)
-
-	for i := 0; i < s.config.Workers; i++ {
-		go s.downloadWorker()
-	}
-
+	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	s.storage = NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers)
 	mux := s.MountHandlers()
 
 	addr := fmt.Sprintf(":%s", *port)
@@ -86,7 +76,7 @@ func main() {
 
 func (s *Server) Close() {
 	s.server.Close()
-	close(s.downloadQueue)
+	close(s.storage.downloadQueue)
 	close(s.compute.taskQueue)
 }
 

@@ -15,21 +15,28 @@ type ComputeEngine struct {
 	taskStatuses *sync.Map
 	logger       *slog.Logger
 	peerClient   PeerClient
+	nodeID       string
+	nodeAddr     string
 }
 
-func NewComputeEngine(logger *slog.Logger, pc PeerClient, workerCount int) *ComputeEngine {
+func NewComputeEngine(logger *slog.Logger, pc PeerClient, workerCount int, id string) *ComputeEngine {
 	engine := &ComputeEngine{
 		registry:     NewServiceRegistry(),
 		taskQueue:    make(chan TaskRequest, 10),
 		taskStatuses: &sync.Map{},
 		logger:       logger,
 		peerClient:   pc,
+		nodeID: 	  id,
 	}
 	for range workerCount {
 		go engine.serviceWorker()
 	}
 
 	return engine
+}
+
+func (c *ComputeEngine) SetAddress(addr string) {
+	c.nodeAddr = addr
 }
 
 func (c *ComputeEngine) RegisterNewService(schema ServiceSchema) error {

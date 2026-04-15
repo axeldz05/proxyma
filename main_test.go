@@ -13,9 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"proxyma/storage"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"log/slog"
@@ -91,10 +89,6 @@ func NewServer(cfg NodeConfig) *Server {
 	s := &Server{
 		config:        		cfg,
 		Peers:         		make(map[string]string),
-		storage:       		*storage.NewStorage(cfg.StoragePath),
-		vfs:           		NewVFS(),
-		downloadQueue: 		make(chan DownloadJob, 1000),
-		subscriptions: 		&sync.Map{},
 	}
 
 	os.MkdirAll(cfg.StoragePath, 0755)
@@ -108,7 +102,8 @@ func NewServer(cfg NodeConfig) *Server {
 		},
 	}
 	s.peerClient = NewHTTPPeerClient(httpClient)
-	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers)
+	s.compute = NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	s.storage = NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers)
 
 	s.server = httptest.NewUnstartedServer(s.MountHandlers())
 	s.server.TLS = serverTLS
@@ -117,12 +112,9 @@ func NewServer(cfg NodeConfig) *Server {
 
 	cfg.Address = s.server.URL
 	s.config = cfg
+	s.compute.SetAddress(cfg.Address)
 
 	s.server.Client().Transport = httpClient.Transport
-
-	for i := 0; i < s.config.Workers; i++ {
-		go s.downloadWorker()
-	}
 
 	return s
 }
@@ -131,7 +123,7 @@ func Test01FirstServerIsAlreadySynced(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(DefaultConfigFor(t, "1"))
 	defer sv.Close()
-	require.NoError(t, sv.SyncStorage())
+	require.NoError(t, sv.storage.SyncStorage(sv.getPeersCopy()))
 }
 
 func GetPeersSimulated(t *testing.T, sv *Server) string {
@@ -164,8 +156,8 @@ func Test02AServerCanConnectToAnother(t *testing.T) {
 
 	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
 	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
-	require.NoError(t, sv1.SyncStorage())
-	require.NoError(t, sv2.SyncStorage())
+	require.NoError(t, sv1.storage.SyncStorage(sv1.getPeersCopy()))
+	require.NoError(t, sv2.storage.SyncStorage(sv2.getPeersCopy()))
 }
 
 func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, updatedServer *Server) {
@@ -207,20 +199,20 @@ func Test03AllServersSyncsToLastUpdated(t *testing.T) {
 	noUpdatedServer.AddPeer("1", updatedServer.config.Address)
 	noUpdatedServer.AddPeer("2", noUpdatedServer.config.Address)
 	fileName := "test03.txt"
-	noUpdatedServer.subscriptions.Store(fileName, true)
-	noUpdatedServer2.subscriptions.Store(fileName, true)
+	noUpdatedServer.storage.subscriptions.Store(fileName, true)
+	noUpdatedServer2.storage.subscriptions.Store(fileName, true)
 	
 	fileContent := "Hello!!!"
 	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
 
-	_, exists := updatedServer.vfs.Get(fileName)
+	_, exists := updatedServer.storage.vfs.Get(fileName)
 	if !exists {
 		t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
 	}
 
 	assertRemoteHashToBeTheSameAs(t, expectedHash, fileContent, updatedServer)
 	require.Eventually(t, func() bool {
-		_, exists := noUpdatedServer.vfs.Get(fileName)
+		_, exists := noUpdatedServer.storage.vfs.Get(fileName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
 }
@@ -234,7 +226,7 @@ func Test04UploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	fileContent := "testing"
 	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
 
-	fileMeta, exists := sv.vfs.Get(fileName)
+	fileMeta, exists := sv.storage.vfs.Get(fileName)
 
 	require.True(t, exists, "The file should be registered in s.files")
 	require.NotEmpty(t, fileMeta.Hash, "The metadata should include the hash")
@@ -261,14 +253,14 @@ func Test05P2PNetworkEventualConsistency(t *testing.T) {
 	}
 	fileName := "test05.txt"
 	for _, srv := range servers {
-		srv.subscriptions.Store(fileName, true)
+		srv.storage.subscriptions.Store(fileName, true)
 	}
 	fileContent := "everyone wants me"
 	expectedHash := UploadFileSimulated(t, servers[0], fileName, fileContent)
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
 
-			meta, exists := srv.vfs.Get(fileName)
+			meta, exists := srv.storage.vfs.Get(fileName)
 
 			if !exists || meta.Hash != expectedHash {
 				return false
@@ -320,11 +312,11 @@ func Test07NetworkRequestRespectsTimeouts(t *testing.T) {
 	}
 
 	start := time.Now()
-	sv.downloadFileFromPeer(fakeFile, slowPeer.URL)
+	sv.storage.downloadFileFromPeer(fakeFile, slowPeer.URL)
 	duration := time.Since(start)
 	require.Less(t, duration, 3*time.Second, "The request should have been aborted by Timeout before the slow node ended")
 
-	_, exists := sv.vfs.Get(fakeFile.Name)
+	_, exists := sv.storage.vfs.Get(fakeFile.Name)
 
 	require.False(t, exists, "The file should not be registered if the download failed or timed out")
 }
@@ -358,7 +350,7 @@ func Test09ManifestEndpointReturnsCurrentState(t *testing.T) {
 		Hash: fakeHash,
 	}
 
-	sv.vfs.Upsert(fakeFile)
+	sv.storage.vfs.Upsert(fakeFile)
 
 	req, err := http.NewRequest("GET", sv.config.Address+"/manifest", nil)
 	require.NoError(t, err)
@@ -389,21 +381,21 @@ func Test10SyncStorageDownloadsMissingFiles(t *testing.T) {
 	sv2 := NewServer(DefaultConfigFor(t, "2"))
 	defer sv2.Close()
 	sv2.AddPeer("1", sv1.config.Address)
-	sv2.subscriptions.Store(fileName, true)
+	sv2.storage.subscriptions.Store(fileName, true)
 
-	_, existsBefore := sv2.vfs.Get(fileName)
+	_, existsBefore := sv2.storage.vfs.Get(fileName)
 
 	require.False(t, existsBefore, "Node 2 shouldn't have any files")
 
-	err := sv2.SyncStorage()
-	require.NoError(t, err, "SyncStorage shouldn't fail")
+	err := sv2.storage.SyncStorage(sv2.getPeersCopy())
+	require.NoError(t, err, "storage.SyncStorage shouldn't fail")
 	require.Eventually(t, func() bool {
-		fileMeta, existsAfter := sv2.vfs.Get(fileName)
+		fileMeta, existsAfter := sv2.storage.vfs.Get(fileName)
 		if !existsAfter {
 			return false
 		}
 		return fileMeta.Hash == expectedHash
-	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing SyncStorage")
+	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing storage.SyncStorage")
 }
 
 func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
@@ -416,7 +408,7 @@ func Test11VirtualFileSystemTracksFileUpdates(t *testing.T) {
 	fileContent2 := "goodbye from test11"
 	hash2 := UploadFileSimulated(t, sv, fileName, fileContent2)
 
-	meta, exists := sv.vfs.Get(fileName)
+	meta, exists := sv.storage.vfs.Get(fileName)
 
 	require.True(t, exists, "The system must track the file by its logic name")
 	require.Equal(t, hash2, meta.Hash, "Index should point to the Version 2 Hash")
@@ -457,7 +449,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 	start := time.Now()
 
 	for _, notif := range notifications {
-		sv.subscriptions.Store(notif.File.Name, true)
+		sv.storage.subscriptions.Store(notif.File.Name, true)
 		notif.Source = slowPeer.URL
 		body, _ := json.Marshal(notif)
 		req, _ := http.NewRequest("POST", sv.config.Address+"/notify", bytes.NewReader(body))
@@ -467,9 +459,9 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		allContentIsDownloaded := true
-		for _, v := range sv.vfs.Snapshot() {
+		for _, v := range sv.storage.vfs.Snapshot() {
 			var buf bytes.Buffer
-			if err := sv.storage.ReadBlob(v.Hash, &buf); err != nil {
+			if err := sv.storage.physical.ReadBlob(v.Hash, &buf); err != nil {
 				return false
 			}
 			if expectedContent, exists := mockFiles[v.Hash]; exists{
@@ -478,7 +470,7 @@ func Test12WorkerPoolLimitsConcurrency(t *testing.T) {
 				return false
 			}
 		}
-		return len(sv.vfs.Snapshot()) == 5 && allContentIsDownloaded
+		return len(sv.storage.vfs.Snapshot()) == 5 && allContentIsDownloaded
 	}, 5*time.Second, 100*time.Millisecond)
 
 	duration := time.Since(start)
@@ -496,18 +488,18 @@ func Test13LocalDeleteCreatesTombstone(t *testing.T) {
 	fileContent := "hello from test13!!"
 	UploadFileSimulated(t, sv, fileName, fileContent)
 
-	metaBefore, _ := sv.vfs.Get(fileName)
+	metaBefore, _ := sv.storage.vfs.Get(fileName)
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 	
 	DeleteFileSimulated(t, sv, fileName)
-	metaAfter, exists := sv.vfs.Get(fileName)
+	metaAfter, exists := sv.storage.vfs.Get(fileName)
 
 	require.True(t, exists, "The IndexEntry of the file should still exist after deleting")
 	require.True(t, metaAfter.Deleted, "Deleted should be true in the IndexEntry")
 	require.Equal(t, metaBefore.Version+1, metaAfter.Version, "Version should have been incremented")
 
 	// TODO: avoid using blobExists and make another function in the main instead
-	existsInDisk, _ := sv.storage.BlobExists(metaBefore.Hash)
+	existsInDisk, _ := sv.storage.physical.BlobExists(metaBefore.Hash)
 	require.False(t, existsInDisk, "The physical blob should have been deleted")
 }
 
@@ -522,21 +514,21 @@ func Test14TombstonePropagatesToPeers(t *testing.T) {
 	sv2.AddPeer("1", sv1.config.Address)
 
 	fileName := "test14.txt"
-	sv1.subscriptions.Store(fileName, true)
-	sv2.subscriptions.Store(fileName, true)
+	sv1.storage.subscriptions.Store(fileName, true)
+	sv2.storage.subscriptions.Store(fileName, true)
 	
 	fileContent := "hello from test14!!"
 	UploadFileSimulated(t, sv1, fileName, fileContent)
 
 	require.Eventually(t, func() bool {
-		_, exists := sv2.vfs.Get(fileName)
+		_, exists := sv2.storage.vfs.Get(fileName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond)
 	
 	DeleteFileSimulated(t, sv1, fileName)
 
 	require.Eventually(t, func() bool {
-		meta, _ := sv2.vfs.Get(fileName)
+		meta, _ := sv2.storage.vfs.Get(fileName)
 		return meta.Deleted && meta.Version == 2
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
 }
@@ -564,19 +556,19 @@ func Test15SelectiveSynchronization(t *testing.T) {
 
 	sv1.AddPeer("2", sv2.config.Address)
 	sv2.AddPeer("1", sv1.config.Address)
-	require.NoError(t, sv2.SyncStorage())
+	require.NoError(t, sv2.storage.SyncStorage(sv2.getPeersCopy()))
 
 	// Verify sv2 gets file A
 	require.Eventually(t, func() bool {
-		_, exists := sv2.vfs.Get(fileAName)
+		_, exists := sv2.storage.vfs.Get(fileAName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have synced the subscribed file A")
 
 	// Verify sv2 DOES NOT get file B
 	time.Sleep(1 * time.Second) // wait to ensure no late sync happens
-	metaB, existsB := sv2.vfs.Get(fileBName)
-	require.True(t, existsB, "Server2 SHOULD have the metadata of file B in its VFS")
-	existsInDisk, _ := sv2.storage.BlobExists(metaB.Hash)
+	metaB, existsB := sv2.storage.vfs.Get(fileBName)
+	require.True(t, existsB, "Server2 SHOULD have the metadata of file B in its storage.vfs")
+	existsInDisk, _ := sv2.storage.physical.BlobExists(metaB.Hash)
 	require.False(t, existsInDisk, "Server2 should NOT download the physical blob of file B because it is not subscribed")}
 
 func Test16mTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
