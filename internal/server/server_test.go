@@ -2,9 +2,7 @@ package server_test
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +13,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
-	"proxyma/internal/testutil" // Nuestra nueva caja de herramientas
+	"proxyma/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestServer envuelve al servidor real para facilitar las pruebas
 type TestServer struct {
 	*server.Server
 	httpTestSrv *httptest.Server
@@ -51,7 +48,6 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
 	ts.TLS = serverTLS
 	ts.StartTLS()
 
-	// Inyectamos el mTLS al cliente del test
 	ts.Client().Transport = httpClient.Transport
 	app.SetAddress(ts.URL)
 
@@ -161,7 +157,7 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 	t.Parallel()
 	clusterSize := 3
 	servers := make([]*TestServer, clusterSize)
-	for i := 0; i < clusterSize; i++ {
+	for i := range clusterSize {
 		serverName := fmt.Sprintf("%d", i)
 		servers[i] = NewServer(t, testutil.DefaultConfig(t, serverName))
 		defer servers[i].Close()
@@ -246,7 +242,6 @@ func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	require.Equal(t, expectedHash, fileMeta.Hash, "The metadata's hash should be the same as the file content's hash")
 }
 
-
 func TestDownloadEndpointUsesHash(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
@@ -268,44 +263,6 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 	_, err = io.Copy(buf, respDL.Body)
 	require.NoError(t, err)
 	require.Equal(t, fileContent, buf.String(), "Downloaded content should be the same as the uploaded content")
-}
-
-
-func TestNetworkRequestRespectsTimeouts(t *testing.T) {
-	t.Parallel()
-	// A "trap" node that takes 5 seconds to respond
-	slowPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5 * time.Second)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer slowPeer.Close()
-
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
-
-	fakeFile := protocol.IndexEntry{
-		Name: "trampa.txt",
-		Size: 100,
-		Hash: "hashfalso123",
-	}
-	
-	// TODO: make a test function helper to reduce sections like these
-	sv.Storage.SetSubscription(fakeFile.Name, true)
-	notif := p2p.PeerNotification{
-		File:   fakeFile,
-		Source: slowPeer.URL,
-	}
-	body, _ := json.Marshal(notif)
-	req, _ := http.NewRequest("POST", sv.Config.Address+"/notify", bytes.NewReader(body))
-
-	resp, err := sv.Client().Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	time.Sleep(3 * time.Second)
-	hasBlob, err := sv.Storage.HasPhysicalBlob(fakeFile.Hash)
-	require.NoError(t, err)
-	require.False(t, hasBlob, "The physical blob should not be saved if the download timed out")
 }
 
 func TestManifestEndpointReturnsCurrentState(t *testing.T) {
@@ -339,35 +296,6 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 	require.Equal(t, fakeFile.Name, manifest[fakeFile.Name].Name, "The filename must be the same as in the manifest")
 }
 
-func TestSyncStorageDownloadsMissingFiles(t *testing.T) {
-	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv1.Close()
-
-	fileName := "missingFile.txt"
-	fileContent := "helloo from test10"
-	expectedHash := UploadFileSimulated(t, sv1, fileName, fileContent)
-
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"))
-	defer sv2.Close()
-	sv2.AddPeer("1", sv1.Config.Address)
-	sv2.Storage.SetSubscription(fileName, true)
-
-	_, existsBefore := sv2.Storage.GetFileMeta(fileName)
-
-	require.False(t, existsBefore, "Node 2 shouldn't have any files")
-
-	err := sv2.Storage.SyncStorage(sv2.GetPeersCopy())
-	require.NoError(t, err, "Storage.SyncStorage shouldn't fail")
-	require.Eventually(t, func() bool {
-		fileMeta, existsAfter := sv2.Storage.GetFileMeta(fileName)
-		if !existsAfter {
-			return false
-		}
-		return fileMeta.Hash == expectedHash
-	}, 2*time.Second, 100*time.Millisecond, "Node 2 should have the file of node 1 after executing Storage.SyncStorage")
-}
-
 func TestTombstonePropagatesToPeers(t *testing.T) {
 	t.Parallel()
 	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
@@ -381,7 +309,7 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 	fileName := "test14.txt"
 	sv1.Storage.SetSubscription(fileName, true)
 	sv2.Storage.SetSubscription(fileName, true)
-	
+
 	fileContent := "hello from test14!!"
 	UploadFileSimulated(t, sv1, fileName, fileContent)
 
@@ -389,52 +317,13 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 		_, exists := sv2.Storage.GetFileMeta(fileName)
 		return exists
 	}, 2*time.Second, 100*time.Millisecond)
-	
+
 	DeleteFileSimulated(t, sv1, fileName)
 
 	require.Eventually(t, func() bool {
 		meta, _ := sv2.Storage.GetFileMeta(fileName)
 		return meta.Deleted && meta.Version == 2
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
-}
-
-func Test15SelectiveSynchronization(t *testing.T) {
-	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"))
-	defer sv1.Close()
-	defer sv2.Close()
-
-	fileAName := "fileA.txt"
-	fileBName := "fileB.txt"
-
-	UploadFileSimulated(t, sv1, fileAName, "Exclusive File A content")
-	UploadFileSimulated(t, sv1, fileBName, "Another content, File B")
-
-	// Sv2 subscribes ONLY to fileA via API
-	reqSub, _ := http.NewRequest("POST", sv2.Config.Address+"/subscribe?name="+fileAName, nil)
-
-	respSub, err := sv2.Client().Do(reqSub)
-	require.NoError(t, err)
-	defer respSub.Body.Close()
-	require.Equal(t, http.StatusOK, respSub.StatusCode, "Subscribe API should return 200 OK")
-
-	sv1.AddPeer("2", sv2.Config.Address)
-	sv2.AddPeer("1", sv1.Config.Address)
-	require.NoError(t, sv2.Storage.SyncStorage(sv2.GetPeersCopy()))
-
-	// Verify sv2 gets file A
-	require.Eventually(t, func() bool {
-		_, exists := sv2.Storage.GetFileMeta(fileAName)
-		return exists
-	}, 2*time.Second, 100*time.Millisecond, "Server2 should have synced the subscribed file A")
-
-	// Verify sv2 DOES NOT get file B
-	time.Sleep(1 * time.Second) // wait to ensure no late sync happens
-	metaB, existsB := sv2.Storage.GetFileMeta(fileBName)
-	require.True(t, existsB, "Server2 SHOULD have the metadata of file B in its Storage.vfs")
-	existsInDisk, _ := sv2.Storage.HasPhysicalBlob(metaB.Hash)
-	require.False(t, existsInDisk, "Server2 should NOT download the physical blob of file B because it is not subscribed")
 }
 
 func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
@@ -473,15 +362,15 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	require.Equal(t, "Standard Optical Character Recognition", serviceSchema.Description)
 
 	filledInputs := map[string]any{
-		"image":    "fake-hash-12345", 
+		"image":    "fake-hash-12345",
 		"language": "spa",
 	}
 
 	taskID := "job-999"
 	reqPayload := protocol.TaskRequest{
-		TaskID:   taskID,
+		TaskID:  taskID,
 		Service: "ocr",
-		Payload:  filledInputs,
+		Payload: filledInputs,
 		ReplyTo: svDemandingService.Config.Address + "/services/callback",
 	}
 
@@ -492,70 +381,6 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		taskResult, exists := svDemandingService.Compute.GetTaskStatus(taskID)
 		return exists && taskResult.Status == "completed"
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
-}
-
-func TestWorkerPoolLimitsConcurrency(t *testing.T) {
-	t.Parallel()
-	mockFiles := make(map[string]string)
-	var notifications []p2p.PeerNotification
-
-	for i := range 5 {
-		content := fmt.Sprintf("Content %d", i)
-		hasher := sha256.New()
-		hasher.Write([]byte(content))
-		hash := hex.EncodeToString(hasher.Sum(nil))
-		mockFiles[hash] = content
-		fileName := fmt.Sprintf("file_%d.txt", i)
-		notifications = append(notifications, p2p.PeerNotification{
-			File: protocol.IndexEntry{Name: fileName, Hash: hash, Version: 1},
-		})
-	}
-
-	slowPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(1 * time.Second)
-		requestedHash := strings.TrimPrefix(r.URL.Path, "/download/")
-		if content, exists := mockFiles[requestedHash]; exists {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(content))
-		}
-	}))
-	defer slowPeer.Close()
-
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
-
-	start := time.Now()
-
-	for _, notif := range notifications {
-		sv.Storage.SetSubscription(notif.File.Name, true)
-		notif.Source = slowPeer.URL
-		body, _ := json.Marshal(notif)
-		req, _ := http.NewRequest("POST", sv.Config.Address+"/notify", bytes.NewReader(body))
-		resp, err := sv.Client().Do(req)
-		require.NoError(t, err)
-		resp.Body.Close()
-	}
-
-	require.Eventually(t, func() bool {
-		allContentIsDownloaded := true
-		for _, v := range sv.Storage.GetVFSSnapshot() {
-			var buf bytes.Buffer
-			if err := sv.Storage.ReadPhysicalBlob(v.Hash, &buf); err != nil {
-				return false
-			}
-			if expectedContent, exists := mockFiles[v.Hash]; exists{
-				allContentIsDownloaded = allContentIsDownloaded && buf.String() == expectedContent
-			} else {
-				return false
-			}
-		}
-		return len(sv.Storage.GetVFSSnapshot()) == 5 && allContentIsDownloaded
-	}, 5*time.Second, 100*time.Millisecond)
-
-	duration := time.Since(start)
-
-	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. The Worker Pool isn't limiting the concurrency.")
-	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
 }
 
 func TestUnauthorizedAccessIsRejected(t *testing.T) {

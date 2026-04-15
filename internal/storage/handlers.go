@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 	"proxyma/internal/storage/physical"
 	"proxyma/internal/utils"
 )
@@ -47,7 +47,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	notification, err := utils.DecodeJSON[p2p.PeerNotification](r)
+	notification, err := utils.DecodeJSON[protocol.PeerNotification](r)
 	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return

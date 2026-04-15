@@ -12,18 +12,13 @@ import (
 
 type PeerClient interface {
 	FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error)
-	Notify(ctx context.Context, peerAddr string, notification PeerNotification) error
+	Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
 	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
 	SubmitTask(ctx context.Context, peerAddr string, req protocol.TaskRequest) error
 	SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
 	FetchServiceBid(ctx context.Context, peerAddr string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error)
-}
-
-type PeerNotification struct {
-	File   protocol.IndexEntry `json:"file"`
-	Source string     `json:"source"`
 }
 
 type HTTPPeerClient struct {
@@ -54,7 +49,7 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 	return manifest, nil
 }
 
-func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notification PeerNotification) error {
+func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error {
 	url := fmt.Sprintf("%s/notify", peerAddr)
 	body, err := json.Marshal(notification)
 	if err != nil {

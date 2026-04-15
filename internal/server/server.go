@@ -69,7 +69,7 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		if peerID == s.Config.ID {
 			continue
 		}
-		payload := p2p.PeerNotification{
+		payload := protocol.PeerNotification{
 			File:   fileInfo,
 			Source: s.Config.Address,
 		}

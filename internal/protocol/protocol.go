@@ -64,3 +64,9 @@ const (
 	StrategyCheapest   = "proxyma/strategy/cheapest"
 	StrategyLowPower   = "proxyma/strategy/low_power"
 )
+
+type PeerNotification struct {
+	File   IndexEntry `json:"file"`
+	Source string     `json:"source"`
+}
+
