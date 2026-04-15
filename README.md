@@ -18,9 +18,9 @@ and it may not be able to open a port which would be directly accesible through 
 ## To-Do
 
 ### Phase 1: Core & Networking
-- [ ] Implement a File System for servers and clients, based on a P2P Syncrhonization.
+- [x] Implement a File System for servers and clients, based on a P2P Syncrhonization.
 - [ ] Implement automatic node discovery in local networks (mDNS).
-- [ ] End-to-end TLS encryption.
+- [x] End-to-end TLS encryption.
 - [ ] Secure "Handshake" and pairing system for new devices.
 
 ### Phase 2: Orchestration & Services
