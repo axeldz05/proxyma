@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
+	"context"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +32,9 @@ func (ts *TestServer) Client() *http.Client {
 
 func (ts *TestServer) Close() {
 	ts.httpTestSrv.Close()
-	ts.Server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ts.Server.Shutdown(ctx)
 }
 
 func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {

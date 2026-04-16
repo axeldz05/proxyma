@@ -22,6 +22,7 @@ type Server struct {
 	Storage 		*storage.StorageEngine
 	peers   		map[string]string
 	peerClient  	p2p.PeerClient
+	httpServer 		*http.Server
 }
 
 func New(cfg protocol.NodeConfig, httpClient *http.Client) *Server {
@@ -49,7 +50,33 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
         ErrorLog:  slog.NewLogLogger(s.Config.Logger.Handler(), slog.LevelError),
     }
 
+	s.httpServer = hs
+	s.Config.Logger.Info("Starting secure P2P node", "address", addr)
+
     return hs.ListenAndServeTLS("", "")
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.Config.Logger.Info("Initiating shutdown...")
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			s.Config.Logger.Error("HTTP server shutdown failed", "error", err)
+			return err
+		}
+	}
+	s.Config.Logger.Info("HTTP server stopped accepting connections.")
+
+	if s.Storage != nil {
+		s.Storage.Close()
+		s.Config.Logger.Info("Storage Engine closed.")
+	}
+	if s.Compute != nil { 
+		s.Compute.Close() 
+		s.Config.Logger.Info("Compute Engine closed.")
+	}
+
+	s.Config.Logger.Info("Node shutdown complete.")
+	return nil
 }
 
 func (s *Server) SetAddress(addr string) {
@@ -149,9 +176,4 @@ func (s *Server) GetPeersCopy() map[string]string{
 	peers := make(map[string]string, len(s.peers))
 	maps.Copy(peers, s.peers)
 	return peers
-}
-
-func (s *Server) Close() {
-	s.Storage.Close()
-	s.Compute.Close()
 }
