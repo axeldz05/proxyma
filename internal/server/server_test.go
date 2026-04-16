@@ -37,8 +37,15 @@ func (ts *TestServer) Close() {
 
 func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
 	caPath := filepath.Dir(cfg.StoragePath)
-	serverTLS, clientTLS, _ := p2p.GenerateOrLoadTLSConfig(caPath, cfg.StoragePath, cfg.ID)
-
+	err := p2p.InitCluster(caPath)
+	require.NoError(t, err)
+	err = p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID)
+	require.NoError(t, err)
+	caCertFile := filepath.Join(caPath, "ca.crt")
+	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
+	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
+	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+	require.NoError(t, err)
 	httpClient := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: clientTLS},
 	}

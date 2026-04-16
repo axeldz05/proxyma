@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
@@ -19,11 +20,25 @@ func main() {
 	debugMode := flag.Bool("debug", false, "Activate diagnostic logs")
 	flag.Parse()
 
-	serverTLS, clientTLS, _ := p2p.GenerateOrLoadTLSConfig(*storagePath, *storagePath, *id)
+	caPath := filepath.Dir(*storagePath)
+	err := p2p.InitCluster(caPath)
+	if err != nil { 
+		panic(err)
+	}
+	err = p2p.IssueNodeCertificate(caPath, *storagePath, *id)
+	if err != nil { 
+		panic(err)
+	}
+	caCertFile := filepath.Join(caPath, "ca.crt")
+	nodeCertFile := filepath.Join(*storagePath, *id+".crt")
+	nodeKeyFile := filepath.Join(*storagePath, *id+".key")
+	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+	if err != nil { 
+		panic(err)
+	}
 	httpClient := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: clientTLS},
 	}
-	
 	logLevel := slog.LevelInfo
 	if *debugMode {
 		logLevel = slog.LevelDebug

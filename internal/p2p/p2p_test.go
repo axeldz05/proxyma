@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/testutil"
 	"testing"
@@ -14,8 +15,15 @@ import (
 
 func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	t.Parallel()
-	clusterDir := t.TempDir()
-	serverTLS, clientTLS, err := p2p.GenerateOrLoadTLSConfig(clusterDir, clusterDir, "legit-node")
+	caPath := t.TempDir()
+	err := p2p.InitCluster(caPath)
+	require.NoError(t, err)
+	err = p2p.IssueNodeCertificate(caPath, caPath, "1")
+	require.NoError(t, err)
+	caCertFile := filepath.Join(caPath, "ca.crt")
+	nodeCertFile := filepath.Join(caPath, "1.crt")
+	nodeKeyFile := filepath.Join(caPath, "1.key")
+	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err, "Should not fail while generating certs for the cluster")
 	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -58,8 +66,14 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 
 	t.Run("Reject certificates from an unknown CA", func(t *testing.T) {
 		hackerDir := t.TempDir()
-
-		_, hackerClientTLS, err := p2p.GenerateOrLoadTLSConfig(hackerDir, hackerDir, "hacker-node")
+		err := p2p.InitCluster(hackerDir)
+		require.NoError(t, err)
+		err = p2p.IssueNodeCertificate(hackerDir, hackerDir, "hacker-node")
+		require.NoError(t, err)
+		caCertFile := filepath.Join(hackerDir, "ca.crt")
+		nodeCertFile := filepath.Join(hackerDir, "hacker-node.crt")
+		nodeKeyFile := filepath.Join(hackerDir, "hacker-node.key")
+		_, hackerClientTLS , err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 		require.NoError(t, err)
 
 		hackerClient := &http.Client{

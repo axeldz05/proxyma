@@ -16,80 +16,87 @@ import (
 	"time"
 )
 
-func GenerateOrLoadTLSConfig(caFolderPath, nodeFolderPath, nodeID string) (*tls.Config, *tls.Config, error) {
+func InitCluster(caFolderPath string) error {
 	caPath := filepath.Join(caFolderPath, "ca.crt")
 	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+
+	if fileExists(caPath) && fileExists(caKeyPath) {
+		return nil
+	}
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		return fmt.Errorf("error generating CA: %w", err)
+	}
+	return saveCertAndKey(caPath, caKeyPath, caCert, caKey)
+}
+
+func IssueNodeCertificate(caFolderPath, nodeFolderPath, nodeID string) error {
+	caPath := filepath.Join(caFolderPath, "ca.crt")
+	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+
+	caCert, caKey, err := loadCertAndKey(caPath, caKeyPath)
+	if err != nil {
+		return fmt.Errorf("could not load CA (has the cluster been initialized?): %w", err)
+	}
+
 	nodeCertPath := filepath.Join(nodeFolderPath, fmt.Sprintf("%s.crt", nodeID))
 	nodeKeyPath := filepath.Join(nodeFolderPath, fmt.Sprintf("%s.key", nodeID))
 
-	var caCert *x509.Certificate
-	var caKey *ecdsa.PrivateKey
-	var err error
-
-	if fileExists(caPath) && fileExists(caKeyPath) {
-		caCert, caKey, err = loadCertAndKey(caPath, caKeyPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error loading CA: %w", err)
-		}
-	} else {
-		caCert, caKey, err = generateCA()
-		if err != nil {
-			return nil, nil, fmt.Errorf("error generating CA: %w", err)
-		}
-		saveCertAndKey(caPath, caKeyPath, caCert, caKey)
+	nodeCert, nodeKey, err := generateNodeCert(caCert, caKey, nodeID)
+	if err != nil {
+		return fmt.Errorf("error generating node cert: %w", err)
 	}
 
+	return saveCertAndKey(nodeCertPath, nodeKeyPath, nodeCert, nodeKey)
+}
+
+func LoadNodeTLS(caCertPath, nodeCertPath, nodeKeyPath string) (*tls.Config, *tls.Config, error) {
+	caCertPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error loading CA cert: %w", err)
+	}
 	caCertPool := x509.NewCertPool()
-	caCertPool.AddCert(caCert)
-
-	var nodeTLSCert tls.Certificate
-	if fileExists(nodeCertPath) && fileExists(nodeKeyPath) {
-		nodeTLSCert, err = tls.LoadX509KeyPair(nodeCertPath, nodeKeyPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error loading node cert: %w", err)
-		}
-	} else {
-		nodeCert, nodePrivKey, err := generateNodeCert(caCert, caKey, nodeID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error generating node cert: %w", err)
-		}
-		saveCertAndKey(nodeCertPath, nodeKeyPath, nodeCert, nodePrivKey)
-		nodeTLSCert, err = tls.LoadX509KeyPair(nodeCertPath, nodeKeyPath)
-		if err != nil {
-			return nil, nil, err
-		}
+	if !caCertPool.AppendCertsFromPEM(caCertPEM) {
+		return nil, nil, errors.New("failed to append CA cert to pool")
+	}
+	nodeTLSCert, err := tls.LoadX509KeyPair(nodeCertPath, nodeKeyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error loading node key pair: %w", err)
 	}
 
-	serverTLSConfig := &tls.Config{
+	serverTLS := &tls.Config{
 		Certificates: []tls.Certificate{nodeTLSCert},
-		ClientCAs:    caCertPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
 		MinVersion:   tls.VersionTLS13,
 	}
 
-	clientTLSConfig := &tls.Config{
+	clientTLS := &tls.Config{
 		Certificates: []tls.Certificate{nodeTLSCert},
-		RootCAs:      caCertPool,
-		MinVersion:   tls.VersionTLS13,
 		InsecureSkipVerify: true, 
 		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-			for _, rawCert := range rawCerts {
-				cert, err := x509.ParseCertificate(rawCert)
-				if err != nil {
-					return err
-				}
-				opts := x509.VerifyOptions{
-					Roots: caCertPool,
-				}
-				if _, err := cert.Verify(opts); err == nil {
-					return nil 
-				}
+			if len(rawCerts) == 0 {
+				return errors.New("no certificates provided by peer")
 			}
-			return errors.New("bad certificate: peer certificate not signed by Proxyma CA")
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("failed to parse certificate: %w", err)
+			}
+			opts := x509.VerifyOptions{
+				Roots:       caCertPool,
+				CurrentTime: time.Now(),
+			}
+			_, err = cert.Verify(opts)
+			if err != nil {
+				return fmt.Errorf("bad certificate: %w", err)
+			}
+			return nil
 		},
+		MinVersion: tls.VersionTLS13,
 	}
 
-	return serverTLSConfig, clientTLSConfig, nil
+	return serverTLS, clientTLS, nil
 }
 
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
