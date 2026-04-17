@@ -8,18 +8,20 @@ import (
 	"proxyma/internal/protocol"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type ComputeEngine struct {
-	taskQueue    chan protocol.TaskRequest
-	registry     *ServiceRegistry
-	taskStatuses *sync.Map
-	logger       *slog.Logger
-	peerClient   p2p.PeerClient
-	nodeID       string
-	nodeAddr     string
-	wg 			 sync.WaitGroup
+	taskQueue     chan protocol.TaskRequest
+	registry      *ServiceRegistry
+	taskStatuses  *sync.Map
+	logger        *slog.Logger
+	peerClient    p2p.PeerClient
+	nodeID        string
+	nodeAddr      string
+	activeWorkers atomic.Int32
+	wg 			  sync.WaitGroup
 }
 
 type registeredService struct {
@@ -82,6 +84,7 @@ func (c *ComputeEngine) GetTaskStatus(taskID string) (protocol.ServiceTaskRespon
 func (c *ComputeEngine) serviceWorker() {
 	defer c.wg.Done()
 	for task := range c.taskQueue {
+		c.activeWorkers.Add(1)
 		c.logger.Info("Working on task...", "job_id", task.TaskID)
 		
 		handler, exists := c.registry.GetHandler(task.Service)
@@ -117,11 +120,13 @@ func (c *ComputeEngine) serviceWorker() {
 		} else {
 			c.logger.Warn("[Compute Engine] - There's no one to reply to", "taskID", task.TaskID)
 		}
+		c.activeWorkers.Add(-1)
 	}
 }
 
 func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
 	currentTasks := len(ce.taskQueue)
+	busyWorkers := ce.activeWorkers.Load()
 	maxTasks := cap(ce.taskQueue)
 	
 	if maxTasks > 0 && float64(currentTasks)/float64(maxTasks) > 0.9 {
@@ -138,7 +143,7 @@ func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64,
 
 	// Add a penalty for each task already waiting in line. 
 	// Assuming an average task takes 50ms.
-	estimatedCost += int64(currentTasks) * 50
+	estimatedCost += int64(busyWorkers) * 50
 
 	activeGoroutines := runtime.NumGoroutine()
 	if activeGoroutines > 100 {
