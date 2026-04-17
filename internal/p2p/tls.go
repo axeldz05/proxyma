@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -146,6 +147,8 @@ func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID 
 			Organization: []string{"Proxyma Node"},
 			CommonName:   nodeID,
 		},
+		DNSNames:    []string{nodeID, "localhost"}, 
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		NotBefore:   time.Now(),
 		NotAfter:    time.Now().AddDate(1, 0, 0),
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
