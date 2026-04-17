@@ -81,21 +81,17 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
-
-	select {
-		case s.taskQueue <- taskReq:
-			w.WriteHeader(http.StatusAccepted)
-			if err := json.NewEncoder(w).Encode(map[string]string{
-				"status":  "accepted",
-				"message": "Task received and queued for processing",
-				"job_id":  taskReq.TaskID,
-			}); err != nil {
-				s.logger.Error("failed to encode positive validation", "error", err)
-			}
-			s.logger.Info("[TaskQueue] - task was queued", "taskID", taskReq.TaskID)
-		default:
-		    http.Error(w, "Node is overloaded", http.StatusServiceUnavailable)
-		    return
+	if err := s.SubmitTask(taskReq); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	if err := json.NewEncoder(w).Encode(map[string]string{
+		"status":  "accepted",
+		"message": "Task received and queued for processing",
+		"job_id":  taskReq.TaskID,
+	}); err != nil {
+		s.logger.Error("failed to encode positive validation", "error", err)
 	}
 }
 

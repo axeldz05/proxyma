@@ -12,19 +12,29 @@ var ErrServiceDuplicate = errors.New("service is already registered")
 
 func NewServiceRegistry() *ServiceRegistry {
 	return &ServiceRegistry{
-		schemas: make(map[string]protocol.ServiceSchema),
+		services: make(map[string]registeredService),
 	}
 }
 
-func (r *ServiceRegistry) Register(schema protocol.ServiceSchema) error {
+func (r *ServiceRegistry) GetHandler(serviceName string) (ServiceHandler, bool){
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	service, exists := r.services[serviceName]
+	if !exists {
+		return nil, exists
+	}
+	return service.handler, true
+}
+
+func (r *ServiceRegistry) Register(schema protocol.ServiceSchema, handler ServiceHandler) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.schemas[schema.Name]; exists {
+	if _, exists := r.services[schema.Name]; exists {
 		return fmt.Errorf("failed to register '%s': '%w'", schema.Name, ErrServiceDuplicate)
 	}
 
-	r.schemas[schema.Name] = schema
+	r.services[schema.Name] = registeredService{schema: schema, handler: handler}
 	return nil
 }
 
@@ -32,14 +42,14 @@ func (r *ServiceRegistry) Get(name string) (protocol.ServiceSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	
-	schema, exists := r.schemas[name]
-	return schema, exists
+	service, exists := r.services[name]
+	return service.schema, exists
 }
 
 func (r *ServiceRegistry) ListAll() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return slices.Collect(maps.Keys(r.schemas))
+	return slices.Collect(maps.Keys(r.services))
 }
 
 func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {

@@ -151,25 +151,17 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 }
 
 func (s *Server) DispatchTask(targetPeerAddr string, req protocol.TaskRequest) error {
-	s.Compute.SetTaskStatusByID(req.TaskID, protocol.ServiceTaskResponse{
-		TaskID:  req.TaskID,
-		Service: req.Service,
-		Status:  "pending",
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+    s.Compute.RegisterOutgoingTask(req)
 
-	err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
-	if err != nil {
-		s.Compute.SetTaskStatusByID(req.TaskID, protocol.ServiceTaskResponse{
-			TaskID:  req.TaskID,
-			Service: req.Service,
-			Status:  "failed",
-			Error:   err.Error(),
-		})
-		return fmt.Errorf("failed to dispatch task to peer: %v", err)
-	}
-	return nil
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+
+    err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
+    if err != nil {
+        s.Compute.MarkTaskAsFailed(req.TaskID, req.Service, err.Error())
+        return fmt.Errorf("failed to dispatch task to peer: %v", err)
+    }
+    return nil
 }
 
 func (s *Server) GetPeersCopy() map[string]string{

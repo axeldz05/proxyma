@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -11,30 +12,39 @@ import (
 )
 
 type ComputeEngine struct {
-	registry     *ServiceRegistry
 	taskQueue    chan protocol.TaskRequest
+	registry     *ServiceRegistry
 	taskStatuses *sync.Map
 	logger       *slog.Logger
 	peerClient   p2p.PeerClient
 	nodeID       string
 	nodeAddr     string
+	wg 			 sync.WaitGroup
+}
+
+type registeredService struct {
+	schema  protocol.ServiceSchema
+	handler ServiceHandler
 }
 
 type ServiceRegistry struct {
-	mu		sync.RWMutex
-	schemas map[string]protocol.ServiceSchema
+	mu			sync.RWMutex
+	services 	map[string]registeredService
 }
+
+type ServiceHandler func(ctx context.Context, payload map[string]any) (map[string]any, error)
 
 func NewComputeEngine(logger *slog.Logger, pc p2p.PeerClient, workerCount int, id string) *ComputeEngine {
 	engine := &ComputeEngine{
-		registry:     NewServiceRegistry(),
 		taskQueue:    make(chan protocol.TaskRequest, 10),
+		registry:     NewServiceRegistry(),
 		taskStatuses: &sync.Map{},
 		logger:       logger,
 		peerClient:   pc,
 		nodeID: 	  id,
 	}
 	for range workerCount {
+		engine.wg.Add(1)
 		go engine.serviceWorker()
 	}
 
@@ -49,8 +59,8 @@ func (c *ComputeEngine) GetService(serviceName string) (protocol.ServiceSchema, 
 	return c.registry.Get(serviceName)
 }
 
-func (c *ComputeEngine) RegisterNewService(schema protocol.ServiceSchema) error {
-	if err := c.registry.Register(schema); err != nil {
+func (c *ComputeEngine) RegisterNewService(schema protocol.ServiceSchema, handler ServiceHandler) error {
+	if err := c.registry.Register(schema, handler); err != nil {
 		c.logger.Error("[Compute Engine] - Couldn't register new service", "error", err)
 		return err
 	}
@@ -69,24 +79,33 @@ func (c *ComputeEngine) GetTaskStatus(taskID string) (protocol.ServiceTaskRespon
 	return res, true
 }
 
-func (c *ComputeEngine) SetTaskStatusByID(taskID string, response protocol.ServiceTaskResponse) {
-	c.taskStatuses.Store(taskID, response)
-}
-
 func (c *ComputeEngine) serviceWorker() {
+	defer c.wg.Done()
 	for task := range c.taskQueue {
 		c.logger.Info("Working on task...", "job_id", task.TaskID)
 		
-		time.Sleep(500 * time.Millisecond) // Simulación
-		
+		handler, exists := c.registry.GetHandler(task.Service)
+		if !exists {
+			c.logger.Error("Service not found during execution", "service", task.Service)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        outputs, err := handler(ctx, task.Payload)
+        cancel()
+
+        status := "completed"
+        if err != nil {
+            status = "failed"
+            outputs = map[string]any{"error": err.Error()}
+        }		
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:  task.TaskID,
 			Service: task.Service,
-			Status:  "completed",
-			Outputs: map[string]any{
-				"text_result": "vfs://result_hash", 
-			},
+			Status:  status,
+			Outputs: outputs,
 		}
+
+		c.setTaskStatus(responsePayload)
 		
 		if task.ReplyTo != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -130,6 +149,38 @@ func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64,
 	return estimatedCost, true
 }
 
+func (c *ComputeEngine) SubmitTask(req protocol.TaskRequest) error {
+	select {
+	case c.taskQueue <- req:
+		c.logger.Debug("Task accepted into queue", "taskID", req.TaskID)
+		return nil
+	default:
+		return fmt.Errorf("node is overloaded: task queue is full")
+	}
+}
+
+func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
+    c.setTaskStatus(protocol.ServiceTaskResponse{
+        TaskID:  req.TaskID,
+        Service: req.Service,
+        Status:  "pending",
+    })
+}
+
+func (c *ComputeEngine) MarkTaskAsFailed(taskID, service, reason string) {
+    c.setTaskStatus(protocol.ServiceTaskResponse{
+        TaskID:  taskID,
+        Service: service,
+        Status:  "failed",
+        Outputs: map[string]any{"error": reason},
+    })
+}
+
+func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {
+	c.taskStatuses.Store(response.TaskID, response)
+}
+
 func (c *ComputeEngine) Close() {
 	close(c.taskQueue)
+	c.wg.Wait()
 }

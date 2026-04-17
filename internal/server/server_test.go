@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
@@ -17,7 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"context"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -340,7 +342,10 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		Description: "Standard Optical Character Recognition",
 		Parameters:  savedParameters,
 	}
-	err := svWithService.Compute.RegisterNewService(schema1)
+	var mockHandler compute.ServiceHandler = func(context.Context, map[string]any) (map[string]any, error) {
+        return map[string]any{}, nil
+    }
+	err := svWithService.Compute.RegisterNewService(schema1, mockHandler)
 	require.NoError(t, err)
 
 	svDemandingService.AddPeer(svWithService.Config.ID, svWithService.Config.Address)
