@@ -1,13 +1,16 @@
 # Proxyma: Heterogeneous Resource Orchestrator (WIP)
 
 **Proxyma** is a distributed system written in **Go**, designed to unify multiple devices into a single, intelligent computing and storage mesh. 
-It acts as a connective tissue that allows the hardware capabilities of one node (such as a PC's GPU or a mobile camera) to be transparently available to the rest of the network.  
+It acts as a connective tissue that allows the hardware capabilities of one node (such as a PC's GPU or a mobile camera) to be transparently available to the rest of the network of nodes.  
 The goal is to eliminate hardware boundaries, integrating multiple custom services.
 
 ### **Issues in mind**
-For connecting outside a local network, the system will need to have an implementation of a global discovery. This needs to be able to authenticate the devices in some way.  
-There's also the consideration of two devices not being able to connect to each other because they're behind a NAT to make the connection, 
-and it may not be able to open a port which would be directly accesible through the internet. This may need a relay between the devices.
+* NAT Traversal: Implementing hole punching and relay fallbacks (STUN/TURN) to enable connectivity between nodes behind restrictive firewalls. Consider using AutoNAT with libp2p
+* Currently, the system uses BoltDB for subscriptions of files and Virtual File System (VFS). Considering the transition to BadgerDB (which implements a WiscKey LSM-based) or a customized 
+implementation to optimize I/O on SSDs and handle larger metadata sets efficiently.
+* Distributed Consistency: Moving beyond local ACID compliance towards a distributed consensus model (e.g., Raft) for unified network state.
+* The "custom services" engine currently relies on a custom JSON-based protocol, which introduces serialization overhead. Consider using gRPC for Inter-Node Communication and Streaming, in conjunction
+with grpc-gateway for particular cases where a JSON will work just fine.
 
 ## Key Features
 * **P2P Synchronization:** A file transfer protocol inspired by BitTorrent.
@@ -20,12 +23,13 @@ and it may not be able to open a port which would be directly accesible through 
 ### Phase 1: Core & Networking
 - [x] Implement a File System for servers and clients, based on a P2P Syncrhonization.
 - [ ] Implement automatic node discovery in local networks (mDNS).
+- [ ] Implement global discovery using a secure pairing.
 - [x] End-to-end TLS encryption.
 - [ ] Secure "Handshake" and pairing system for new devices.
 
 ### Phase 2: Orchestration & Services
 - [ ] **Custom services** engine.
-- [ ] Load balancing logic based on real-time CPU/RAM telemetry from nodes.
+- [ ] Load balancing logic based on real-time CPU/RAM telemetry (OpenTelemetry) from nodes.
 
 ### Phase 3: Ecosystem & UI
 - [ ] Lightweight Android client (Photo capture, video recording, task submission).
