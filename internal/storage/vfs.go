@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"github.com/boltdb/bolt"
 	"proxyma/internal/protocol"
-	"sync"
 )
 
 type VFS struct {
 	index *bolt.DB
-	mu    sync.RWMutex
 }
 
 func NewVFS(index *bolt.DB) *VFS {
