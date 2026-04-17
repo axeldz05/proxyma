@@ -14,17 +14,13 @@ func aFileAcceptedByStorage() []byte {
 	return []byte{1, 2, 3}
 }
 
-func aFileNotAcceptedByStorage() []byte {
-	return []byte{1, 2, 3}
-}
-
 func aFileAcceptedByStorage2() []byte {
 	return []byte{4, 5, 6}
 }
 
 func Test01StorageStartsWithNofiles(t *testing.T) {
 	aStorage := NewStorage(t.TempDir())
-	err, got := aStorage.AmountOfBlobs()
+	got, err := aStorage.AmountOfBlobs()
 	require.NoError(t, err)
 	want := 0
 	require.Equal(t, want, got)
@@ -80,7 +76,7 @@ func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
 	_, _, err = aStorage.SaveBlob(bytes.NewReader(content2))
 	require.NoError(t, err)
 
-	err, got := aStorage.AmountOfBlobs()
+	got, err := aStorage.AmountOfBlobs()
 	require.NoError(t, err)
 	want := 2
 	require.Equal(t, got, want)

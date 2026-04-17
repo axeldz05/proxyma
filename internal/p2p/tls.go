@@ -170,19 +170,29 @@ func saveCertAndKey(certPath, keyPath string, cert *x509.Certificate, key *ecdsa
 	if err != nil {
 		return err
 	}
-	defer certOut.Close()
-	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	defer func() { _ = certOut.Close() }()
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
+		return fmt.Errorf("failed to encode certificate: %w", err)
+	}
+	if err := certOut.Close(); err != nil {
+		return err
+	}
 
 	keyOut, err := os.Create(keyPath)
 	if err != nil {
 		return err
 	}
-	defer keyOut.Close()
+	defer func() { _ = keyOut.Close() }()
 	privBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return err
 	}
-	pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}); err != nil {
+		return fmt.Errorf("failed to encode certificate: %w", err)
+	}
+	if err := keyOut.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 

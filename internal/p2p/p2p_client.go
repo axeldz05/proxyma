@@ -40,7 +40,9 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	var manifest map[string]protocol.IndexEntry
 	err = json.NewDecoder(resp.Body).Decode(&manifest)
 	if err != nil {
@@ -64,7 +66,9 @@ func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notificati
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	return nil
 }
 
@@ -81,7 +85,9 @@ func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerAddr, hash string
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return resp.Body, nil
@@ -96,7 +102,9 @@ func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerAddr string) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	var svcs []string
 	err = json.NewDecoder(resp.Body).Decode(&svcs)
 	if err != nil {
@@ -114,7 +122,9 @@ func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerAddr string, se
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	var result map[string]string
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
@@ -140,7 +150,9 @@ func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req pr
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusServiceUnavailable {
 		return fmt.Errorf("node is overloaded")
@@ -167,7 +179,9 @@ func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, url string, resp 
     if err != nil {
         return err
     }
-    defer httpResp.Body.Close()
+	defer func() {
+		_ = httpResp.Body.Close()
+	}()
 
     return nil
 }
@@ -186,7 +200,9 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerAddr string, q
     if err != nil {
         return protocol.ServiceBid{}, err
     }
-    defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
     if resp.StatusCode != http.StatusOK {
         return protocol.ServiceBid{}, fmt.Errorf("peer returned status %d", resp.StatusCode)

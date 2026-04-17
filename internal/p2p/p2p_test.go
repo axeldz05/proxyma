@@ -27,7 +27,9 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	require.NoError(t, err, "Should not fail while generating certs for the cluster")
 	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hyper secure connection"))
+		if _, err := w.Write([]byte("hyper secure connection")); err != nil {
+			require.NoError(t, err)
+		}
 	})
 
 	handler := slog.NewTextHandler(testutil.TestLogWriter{T: t}, &slog.HandlerOptions{Level: slog.LevelDebug})
@@ -48,7 +50,7 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 
 		resp, err := legitClient.Get(secureServer.URL)
 		require.NoError(t, err, "The client should be able to connect")
-		defer resp.Body.Close()
+		defer func(){ _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 

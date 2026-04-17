@@ -26,18 +26,23 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close()}()
 
 	err = s.SaveLocalFile(header.Filename, file)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	if err = file.Close(); err != nil {
+		http.Error(w, "Couldn't close file", http.StatusInternalServerError)
+	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Bloab uploaded successfully",
-	})
+	if err = json.NewEncoder(w).Encode(map[string]string{
+		"message": "Blob uploaded successfully",
+	}); err != nil {
+		s.logger.Error("failed to encode upload response", "error", err)
+	}
 }
 
 // handleNotification handles notifications from peers about new files
@@ -70,16 +75,14 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 
 func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	requestedHash := r.URL.Path[len("/download/"):]
+	w.Header().Set("Content-Type", "application/octet-stream")
 	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {
-		if err == storage.ErrFileDoesNotExist {
-			http.Error(w, "Blob not found", http.StatusNotFound)
-		} else {
-			http.Error(w, "Error retrieving blob: "+err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
+        if err == storage.ErrFileDoesNotExist {
+            http.Error(w, "Blob not found", http.StatusNotFound)
+        }
+        return
+    }
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +98,16 @@ func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) 
 	s.subscriptions.Store(fileName, true)
 	w.WriteHeader(http.StatusOK)
 	s.logger.Info("Subscription added", "file", fileName)
-	fmt.Fprintf(w, "Subscribed to %s", fileName)
+	if _, err := fmt.Fprintf(w, "Subscribed to %s", fileName); err != nil {
+		http.Error(w, "Couldn't write message", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(s.vfs.Snapshot())
+	if err := json.NewEncoder(w).Encode(s.vfs.Snapshot()); err != nil {
+		s.logger.Error("failed to encode snapshot response", "error", err)
+	}
 }
 
 func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -120,5 +128,5 @@ func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("File deleted successfully"))
+	_, _ = w.Write([]byte("File deleted successfully"))
 }

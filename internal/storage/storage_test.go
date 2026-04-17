@@ -237,7 +237,8 @@ func TestNetworkRequestRespectsTimeouts(t *testing.T) {
 	defer engine.Close()
 
 	engine.SetSubscription("trampa.txt", true)
-	engine.SyncStorage(map[string]string{"peer": "slow-peer"})
+	err := engine.SyncStorage(map[string]string{"peer": "slow-peer"})
+	require.NoError(t, err)
 
 	time.Sleep(3 * time.Second)
 

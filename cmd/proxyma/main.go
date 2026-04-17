@@ -38,7 +38,10 @@ func main() {
 func runInit() {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	path := fs.String("path", "./certs", "Directory where the CA will be stored")
-	fs.Parse(os.Args[2:])
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 	
 	if err := ensureDir(*path); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -57,7 +60,10 @@ func runIssue() {
 	caPath := fs.String("ca", "./certs", "CA directory path")
 	nodePath := fs.String("node-path", "./certs", "Output directory for the node certificate")
 	id := fs.String("id", "", "Unique node identifier (mandatory)")
-	fs.Parse(os.Args[2:])
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	dir := filepath.Dir(*nodePath)
 	if err := ensureDir(dir); err != nil {
@@ -88,7 +94,10 @@ func runServer() {
 	certFile := fs.String("cert", "", "Path to the node certificate (defaults to ./certs/<id>.crt)")
 	keyFile := fs.String("key", "", "Path to the node private key (defaults to ./certs/<id>.key)")
 	
-	fs.Parse(os.Args[2:])
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	if *certFile == "" {
 		*certFile = fmt.Sprintf("./certs/%s.crt", *id)

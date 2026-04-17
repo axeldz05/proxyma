@@ -30,13 +30,6 @@ func (ts *TestServer) Client() *http.Client {
 	return ts.httpTestSrv.Client()
 }
 
-func (ts *TestServer) Close() {
-	ts.httpTestSrv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	ts.Server.Shutdown(ctx)
-}
-
 func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
 	caPath := filepath.Dir(cfg.StoragePath)
 	err := p2p.InitCluster(caPath)
@@ -60,6 +53,14 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
 	ts.Client().Transport = httpClient.Transport
 	app.SetAddress(ts.URL)
 
+	t.Cleanup(func() {
+        ts.Close()
+        ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+        defer cancel()
+        err := app.Shutdown(ctx)
+        require.NoError(t, err, "Node shutdown should not return an error")
+    })
+
 	return &TestServer{
 		Server:      app,
 		httpTestSrv: ts,
@@ -74,7 +75,8 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 	require.NoError(t, err)
 	_, err = io.WriteString(fileWriter, content)
 	require.NoError(t, err)
-	writer.Close()
+	err = writer.Close() 
+    require.NoError(t, err, "Failed to close multipart writer")
 
 	reqUp, err := http.NewRequest("POST", sv.Config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
@@ -82,7 +84,7 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 
 	respUp, err := sv.Client().Do(reqUp)
 	require.NoError(t, err)
-	defer respUp.Body.Close()
+	defer func(){ _ = respUp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, respUp.StatusCode, "The upload should have return status 201 Created")
 	return testutil.CalculateHash(t, content)
@@ -95,7 +97,7 @@ func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
 
 	respDel, err := sv.Client().Do(reqDel)
 	require.NoError(t, err)
-	defer respDel.Body.Close()
+	defer func(){ _ = respDel.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, respDel.StatusCode, "Delete should have return 200 OK")
 }
@@ -122,7 +124,7 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 
 	resp, err := updatedServer.Client().Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func(){ _ = resp.Body.Close() }()
 	buf := new(strings.Builder)
 	_, err = io.Copy(buf, resp.Body)
 	if err != nil {
@@ -138,7 +140,6 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 func TestFirstServerIsAlreadySynced(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
 	require.NoError(t, sv.Storage.SyncStorage(sv.GetPeersCopy()))
 }
 
@@ -146,8 +147,6 @@ func TestAServerCanConnectToAnother(t *testing.T) {
 	t.Parallel()
 	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
 	sv2 := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv1.Close()
-	defer sv2.Close()
 	sv1.AddPeer("2", sv2.Config.Address)
 	sv2.AddPeer("1", sv1.Config.Address)
 
@@ -169,7 +168,6 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 	for i := range clusterSize {
 		serverName := fmt.Sprintf("%d", i)
 		servers[i] = NewServer(t, testutil.DefaultConfig(t, serverName))
-		defer servers[i].Close()
 	}
 
 	// Full connection between the peers
@@ -204,9 +202,6 @@ func TestAllServersSyncsToLastUpdated(t *testing.T) {
 	updatedServer := NewServer(t, testutil.DefaultConfig(t, "1"))
 	noUpdatedServer := NewServer(t, testutil.DefaultConfig(t, "2"))
 	noUpdatedServer2 := NewServer(t, testutil.DefaultConfig(t, "3"))
-	defer updatedServer.Close()
-	defer noUpdatedServer.Close()
-	defer noUpdatedServer2.Close()
 
 	updatedServer.AddPeer("2", noUpdatedServer.Config.Address)
 	updatedServer.AddPeer("3", noUpdatedServer2.Config.Address)
@@ -238,7 +233,6 @@ func TestAllServersSyncsToLastUpdated(t *testing.T) {
 func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
 
 	fileName := "test04.txt"
 	fileContent := "testing"
@@ -254,7 +248,6 @@ func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 func TestDownloadEndpointUsesHash(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
 	fileName := "test06.txt"
 	fileContent := "Hello!!"
 	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
@@ -265,7 +258,7 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 
 	respDL, err := sv.Client().Do(reqDL)
 	require.NoError(t, err)
-	defer respDL.Body.Close()
+	defer func(){ _ = respDL.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, respDL.StatusCode, "Server should answer with OK 200 status when requesting Hash")
 	buf := new(strings.Builder)
@@ -277,7 +270,6 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
 
 	fakeHash := "hash-simulado-999"
 	fakeFile := protocol.IndexEntry{
@@ -293,7 +285,7 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	resp, err := sv.Client().Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func(){ _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode, "The endpoint /manifest must answer with status code: 200 OK")
 
@@ -309,8 +301,6 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 	t.Parallel()
 	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
 	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"))
-	defer sv1.Close()
-	defer sv2.Close()
 
 	sv1.AddPeer("2", sv2.Config.Address)
 	sv2.AddPeer("1", sv1.Config.Address)
@@ -339,8 +329,6 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	t.Parallel()
 	svWithService := NewServer(t, testutil.DefaultConfig(t, "1"))
 	svDemandingService := NewServer(t, testutil.DefaultConfig(t, "2"))
-	defer svWithService.Close()
-	defer svDemandingService.Close()
 
 	savedParameters := map[string]protocol.ServiceParameter{
 		"image":    {Type: "string", Required: true},
@@ -395,7 +383,6 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 func TestUnauthorizedAccessIsRejected(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	defer sv.Close()
 
 	clientWithoutCert := &http.Client{
 		Transport: &http.Transport{
@@ -403,8 +390,8 @@ func TestUnauthorizedAccessIsRejected(t *testing.T) {
 		},
 	}
 	resp, err := clientWithoutCert.Get(sv.Config.Address + "/peers")
-	require.Error(t, err, "Should fail at TLS handshake due to missing client certs")
 	if resp != nil {
-		resp.Body.Close()
+		defer func(){ _ = resp.Body.Close() }()
 	}
+	require.Error(t, err, "Should fail at TLS handshake due to missing client certs")
 }

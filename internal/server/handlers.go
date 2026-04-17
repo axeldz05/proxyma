@@ -25,5 +25,7 @@ func (s *Server) MountHandlers() http.Handler {
 }
 
 func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(s.peers)
+	if err := json.NewEncoder(w).Encode(s.peers); err != nil {
+		s.Config.Logger.Error("failed to encode getPeers response", "error", err)
+	}
 }

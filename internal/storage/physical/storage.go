@@ -3,11 +3,12 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"errors"
 )
 
 type Storage struct {
@@ -32,18 +33,23 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 		return "", 0, err
 	}
 	tempName := file.Name()
-	defer os.Remove(tempName)
+	defer func(){ _ = os.Remove(tempName) }()
 	hasher := sha256.New()
 	mw := io.MultiWriter(file, hasher)
 	writtenBytes, err := io.Copy(mw, content)
 	if err != nil {
-		file.Close()
+		if err := file.Close(); err != nil {
+			return "", 0, fmt.Errorf("failed to close file safely: %w", err)
+		}
 		return "", 0, err
 	}
 	generatedHash := hex.EncodeToString(hasher.Sum(nil))
 	fullpath := filepath.Join(st.baseDir, generatedHash)
 	_, err = os.Stat(fullpath)
-	defer file.Close()
+	if err := file.Close(); err != nil {
+		return "", 0, fmt.Errorf("failed to close file safely: %w", err)
+	}
+
 	if os.IsNotExist(err){
 		err = os.Rename(file.Name(), fullpath)	
 		if err != nil {
@@ -58,15 +64,15 @@ func ReadFileFromClient(clientIP string, pathToRead string) (io.ReadCloser, erro
 	return os.Open(pathToRead)
 }
 
-func (st *Storage) AmountOfBlobs() (error, int) {
+func (st *Storage) AmountOfBlobs() (int, error) {
 	result := 0
 	err := VisitAndDo(st, func(string, fs.DirEntry) error { result++; return nil },
 		IsNotADir)
 
 	if err != nil {
-		return err, 0
+		return 0, err
 	}
-	return nil, result
+	return result, nil
 }
 
 func (st *Storage) BlobExists(hash string) (bool, error) {
@@ -90,7 +96,7 @@ func (st *Storage) ReadBlob(hash string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	_, err = io.Copy(w, file)
 	return err
 }
