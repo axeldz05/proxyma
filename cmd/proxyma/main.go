@@ -18,11 +18,14 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s [init|issue|run] [flags]\n", os.Args[0])
+		printUsage()
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
+	case "help", "-h", "--help":
+		printUsage()
+		os.Exit(0)
 	case "init":
 		runInit()
 	case "issue":
@@ -31,8 +34,18 @@ func main() {
 		runServer()
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		printUsage()
 		os.Exit(1)
 	}
+}
+
+func printUsage() {
+	fmt.Printf("Proxyma P2P Node\n\n")
+	fmt.Printf("Usage: %s [init|issue|run] [flags]\n\n", os.Args[0])
+	fmt.Println("Subcommands:")
+	fmt.Println("  init   Initialize the Cluster CA")
+	fmt.Println("  issue  Issue a certificate for a new node")
+	fmt.Println("  run    Start the Proxyma node server")
 }
 
 func runInit() {
