@@ -5,18 +5,20 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync"
-	"time"
+	"os"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage/physical"
+	"time"
+
+	"github.com/boltdb/bolt"
 )
 
 type StorageEngine struct {
 	physical      storage.Storage
 	vfs           *VFS
-	// TODO: try using BoltDB / Badger for sync.Map
-	subscriptions *sync.Map
+	subscriptions *bolt.DB
 	downloadQueue chan DownloadJob
 	logger        *slog.Logger
 	peerClient    p2p.PeerClient
@@ -29,10 +31,29 @@ type DownloadJob struct {
 }
 
 func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, workers int, notify func(protocol.IndexEntry)) *StorageEngine {
+	dbPath := filepath.Join(path, "metadata.db")
+	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		logger.Error("Failed to open BoltDB", "path", dbPath, "error", err)
+		os.Exit(1)
+	}
+
+	if err = db.Update(func(tx *bolt.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists([]byte("subscriptions")); err != nil {
+			logger.Error("Failed to create bucket for subscriptions", "error", err)
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists([]byte("vfs_index"))
+		return err
+	}); err != nil {
+		logger.Error("Failed to create bucket for vfs_index", "error", err)
+		os.Exit(1)
+	}
+
 	engine := &StorageEngine{
 		physical:      *storage.NewStorage(path),
-		vfs:           NewVFS(),
-		subscriptions: &sync.Map{},
+		vfs:           NewVFS(db),
+		subscriptions: db,
 		downloadQueue: make(chan DownloadJob, 1000),
 		logger:        logger,
 		peerClient:    pc,
@@ -59,7 +80,28 @@ func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
 }
 
 func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
-	se.subscriptions.Store(fileName, isSubscribed)
+	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("subscriptions"))
+		if isSubscribed {
+			return b.Put([]byte(fileName), []byte("true"))
+		}
+		return b.Delete([]byte(fileName))
+	})
+	if err != nil {
+		se.logger.Error("Failed to update subscription in DB", "file", fileName, "error", err)
+	}
+}
+
+func (se *StorageEngine) isSubscribed(fileName string) bool {
+	var subscribed bool
+	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("subscriptions"))
+		if b != nil && b.Get([]byte(fileName)) != nil {
+			subscribed = true
+		}
+		return nil
+	})
+	return subscribed
 }
 
 func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {
@@ -82,7 +124,7 @@ func (se *StorageEngine) SyncStorage(peers map[string]string) error {
 			for logicalName, remoteFileInfo := range remoteManifest {
 				updated := se.vfs.Upsert(remoteFileInfo)
 				if updated && !remoteFileInfo.Deleted {
-					if _, subscribed := se.subscriptions.Load(logicalName); subscribed {
+					if se.isSubscribed(logicalName) {
 						se.logger.Debug("DownloadJob added", "file", remoteFileInfo.Name, "source", peerAddress)
 						se.downloadQueue <- DownloadJob{
 							File:   remoteFileInfo,
@@ -140,7 +182,7 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 	}
 	se.vfs.Upsert(fileMeta)
 
-	se.subscriptions.Store(fileName, true)
+	se.SetSubscription(fileName, true)
 
 	go se.notifyFunc(fileMeta)
 
@@ -203,4 +245,7 @@ func (se *StorageEngine) downloadWorker() {
 
 func (c *StorageEngine) Close() {
 	close(c.downloadQueue)
+	if err := c.subscriptions.Close(); err != nil {
+		c.logger.Error("Failed to close BoltDB safely", "error", err)
+	}
 }

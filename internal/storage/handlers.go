@@ -60,7 +60,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 
 	updated := se.vfs.Upsert(notification.File)
 	if updated && !notification.File.Deleted {
-		if _, subscribed := se.subscriptions.Load(notification.File.Name); subscribed {
+		if se.isSubscribed(notification.File.Name) {
 			se.downloadQueue <- DownloadJob{
 				File:   notification.File,
 				Source: notification.Source,
@@ -95,7 +95,7 @@ func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
 		return
 	}
-	s.subscriptions.Store(fileName, true)
+	s.SetSubscription(fileName, true)
 	w.WriteHeader(http.StatusOK)
 	s.logger.Info("Subscription added", "file", fileName)
 	if _, err := fmt.Fprintf(w, "Subscribed to %s", fileName); err != nil {

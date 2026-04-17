@@ -1,45 +1,85 @@
 package storage
 
 import (
-	"maps"
+	"encoding/json"
+	"github.com/boltdb/bolt"
 	"proxyma/internal/protocol"
 	"sync"
 )
 
 type VFS struct {
-    index map[string]protocol.IndexEntry
-    mu    sync.RWMutex
+	index *bolt.DB
+	mu    sync.RWMutex
 }
 
-func NewVFS() *VFS {
-	return &VFS {
-		index: make(map[string]protocol.IndexEntry),
+func NewVFS(index *bolt.DB) *VFS {
+	return &VFS{
+		index: index,
 	}
 }
 
 func (v *VFS) Get(name string) (protocol.IndexEntry, bool) {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	entry, exists := v.index[name]
+	var entry protocol.IndexEntry
+	exists := false
+
+	_ = v.index.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("vfs_index"))
+		if b == nil {
+			return nil
+		}
+		data := b.Get([]byte(name))
+		if data != nil {
+			if err := json.Unmarshal(data, &entry); err == nil {
+				exists = true
+			}
+		}
+		return nil
+	})
 	return entry, exists
 }
 
 func (v *VFS) Upsert(entry protocol.IndexEntry) bool {
-    v.mu.Lock()
-	defer v.mu.Unlock()
-	existingMeta, exists := v.index[entry.Name]
-	if !exists || (exists && existingMeta.Version < entry.Version){
-		v.index[entry.Name] = entry
-		return true
-    }
-	return false
+	updated := false
+	_ = v.index.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("vfs_index"))
+
+		data := b.Get([]byte(entry.Name))
+		if data != nil {
+			var existing protocol.IndexEntry
+			if err := json.Unmarshal(data, &existing); err == nil {
+				if existing.Version >= entry.Version {
+					return nil
+				}
+			}
+		}
+		newData, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := b.Put([]byte(entry.Name), newData); err == nil {
+			updated = true
+		}
+		return nil
+	})
+	return updated
 }
 
 func (v *VFS) Snapshot() map[string]protocol.IndexEntry {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
 	snapshot := make(map[string]protocol.IndexEntry)
 
-    maps.Copy(snapshot, v.index)
+	_ = v.index.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("vfs_index"))
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var entry protocol.IndexEntry
+			if err := json.Unmarshal(v, &entry); err == nil {
+				snapshot[string(k)] = entry
+			}
+			return nil
+		})
+	})
 	return snapshot
 }

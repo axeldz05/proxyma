@@ -81,6 +81,8 @@ func (c *ComputeEngine) GetTaskStatus(taskID string) (protocol.ServiceTaskRespon
 	return res, true
 }
 
+// TODO: make this serviceWorker totally asynchroneous, with a limit of
+// how much activeWorkers to have at the same time
 func (c *ComputeEngine) serviceWorker() {
 	defer c.wg.Done()
 	for task := range c.taskQueue {
