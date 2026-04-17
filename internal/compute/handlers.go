@@ -38,11 +38,10 @@ func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request)
             return
         }
     }
-	// TODO: El nodo deberia revisar su CPU o su cola interna de tareas en lugar de estimar.
-	estimated := int64(100)
-	if query.PayloadSizeBytes > 0 {
-		mb := query.PayloadSizeBytes / (1024 * 1024)
-		estimated += mb * 10
+	estimated, canAccept := s.estimateTaskCost(query)
+	if !canAccept {
+		rejectBid()
+		return
 	}
 	bid := protocol.ServiceBid{
 		NodeID:          s.nodeID,

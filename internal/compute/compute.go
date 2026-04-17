@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -98,6 +99,35 @@ func (c *ComputeEngine) serviceWorker() {
 			c.logger.Warn("[Compute Engine] - There's no one to reply to", "taskID", task.TaskID)
 		}
 	}
+}
+
+func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
+	currentTasks := len(ce.taskQueue)
+	maxTasks := cap(ce.taskQueue)
+	
+	if maxTasks > 0 && float64(currentTasks)/float64(maxTasks) > 0.9 {
+		ce.logger.Warn("Node overloaded, rejecting task bid", "queue_length", currentTasks)
+		return 0, false
+	}
+
+	var estimatedCost int64 = 100 // Base latency penalty in ms
+	
+	if query.PayloadSizeBytes > 0 {
+		mb := query.PayloadSizeBytes / (1024 * 1024)
+		estimatedCost += mb * 10
+	}
+
+	// Add a penalty for each task already waiting in line. 
+	// Assuming an average task takes 50ms.
+	estimatedCost += int64(currentTasks) * 50
+
+	activeGoroutines := runtime.NumGoroutine()
+	if activeGoroutines > 100 {
+		// Add 1ms penalty for every extra goroutine competing for CPU cycles
+		estimatedCost += int64(activeGoroutines - 100)
+	}
+
+	return estimatedCost, true
 }
 
 func (c *ComputeEngine) Close() {
