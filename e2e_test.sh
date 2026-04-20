@@ -37,7 +37,6 @@ sleep 5
 
 echo "📤 Uploading test file to node-1 (Port 8081)..."
 
-# We need to skip TLS verification (-k) because our host doesn't have the cluster CA installed.
 echo "Hello Proxyma Cluster!" > test_e2e.txt
 
 UPLOAD_RESPONSE=$(curl -s \
