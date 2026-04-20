@@ -40,7 +40,8 @@ echo "📤 Uploading test file to node-1 (Port 8081)..."
 # We need to skip TLS verification (-k) because our host doesn't have the cluster CA installed.
 echo "Hello Proxyma Cluster!" > test_e2e.txt
 
-UPLOAD_RESPONSE=$(curl -s -k \
+UPLOAD_RESPONSE=$(curl -s \
+  --cacert ./deploy/certs/ca.crt \
   --cert ./deploy/certs/node-1.crt \
   --key ./deploy/certs/node-1.key \
   -X POST \
@@ -70,7 +71,8 @@ RETRY_COUNT=0
 FILE_FOUND=false
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    MANIFEST_RESPONSE=$(curl -s -k  \
+    MANIFEST_RESPONSE=$(curl -s \
+        --cacert ./deploy/certs/ca.crt \
         --cert ./deploy/certs/node-3.crt \
         --key ./deploy/certs/node-3.key \
         https://localhost:8083/manifest || echo "failed")
