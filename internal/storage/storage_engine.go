@@ -124,12 +124,17 @@ func (se *StorageEngine) SyncStorage(peers map[string]string) error {
 			}
 			for logicalName, remoteFileInfo := range remoteManifest {
 				updated := se.vfs.Upsert(remoteFileInfo)
-				if updated && !remoteFileInfo.Deleted {
-					if se.isSubscribed(logicalName) {
-						se.logger.Debug("DownloadJob added", "file", remoteFileInfo.Name, "source", peerAddress)
+				if !remoteFileInfo.Deleted && se.isSubscribed(logicalName) {
+					hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
+					if err != nil {
+						se.logger.Error("Something happened while using HasPhysicalBlob", "error", err)
+						continue
+					}
+					if updated || !hasBlob {
+						se.logger.Debug("DownloadJob added", "file", remoteFileInfo.Name, "source", pAddr)
 						se.downloadQueue <- DownloadJob{
 							File:   remoteFileInfo,
-							Source: peerAddress,
+							Source: pAddr,
 						}
 					}
 				}
@@ -142,7 +147,6 @@ func (se *StorageEngine) SyncStorage(peers map[string]string) error {
 	}
 	return nil
 }
-
 
 func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 	entry, exists := se.vfs.Get(fileName)
@@ -190,7 +194,6 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 	return nil
 }
 
-
 func (se *StorageEngine) downloadFileFromPeer(fileInfo protocol.IndexEntry, sourceAddr string) {
 	if fileInfo.Deleted {
 		savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
@@ -211,7 +214,7 @@ func (se *StorageEngine) downloadFileFromPeer(fileInfo protocol.IndexEntry, sour
 		se.logger.Error("Failed to download blob", "file", fileInfo.Name, "error", err)
 		return
 	}
-	defer func(){ _ = body.Close() }()
+	defer func() { _ = body.Close() }()
 
 	savedHash, _, err := se.physical.SaveBlob(body)
 	if err != nil {
@@ -228,9 +231,9 @@ func (se *StorageEngine) downloadFileFromPeer(fileInfo protocol.IndexEntry, sour
 
 	entry, exists := se.vfs.Get(fileInfo.Name)
 	if exists && entry.Version == fileInfo.Version && !entry.Deleted {
-		se.logger.Debug("Successfully downloaded and applied file", "file",  fileInfo.Name)
+		se.logger.Debug("Successfully downloaded and applied file", "file", fileInfo.Name)
 	} else {
-		se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name, 
+		se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name,
 			"remote file version", fileInfo.Version, "current local version", entry.Version)
 		if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
 			se.logger.Error("Failed to delete blob", "file", fileInfo.Name, "error", err)
