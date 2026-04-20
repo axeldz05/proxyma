@@ -1,0 +1,29 @@
+name: Proxyma E2E Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+permissions:
+  contents: read
+jobs:
+  e2e-cluster-test:
+    name: Run Distributed E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable' 
+          cache: true
+
+      - name: Make script executable
+        run: chmod +x ./e2e_test.sh
+
+      - name: Execute E2E Test Suite
+        run: ./e2e_test.sh
