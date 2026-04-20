@@ -13,7 +13,7 @@ all: lint test build
 
 build:
 	@echo "$(BLUE)Compiling Proxyma...$(NC)"
-	$(GO) build -o $(BINARY_NAME) ./cmd/proxyma
+	$(GO) build -o $(BINARY_NAME) .
 
 test:
 	@echo "$(BLUE)Running tests...$(NC)"

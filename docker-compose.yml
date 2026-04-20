@@ -1,0 +1,98 @@
+networks:
+  proxyma-net:
+    driver: bridge
+
+services:
+  # ==========================================
+  # 1. Genesis Node
+  # ==========================================
+  # This container starts, generates everything and then shuts down(exit 0).
+  genesis:
+    build: .
+    container_name: genesis-node
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - ./deploy/certs:/app/certs
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "./proxyma init --path /app/certs &&
+       ./proxyma issue --ca /app/certs --node-path /app/certs --id node-1 &&
+       ./proxyma issue --ca /app/certs --node-path /app/certs --id node-2 &&
+       ./proxyma issue --ca /app/certs --node-path /app/certs --id node-3"
+
+  # ==========================================
+  # 2. Node 1 (Starting point)
+  # ==========================================
+  node-1:
+    build: .
+    container_name: node-1
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - ./deploy/certs:/app/certs:ro
+      - ./deploy/data/node-1:/app/data
+    ports:
+      - "8081:8081"
+    command: >
+      run --id node-1
+      --addr https://node-1:8081
+      --storage /app/data
+      --ca /app/certs/ca.crt
+      --cert /app/certs/node-1.crt
+      --key /app/certs/node-1.key
+    depends_on:
+      genesis:
+        condition: service_completed_successfully
+
+  # ==========================================
+  # 3. Node 2 (Internal worker) 
+  # ==========================================
+  node-2:
+    build: .
+    container_name: node-2
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - ./deploy/certs:/app/certs:ro
+      - ./deploy/data/node-2:/app/data
+    ports:
+      - "8082:8082"
+    command: >
+      run --id node-2
+      --addr https://node-2:8082
+      --storage /app/data
+      --ca /app/certs/ca.crt
+      --cert /app/certs/node-2.crt
+      --key /app/certs/node-2.key
+    depends_on:
+      genesis:
+        condition: service_completed_successfully
+
+  # ==========================================
+  # 4. Node 3 (Internal worker)
+  # ==========================================
+  node-3:
+    build: .
+    container_name: node-3
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - ./deploy/certs:/app/certs:ro
+      - ./deploy/data/node-3:/app/data
+    ports:
+      - "8083:8083"
+    command: >
+      run --id node-3
+      --addr https://node-3:8083
+      --storage /app/data
+      --ca /app/certs/ca.crt
+      --cert /app/certs/node-3.crt
+      --key /app/certs/node-3.key
+    depends_on:
+      genesis:
+        condition: service_completed_successfully

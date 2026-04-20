@@ -112,6 +112,7 @@ func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
 	return se.vfs.Upsert(entry)
 }
 
+// TODO: make it return the peers that couldn't connect to
 func (se *StorageEngine) SyncStorage(peers map[string]string) error {
 	for _, peerAddress := range peers {
 		err := func(pAddr string) error {

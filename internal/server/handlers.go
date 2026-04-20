@@ -9,6 +9,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux := http.NewServeMux()
 	// --- DOMINIO DE ALMACENAMIENTO (StorageEngine) ---
 	mux.HandleFunc("/upload", s.Storage.HandleUpload)
+	mux.HandleFunc("/sync", s.Storage.HandleSync)
 	mux.HandleFunc("/download/", s.Storage.HandleDownload)
 	mux.HandleFunc("/file", s.Storage.HandleDelete)
 	mux.HandleFunc("/manifest", s.Storage.HandleManifest)
