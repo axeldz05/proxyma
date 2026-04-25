@@ -57,7 +57,6 @@ fi
 echo "🔄 Synchronizing node-3 with node-1..."
 ./proxyma_cli sync --target https://localhost:8083 \
                    --peer-id node-1 \
-                   --peer-addr https://node-1:8081 \
                    --cert ./deploy/certs/node-3.crt \
                    --key ./deploy/certs/node-3.key \
                    --ca ./deploy/certs/ca.crt
@@ -109,7 +108,6 @@ echo -e "${GREEN}✅ Subscription successful.${NC}"
 echo "🔄 Forcing a second Sync to trigger the P2P download..."
 ./proxyma_cli sync --target https://localhost:8083 \
                    --peer-id node-1 \
-                   --peer-addr https://node-1:8081 \
                    --cert ./deploy/certs/node-3.crt \
                    --key ./deploy/certs/node-3.key \
                    --ca ./deploy/certs/ca.crt

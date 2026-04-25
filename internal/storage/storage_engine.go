@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,18 +18,13 @@ type StorageEngine struct {
 	physical      storage.Storage
 	vfs           *VFS
 	subscriptions *bolt.DB
-	downloadQueue chan DownloadJob
 	logger        *slog.Logger
 	peerClient    p2p.PeerClient
 	notifyFunc    func(protocol.IndexEntry)
+	onDownloadNeeded func(file protocol.IndexEntry, rawSource string) error
 }
 
-type DownloadJob struct {
-	File   protocol.IndexEntry
-	Source string
-}
-
-func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, workers int, notify func(protocol.IndexEntry)) *StorageEngine {
+func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, workers int, notify func(protocol.IndexEntry), downloadCallback func(protocol.IndexEntry, string) error) *StorageEngine {
 	dbPath := filepath.Join(path, "metadata.db")
 	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
@@ -51,17 +45,13 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 	}
 
 	engine := &StorageEngine{
-		physical:      *storage.NewStorage(path),
-		vfs:           NewVFS(db),
-		subscriptions: db,
-		downloadQueue: make(chan DownloadJob, 1000),
-		logger:        logger,
-		peerClient:    pc,
-		notifyFunc:    notify,
-	}
-
-	for range workers {
-		go engine.downloadWorker()
+		physical:      		*storage.NewStorage(path),
+		vfs:           		NewVFS(db),
+		subscriptions: 		db,
+		logger:        		logger,
+		peerClient:    		pc,
+		notifyFunc:    		notify,
+		onDownloadNeeded: 	downloadCallback,
 	}
 
 	return engine
@@ -112,40 +102,23 @@ func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
 	return se.vfs.Upsert(entry)
 }
 
-// TODO: make it return the peers that couldn't connect to
-func (se *StorageEngine) SyncStorage(peers map[string]string) error {
-	for _, peerAddress := range peers {
-		err := func(pAddr string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			remoteManifest, err := se.peerClient.FetchManifest(ctx, peerAddress)
+func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.IndexEntry) []protocol.IndexEntry {
+	var missingFiles []protocol.IndexEntry
+	for logicalName, remoteFileInfo := range manifest {
+		updated := se.vfs.Upsert(remoteFileInfo)
+		if !remoteFileInfo.Deleted && se.isSubscribed(logicalName) {
+			hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
 			if err != nil {
-				return err
+				se.logger.Error("Something happened while using HasPhysicalBlob", "error", err)
+				continue
 			}
-			for logicalName, remoteFileInfo := range remoteManifest {
-				updated := se.vfs.Upsert(remoteFileInfo)
-				if !remoteFileInfo.Deleted && se.isSubscribed(logicalName) {
-					hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
-					if err != nil {
-						se.logger.Error("Something happened while using HasPhysicalBlob", "error", err)
-						continue
-					}
-					if updated || !hasBlob {
-						se.logger.Debug("DownloadJob added", "file", remoteFileInfo.Name, "source", pAddr)
-						se.downloadQueue <- DownloadJob{
-							File:   remoteFileInfo,
-							Source: pAddr,
-						}
-					}
-				}
+			if updated || !hasBlob {
+				se.logger.Debug("Missing file added", "file", remoteFileInfo.Name, "version", remoteFileInfo.Version, "hash", remoteFileInfo.Hash)
+				missingFiles = append(missingFiles, remoteFileInfo)
 			}
-			return nil
-		}(peerAddress)
-		if err != nil {
-			se.logger.Warn("Failed to synchronize with peer", "peerAddress", peerAddress, "error", err)
 		}
 	}
-	return nil
+	return missingFiles
 }
 
 func (se *StorageEngine) DeleteLocalFile(fileName string) error {
@@ -194,62 +167,41 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 	return nil
 }
 
-func (se *StorageEngine) downloadFileFromPeer(fileInfo protocol.IndexEntry, sourceAddr string) {
-	if fileInfo.Deleted {
-		savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
-		if se.vfs.Upsert(fileInfo) {
-			if exists {
-				if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
-					se.logger.Error("Failed to delete blob", "file", fileInfo.Name, "error", err)
-				}
+func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
+	savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
+	
+	if se.vfs.Upsert(fileInfo) {
+		if exists {
+			if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
+				se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
 			}
-			se.logger.Info("File deleted", "file", fileInfo.Name)
 		}
-		return
+		se.logger.Info("File remotely deleted", "file", fileInfo.Name)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	body, err := se.peerClient.DownloadBlob(ctx, sourceAddr, fileInfo.Hash)
-	if err != nil {
-		se.logger.Error("Failed to download blob", "file", fileInfo.Name, "error", err)
-		return
-	}
-	defer func() { _ = body.Close() }()
+}
 
-	savedHash, _, err := se.physical.SaveBlob(body)
+func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content io.Reader) error {
+	savedHash, _, err := se.physical.SaveBlob(content)
 	if err != nil {
-		se.logger.Error("Failed to save blob", "file", fileInfo.Name, "error", err)
-		return
+		return fmt.Errorf("failed to save blob physically: %w", err)
 	}
-	if err := body.Close(); err != nil {
-		se.logger.Error("Failed to close body", "error", err)
-	}
+
 	if savedHash != fileInfo.Hash {
-		se.logger.Warn("SECURITY ALERT: Peer has sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
-		return
+		_ = se.physical.DeleteBlob(savedHash) 
+		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
+		return fmt.Errorf("hash mismatch")
 	}
 
 	entry, exists := se.vfs.Get(fileInfo.Name)
 	if exists && entry.Version == fileInfo.Version && !entry.Deleted {
 		se.logger.Debug("Successfully downloaded and applied file", "file", fileInfo.Name)
-	} else {
-		se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name,
-			"remote file version", fileInfo.Version, "current local version", entry.Version)
-		if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
-			se.logger.Error("Failed to delete blob", "file", fileInfo.Name, "error", err)
-		}
-	}
-}
+		return nil
+	} 
 
-func (se *StorageEngine) downloadWorker() {
-	for job := range se.downloadQueue {
-		se.downloadFileFromPeer(job.File, job.Source)
+	se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name)
+	if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
+		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
 	}
-}
-
-func (c *StorageEngine) Close() {
-	close(c.downloadQueue)
-	if err := c.subscriptions.Close(); err != nil {
-		c.logger.Error("Failed to close BoltDB safely", "error", err)
-	}
+	
+	return nil
 }

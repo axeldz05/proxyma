@@ -15,8 +15,7 @@ import (
 
 var (
 	syncTarget   string
-	syncPeerID   string
-	syncPeerAddr string
+	syncPeerID   []string
 	syncCert     string
 	syncKey      string
 	syncCA       string
@@ -29,8 +28,8 @@ var syncCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-		payload := map[string]string{
-			syncPeerID: syncPeerAddr,
+		payload := map[string][]string{
+			"peers": syncPeerID,
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -100,8 +99,7 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 
 	syncCmd.Flags().StringVar(&syncTarget, "target", "https://localhost:8083", "Dirección del nodo que va a RECIBIR la orden de sincronizar")
-	syncCmd.Flags().StringVar(&syncPeerID, "peer-id", "node-1", "ID del nodo remoto a contactar")
-	syncCmd.Flags().StringVar(&syncPeerAddr, "peer-addr", "https://localhost:8081", "Dirección P2P del nodo remoto a contactar")
+	syncCmd.Flags().StringSliceVar(&syncPeerID, "peer-id", []string{"node-1"}, "ID del nodo remoto a contactar")
 	syncCmd.Flags().StringVar(&syncCA, "ca", "", "Ruta al certificado de la CA (ca.crt)")
 	syncCmd.Flags().StringVar(&syncCert, "cert", "", "Ruta al certificado del cliente (mTLS)")
 	syncCmd.Flags().StringVar(&syncKey, "key", "", "Ruta a la llave privada del cliente (mTLS)")

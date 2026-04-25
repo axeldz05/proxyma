@@ -67,7 +67,9 @@ var runCmd = &cobra.Command{
 			},
 		}
 
-		srv := server.New(cfg, httpClient)
+		peerClient := p2p.NewHTTPPeerClient(httpClient)
+
+		srv := server.New(cfg, peerClient)
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 

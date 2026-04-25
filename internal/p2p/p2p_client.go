@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"proxyma/internal/protocol"
 )
 
@@ -31,8 +32,23 @@ func NewHTTPPeerClient(client *http.Client) *HTTPPeerClient {
 	}
 }
 
+func validateAndBuildURL(base string, endpoint string) (string, error) {
+	parsed, err := url.ParseRequestURI(base)
+	if err != nil {
+		return "", fmt.Errorf("invalid peer URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("insecure protocol blocked: %s", parsed.Scheme)
+	}
+	return url.JoinPath(parsed.String(), endpoint)
+}
+
 func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", peerAddr+"/manifest", nil)
+	safeURL, err := validateAndBuildURL(peerAddr, "manifest")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", safeURL, nil)
 	if err != nil {
 		return nil, err
 	}

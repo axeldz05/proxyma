@@ -26,7 +26,7 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
 	}
-	defer func() { _ = file.Close()}()
+	defer func() { _ = file.Close() }()
 
 	err = s.SaveLocalFile(header.Filename, file)
 	if err != nil {
@@ -45,61 +45,31 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
-func (s *StorageEngine) HandleSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	peers, err := utils.DecodeJSON[map[string]string](r)
-	if err != nil {
-		http.Error(w, "couldn't decode peers json", http.StatusInternalServerError)
-		s.logger.Error("failed to decode peers json", "error", err)
-		return
-	}
-	// TODO: make it return a multi-status if some peers failed to sync, or a 
-	// 400 error if everyone failed
-	err = s.SyncStorage(peers)
-	if err != nil {
-		http.Error(w, "couldn't sync storage", http.StatusInternalServerError)
-		s.logger.Error("failed to sync storage", "error", err, "peers", peers)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	if err = json.NewEncoder(w).Encode(map[string]string{
-		"message": "Storage synced succesfully",
-	}); err != nil {
-		s.logger.Error("failed to encode storage sync response", "error", err)
-	}
-}
-
 // handleNotification handles notifications from peers about new files
 func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-
 	notification, err := utils.DecodeJSON[protocol.PeerNotification](r)
 	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-
 	updated := se.vfs.Upsert(notification.File)
-	if updated && !notification.File.Deleted {
-		if se.isSubscribed(notification.File.Name) {
-			se.downloadQueue <- DownloadJob{
-				File:   notification.File,
-				Source: notification.Source,
+	if updated && !notification.File.Deleted && se.isSubscribed(notification.File.Name) {
+		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
+
+		if !hasBlob {
+			err := se.onDownloadNeeded(notification.File, notification.Source)
+			if err != nil {
+				utils.RespondError(w, http.StatusForbidden, "Network rejected the source")
+				return
 			}
 			utils.RespondJSON(w, http.StatusAccepted, map[string]string{"message": "Downloading file"})
 			return
 		}
 	}
-	
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
 }
 
@@ -108,11 +78,11 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {
-        if err == storage.ErrFileDoesNotExist {
-            http.Error(w, "Blob not found", http.StatusNotFound)
-        }
-        return
-    }
+		if err == storage.ErrFileDoesNotExist {
+			http.Error(w, "Blob not found", http.StatusNotFound)
+		}
+		return
+	}
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {

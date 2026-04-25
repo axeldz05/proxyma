@@ -23,19 +23,40 @@ type Server struct {
 	peers   		map[string]string
 	peerClient  	p2p.PeerClient
 	httpServer 		*http.Server
+	downloadQueue 	chan DownloadJob
 }
 
-func New(cfg protocol.NodeConfig, httpClient *http.Client) *Server {
-	peerClient := p2p.NewHTTPPeerClient(httpClient)
+type DownloadJob struct {
+	File   protocol.IndexEntry
+	Source string
+}
 
+
+func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	s := &Server{
-		Config:     cfg,
-		peers:      make(map[string]string),
-		peerClient: peerClient,
+		Config:     	cfg,
+		peers:      	make(map[string]string),
+		peerClient: 	peerClient,
+		downloadQueue: 	make(chan DownloadJob, 100),
 	}
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
-	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers)
+	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
+		for _, peerAddress := range s.peers {
+			if rawSource == peerAddress {
+				s.downloadQueue <- DownloadJob{
+					File:   file,
+					Source: peerAddress,
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("peer of address %s not found", rawSource)
+    })
+
+	for range cfg.Workers {
+		go s.downloadWorker(context.Background())
+	}
 	return s
 }
 
@@ -66,10 +87,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.Config.Logger.Info("HTTP server stopped accepting connections.")
 
-	if s.Storage != nil {
-		s.Storage.Close()
-		s.Config.Logger.Info("Storage Engine closed.")
-	}
 	if s.Compute != nil { 
 		s.Compute.Close() 
 		s.Config.Logger.Info("Compute Engine closed.")
@@ -85,6 +102,7 @@ func (s *Server) SetAddress(addr string) {
 }
 
 func (s *Server) AddPeer(peerID, address string) {
+	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 	s.peers[peerID] = address
 }
 
@@ -117,7 +135,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
     var mu sync.Mutex
     var wg sync.WaitGroup
 
-    peers := s.GetPeersCopy() //
+    peers := s.GetPeersCopy()
     for _, peerAddr := range peers {
         wg.Add(1)
         go func(addr string) {
@@ -168,4 +186,53 @@ func (s *Server) GetPeersCopy() map[string]string{
 	peers := make(map[string]string, len(s.peers))
 	maps.Copy(peers, s.peers)
 	return peers
+}
+
+func (srv *Server) ExecuteSync(peerIDs []string) error {
+	for _, peerID := range peerIDs {
+		peerAddress, exists := srv.peers[peerID]
+		if !exists {
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+
+		manifest, err := srv.peerClient.FetchManifest(ctx, peerAddress) 
+		cancel()
+		if err != nil {
+			continue 
+		}
+
+		missingFiles := srv.Storage.ProcessRemoteManifest(manifest) 
+		
+		for _, file := range missingFiles {
+			srv.downloadQueue <- DownloadJob{
+				File:   file,
+				Source: peerAddress,
+			}
+		}
+	}
+	return nil
+}
+
+func (srv *Server) downloadWorker(ctx context.Context) {
+	for job := range srv.downloadQueue{
+		if job.File.Deleted {
+			srv.Storage.ProcessRemoteDeletion(job.File)
+			continue
+		}
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		body, err := srv.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
+		if err != nil {
+			cancel()
+			srv.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
+			continue
+		}
+		err = srv.Storage.StoreRemoteBlob(job.File, body)
+		_ = body.Close()
+		cancel()
+		if err != nil {
+			srv.Config.Logger.Error("Failed to apply remote blob", "error", err)
+		}
+	}
 }

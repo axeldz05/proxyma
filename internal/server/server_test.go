@@ -32,7 +32,7 @@ func (ts *TestServer) Client() *http.Client {
 	return ts.httpTestSrv.Client()
 }
 
-func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
+func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient) *TestServer {
 	caPath := filepath.Dir(cfg.StoragePath)
 	err := p2p.InitCluster(caPath)
 	require.NoError(t, err)
@@ -43,24 +43,40 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig) *TestServer {
 	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
 	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err)
-	httpClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: clientTLS},
+
+	customTransport := &http.Transport{
+		TLSClientConfig:   clientTLS,
+		DisableKeepAlives: true, 
 	}
 
-	app := server.New(cfg, httpClient)
+	var finalClient p2p.PeerClient
+	if mockClient != nil {
+		finalClient = mockClient
+	} else {
+		httpClient := &http.Client{
+			Transport: customTransport,
+		}
+		finalClient = p2p.NewHTTPPeerClient(httpClient)
+	}
+
+	app := server.New(cfg, finalClient)
 	ts := httptest.NewUnstartedServer(app.MountHandlers())
 	ts.TLS = serverTLS
 	ts.StartTLS()
 
-	ts.Client().Transport = httpClient.Transport
+	ts.Client().Transport = &http.Transport{
+		TLSClientConfig:   clientTLS,
+		DisableKeepAlives: true,
+	}
 	app.SetAddress(ts.URL)
 
 	t.Cleanup(func() {
-        ts.Close()
+		ts.CloseClientConnections()
         ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
         defer cancel()
         err := app.Shutdown(ctx)
         require.NoError(t, err, "Node shutdown should not return an error")
+		ts.Close()
     })
 
 	return &TestServer{
@@ -139,16 +155,10 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 	}
 }
 
-func TestFirstServerIsAlreadySynced(t *testing.T) {
-	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
-	require.NoError(t, sv.Storage.SyncStorage(sv.GetPeersCopy()))
-}
-
 func TestAServerCanConnectToAnother(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "1"))
+	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+	sv2 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 	sv1.AddPeer("2", sv2.Config.Address)
 	sv2.AddPeer("1", sv1.Config.Address)
 
@@ -159,8 +169,8 @@ func TestAServerCanConnectToAnother(t *testing.T) {
 
 	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
 	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
-	require.NoError(t, sv1.Storage.SyncStorage(sv1.GetPeersCopy()))
-	require.NoError(t, sv2.Storage.SyncStorage(sv2.GetPeersCopy()))
+	require.NoError(t, sv1.ExecuteSync([]string{"1"}))
+	require.NoError(t, sv2.ExecuteSync([]string{"2"}))
 }
 
 func TestP2PNetworkEventualConsistency(t *testing.T) {
@@ -169,7 +179,7 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 	servers := make([]*TestServer, clusterSize)
 	for i := range clusterSize {
 		serverName := fmt.Sprintf("%d", i)
-		servers[i] = NewServer(t, testutil.DefaultConfig(t, serverName))
+		servers[i] = NewServer(t, testutil.DefaultConfig(t, serverName), nil)
 	}
 
 	// Full connection between the peers
@@ -188,9 +198,7 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 	expectedHash := UploadFileSimulated(t, servers[0], fileName, fileContent)
 	require.Eventually(t, func() bool {
 		for _, srv := range servers {
-
 			meta, exists := srv.Storage.GetFileMeta(fileName)
-
 			if !exists || meta.Hash != expectedHash {
 				return false
 			}
@@ -201,9 +209,9 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 
 func TestAllServersSyncsToLastUpdated(t *testing.T) {
 	t.Parallel()
-	updatedServer := NewServer(t, testutil.DefaultConfig(t, "1"))
-	noUpdatedServer := NewServer(t, testutil.DefaultConfig(t, "2"))
-	noUpdatedServer2 := NewServer(t, testutil.DefaultConfig(t, "3"))
+	updatedServer := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+	noUpdatedServer := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
+	noUpdatedServer2 := NewServer(t, testutil.DefaultConfig(t, "3"), nil)
 
 	updatedServer.AddPeer("2", noUpdatedServer.Config.Address)
 	updatedServer.AddPeer("3", noUpdatedServer2.Config.Address)
@@ -234,7 +242,7 @@ func TestAllServersSyncsToLastUpdated(t *testing.T) {
 
 func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
+	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 
 	fileName := "test04.txt"
 	fileContent := "testing"
@@ -249,7 +257,7 @@ func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 
 func TestDownloadEndpointUsesHash(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
+	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 	fileName := "test06.txt"
 	fileContent := "Hello!!"
 	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
@@ -271,7 +279,7 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 
 func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
+	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 
 	fakeHash := "hash-simulado-999"
 	fakeFile := protocol.IndexEntry{
@@ -301,8 +309,8 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 
 func TestTombstonePropagatesToPeers(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"))
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"))
+	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
 
 	sv1.AddPeer("2", sv2.Config.Address)
 	sv2.AddPeer("1", sv1.Config.Address)
@@ -329,8 +337,8 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 
 func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	t.Parallel()
-	svWithService := NewServer(t, testutil.DefaultConfig(t, "1"))
-	svDemandingService := NewServer(t, testutil.DefaultConfig(t, "2"))
+	svWithService := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+	svDemandingService := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
 
 	savedParameters := map[string]protocol.ServiceParameter{
 		"image":    {Type: "string", Required: true},
@@ -387,7 +395,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 
 func TestUnauthorizedAccessIsRejected(t *testing.T) {
 	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"))
+	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 
 	clientWithoutCert := &http.Client{
 		Transport: &http.Transport{
@@ -399,4 +407,96 @@ func TestUnauthorizedAccessIsRejected(t *testing.T) {
 		defer func(){ _ = resp.Body.Close() }()
 	}
 	require.Error(t, err, "Should fail at TLS handshake due to missing client certs")
+}
+
+func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-server-1")
+	cfg.Workers = 2
+
+	contentByHash := make(map[string]string)
+	manifest := make(map[string]protocol.IndexEntry)
+
+	for i := range 5 {
+		content := fmt.Sprintf("content %d", i)
+		hash := testutil.CalculateHash(t, content)
+		fileName := fmt.Sprintf("file_%d.txt", i)
+		contentByHash[hash] = content
+		manifest[fileName] = protocol.IndexEntry{
+			Name: fileName, Hash: hash, Version: 1,
+		}
+	}
+
+	mockClient := &testutil.MockPeerClient{
+		OnFetchManifest: func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error) {
+			return manifest, nil
+		},
+		OnDownloadBlob: func(ctx context.Context, addr, hash string) (io.ReadCloser, error) {
+			time.Sleep(1 * time.Second)
+			content, ok := contentByHash[hash]
+			if !ok {
+				return nil, fmt.Errorf("hash not found in mock")
+			}
+			return io.NopCloser(bytes.NewReader([]byte(content))), nil
+		},
+	}
+
+	srv := NewServer(t, cfg, mockClient) 
+	for i := range 5 {
+		srv.Storage.SetSubscription(fmt.Sprintf("file_%d.txt", i), true)
+	}
+	srv.AddPeer("peer1", "https://fake:8080")
+	start := time.Now()
+	err := srv.ExecuteSync([]string{"peer1"})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		snapshot := srv.Storage.GetVFSSnapshot()
+		if len(snapshot) < 5 {
+			return false
+		}
+		for _, v := range snapshot {
+			hasBlob, _ := srv.Storage.HasPhysicalBlob(v.Hash)
+			if !hasBlob {
+				return false
+			}
+		}
+		return true
+	}, 6*time.Second, 100*time.Millisecond)
+
+	duration := time.Since(start)
+	
+	// 5 files at 1 seg per file, with 2 workers, should take ~3 seconds.
+	// if it takes < 2s, it's downloading everything at once.
+	// if it takes >= 5s, the concurrency is failing. 
+	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. Worker pool isn't limiting concurrency.")
+	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
+}
+
+func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-server-2")
+
+	mockClient := &testutil.MockPeerClient{
+		OnFetchManifest: func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return map[string]protocol.IndexEntry{}, nil
+			}
+		},
+	}
+
+	srv := NewServer(t, cfg, mockClient) 
+	srv.AddPeer("slow-peer", "https://fake-address:8080")
+	start := time.Now()
+
+	err := srv.ExecuteSync([]string{"slow-peer"})
+	require.NoError(t, err)
+
+	duration := time.Since(start)
+
+	require.GreaterOrEqual(t, duration, 2*time.Second, "Exited too early, didn't wait for timeout")
+	require.Less(t, duration, 3*time.Second, "Hung too long, failed to respect context timeout")
 }
