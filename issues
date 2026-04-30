@@ -1,0 +1,6 @@
+- Hacer que cuando un nodo finalmente logra unirse a un cluster, este avisa al cluster y todos los nodos lo guardan en sus respectivos peers.
+- Validaciones por hacer:
+    - Hay que implementar una validacion cuando ya se tiene en claro como seran los mensajes.
+    - Cuando un nodo recibe peticion para unirse al cluster, tiene que verificar que el address sea accedible.
+    - Announce el endpoing /peers/announce se deja expuesto frente a peticiones invalidas
+

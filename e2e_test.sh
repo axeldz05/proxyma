@@ -12,65 +12,55 @@ echo "🚀 Starting Proxyma cluster E2E test..."
 
 echo "🧹 Cleaning up environment..."
 docker compose down -v
-rm -fr ./deploy
-mkdir -p ./deploy/certs ./deploy/data/node-1 ./deploy/data/node-2 ./deploy/data/node-3
+rm -fr ./deploy proxyma_cli downloaded_test.txt test_e2e.txt || true
+mkdir -p ./deploy/data/node-1 ./deploy/data/node-2 ./deploy/data/node-3
+
+docker compose build
+docker compose run --rm node-1 init --id "node-1" --port "8081" --storage "/app/data"
+docker compose run --rm node-2 init --id "node-2" --port "8082" --storage "/app/data"
+docker compose run --rm node-3 init --id "node-3" --port "8083" --storage "/app/data"
+docker compose up -d node-1
+sleep 3
 
 
-echo "🏗️ Spinning up containers (Build & Up)..."
-docker compose up --build -d
+echo "🎟️ [NODE-1]: Generating invite token for node 2..."
+INVITE_OUTPUT=$(docker compose exec node-1 ./proxyma invite)
+TOKEN=$(echo "$INVITE_OUTPUT" | grep -o "ey[a-zA-Z0-9._-]*")
 
-echo "🔨 Compiling local CLI of Proxyma..."
-go build -o proxyma_cli ./main.go
+echo "🔗 [NODE-2]: Joining the cluster..."
+docker compose run --rm node-2 join --id "node-2" --token "$TOKEN"
 
-cleanup() {
-    echo "🛑 Shutting down containers..."
-    docker compose down -v
-    echo "deleting generated files and binaries"
-    rm -fr ./deploy
-    rm ./proxyma_cli
-    rm .env
-}
-trap cleanup EXIT
+echo "🎟️ [NODE-1]: Generating invite token for node 3..."
+INVITE_OUTPUT=$(docker compose exec node-1 ./proxyma invite)
+TOKEN=$(echo "$INVITE_OUTPUT" | grep -o "ey[a-zA-Z0-9._-]*")
 
-echo "⏳ Waiting for the cluster to come online..."
-sleep 5
+echo "🔗 [NODE-3]: Joining the cluster..."
+docker compose run --rm node-3 join --id "node-3" --token "$TOKEN"
 
-echo "📤 Uploading test file to node-1 (Port 8081)..."
+docker compose up -d node-2 node-3
+sleep 3
 
+
+echo "📤 [HOST]: Uploading a file to node-1 via HTTP..."
 echo "Hello Proxyma Cluster!" > test_e2e.txt
+curl -s --cacert ./deploy/data/node-1/certs/ca.crt \
+        --cert ./deploy/data/node-1/certs/node-1.crt \
+        --key ./deploy/data/node-1/certs/node-1.key \
+        -X POST -F "file=@test_e2e.txt" https://localhost:8081/upload
 
-UPLOAD_RESPONSE=$(curl -s \
-  --cacert ./deploy/certs/ca.crt \
-  --cert ./deploy/certs/node-1.crt \
-  --key ./deploy/certs/node-1.key \
-  -X POST \
-  -F "file=@test_e2e.txt" \
-  https://localhost:8081/upload)
+echo "🔄 [NODE-3]: Triggering manual sync from within the node..."
+docker compose exec node-3 ./proxyma sync
 
-if echo "$UPLOAD_RESPONSE" | grep -q "successfully"; then
-    echo -e "${GREEN}✅ File successfully uploaded to node-1.${NC}"
-else
-    echo -e "${RED}❌ Failed to upload file to node-1. Response: $UPLOAD_RESPONSE${NC}"
-    exit 1
-fi
-
-echo "🔄 Synchronizing node-3 with node-1..."
-./proxyma_cli sync --target https://localhost:8083 \
-                   --peer-id node-1 \
-                   --cert ./deploy/certs/node-3.crt \
-                   --key ./deploy/certs/node-3.key \
-                   --ca ./deploy/certs/ca.crt
-
-echo "🔍 Verifying metadata replication on node-3 (Port 8083)..."
+echo "🔍 Verifying metadata replication on node-3..."
 MAX_RETRIES=10
 RETRY_COUNT=0
 FILE_FOUND=false
 MANIFEST_RESPONSE=""
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    MANIFEST_RESPONSE=$(curl -s --cacert ./deploy/certs/ca.crt \
-        --cert ./deploy/certs/node-3.crt \
-        --key ./deploy/certs/node-3.key \
+    MANIFEST_RESPONSE=$(curl -s --cacert ./deploy/data/node-3/certs/ca.crt \
+        --cert ./deploy/data/node-3/certs/node-3.crt \
+        --key ./deploy/data/node-3/certs/node-3.key \
         https://localhost:8083/manifest || echo "failed")
     
     if echo "$MANIFEST_RESPONSE" | grep -q "test_e2e.txt"; then
@@ -99,27 +89,33 @@ fi
 echo -e "${GREEN}✅ Node 3 ignored the physical download, as expected.${NC}"
 
 echo "📝 Subscribing node-3 to the file 'test_e2e.txt'..."
-SUBSCRIBE_RESPONSE=$(curl -s --cacert ./deploy/certs/ca.crt \
-  --cert ./deploy/certs/node-3.crt \
-  --key ./deploy/certs/node-3.key \
+SUBSCRIBE_RESPONSE=$(curl -s --cacert ./deploy/data/node-3/certs/ca.crt \
+        --cert ./deploy/data/node-3/certs/node-3.crt \
+        --key ./deploy/data/node-3/certs/node-3.key \
   -X POST "https://localhost:8083/subscribe?name=test_e2e.txt")
+echo "🔍 Server response: $SUBSCRIBE_RESPONSE"
+
+if [[ -z "$SUBSCRIBE_RESPONSE" || "$SUBSCRIBE_RESPONSE" == *"error"* ]]; then
+    echo -e "${RED}❌ Subscription failed!${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✅ Subscription successful.${NC}"
 
 echo "🔄 Forcing a second Sync to trigger the P2P download..."
-./proxyma_cli sync --target https://localhost:8083 \
-                   --peer-id node-1 \
-                   --cert ./deploy/certs/node-3.crt \
-                   --key ./deploy/certs/node-3.key \
-                   --ca ./deploy/certs/ca.crt
-
+docker compose exec node-3 ./proxyma sync
 echo "⬇️ Downloading the file from node-3's API..."
-# Polling loop waiting for the async worker to finish the P2P download
-for i in {1..5}; do
-    curl -s -f --cacert ./deploy/certs/ca.crt \
-      --cert ./deploy/certs/node-3.crt \
-      --key ./deploy/certs/node-3.key \
-      "https://localhost:8083/download/$FILE_HASH" -o downloaded_test.txt && break || sleep 1
-done
+# 3. Descarga usando GET (sin -X POST) y extrayendo el código HTTP para depurar
+HTTP_CODE=$(curl -s -w "%{http_code}" --cacert ./deploy/data/node-3/certs/ca.crt \
+    --cert ./deploy/data/node-3/certs/node-3.crt \
+    --key ./deploy/data/node-3/certs/node-3.key \
+    "https://localhost:8083/download/$FILE_HASH" -o downloaded_test.txt)
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo -e "${RED}❌ Download failed with HTTP $HTTP_CODE${NC}"
+    echo "🔍 Server said:"
+    cat downloaded_test.txt
+    exit 1
+fi
 
 echo "⚖️ Verifying cryptographic integrity of the content..."
 if diff test_e2e.txt downloaded_test.txt > /dev/null; then
@@ -129,5 +125,6 @@ else
     exit 1
 fi
 
-rm downloaded_test.txt
-rm test_e2e.txt
+echo "🧹 Cleaning up environment..."
+docker compose down -v
+rm -fr ./deploy proxyma_cli downloaded_test.txt test_e2e.txt || true

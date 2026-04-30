@@ -65,10 +65,14 @@ func LoadNodeTLS(caCertPath, nodeCertPath, nodeKeyPath string) (*tls.Config, *tl
 	if err != nil {
 		return nil, nil, fmt.Errorf("error loading node key pair: %w", err)
 	}
+	caBlock, _ := pem.Decode(caCertPEM)
+	if caBlock != nil {
+		nodeTLSCert.Certificate = append(nodeTLSCert.Certificate, caBlock.Bytes)
+	}
 
 	serverTLS := &tls.Config{
 		Certificates: []tls.Certificate{nodeTLSCert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
 		ClientCAs:    caCertPool,
 		MinVersion:   tls.VersionTLS13,
 	}
@@ -100,8 +104,116 @@ func LoadNodeTLS(caCertPath, nodeCertPath, nodeKeyPath string) (*tls.Config, *tl
 	return serverTLS, clientTLS, nil
 }
 
+func GenerateNodeCSR(nodeID string) (csrPEM []byte, privateKeyPEM []byte, err error) {
+	privateKey, err := generatePrivateKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	privBytes, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal private key: %w", err)
+	}
+	privateKeyPEM = pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: privBytes,
+	})
+
+	template := x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName:   nodeID,
+			Organization: []string{"Proxyma Cluster"},
+		},
+		SignatureAlgorithm: x509.ECDSAWithSHA256,
+	}
+
+	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &template, privateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create CSR: %w", err)
+	}
+
+	csrPEM = pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: csrBytes,
+	})
+
+	return csrPEM, privateKeyPEM, nil
+}
+
+func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte, err error) {
+	block, _ := pem.Decode(csrPEM)
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		return nil, fmt.Errorf("failed to decode PEM block containing CSR")
+	}
+
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CSR: %w", err)
+	}
+
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("invalid CSR signature: %w", err)
+	}
+
+	caCert, caPrivKey, err := loadCAPair(caCertPath, caKeyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
+
+	certTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		DNSNames:     []string{csr.Subject.CommonName, "localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		Subject:      csr.Subject,
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(1, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, csr.PublicKey, caPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign certificate: %w", err)
+	}
+
+	certPEM = pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	return certPEM, nil
+}
+
+func loadCAPair(certPath, keyPath string) (*x509.Certificate, any, error) {
+	certBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	certBlock, _ := pem.Decode(certBytes)
+	caCert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keyBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyBlock, _ := pem.Decode(keyBytes)
+	caPrivKey, err := x509.ParseECPrivateKey(keyBlock.Bytes) // Asumiendo que tu CA también usa ECDSA
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return caCert, caPrivKey, nil
+}
+
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := generatePrivateKey()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,7 +245,7 @@ func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 }
 
 func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := generatePrivateKey()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,4 +341,8 @@ func fileExists(filename string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func generatePrivateKey() (*ecdsa.PrivateKey, error) {
+	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 }

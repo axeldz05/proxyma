@@ -1,6 +1,11 @@
 package protocol
 
-import "log/slog"
+import (
+	"encoding/json"
+	"log/slog"
+	"os"
+	"path/filepath"
+)
 
 type TaskRequest struct {
 	TaskID  string         `json:"task_id"`
@@ -52,11 +57,13 @@ type ServiceBid struct {
 }
 
 type NodeConfig struct {
-	ID          string
-	Address     string
-	StoragePath string
-	Workers     int
-	Logger		*slog.Logger
+	ID            string `json:"id"`
+	Address       string `json:"address"`
+	StoragePath   string `json:"storage_path"`
+	Workers       int    `json:"workers"`
+	CAPath        string `json:"ca_path"`
+	BootstrapNode string `json:"bootstrap_node,omitempty"`
+	Logger		  *slog.Logger
 }
 
 const (
@@ -70,3 +77,46 @@ type PeerNotification struct {
 	Source string     `json:"source"`
 }
 
+type JoinRequest struct {
+	Secret 	   string `json:"secret"`
+	CSR    	   string `json:"csr"`
+	ID	   	   string `json:"id"`
+	Address	   string `json:"address"`
+}
+
+type JoinResponse struct {
+	Certificate string 			  `json:"certificate"`
+	CACert      string 			  `json:"ca_cert"`
+	Peers 		map[string]string `json:"peers"`
+}
+
+type AddPeerRequest struct {
+	ID		string `json:"id"`
+	Address string `json:"address"`
+}
+
+func SaveConfig(cfg NodeConfig) error {
+	configPath := filepath.Join(cfg.StoragePath, "config.json")
+	file, err := os.Create(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() {_ = file.Close()}()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(cfg)
+}
+
+func LoadConfig(storagePath string) (NodeConfig, error) {
+	configPath := filepath.Join(storagePath, "config.json")
+	file, err := os.Open(configPath)
+	if err != nil {
+		return NodeConfig{}, err
+	}
+	defer func() {_ = file.Close()}()
+
+	var cfg NodeConfig
+	err = json.NewDecoder(file).Decode(&cfg)
+	return cfg, err
+}

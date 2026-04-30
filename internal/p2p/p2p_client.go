@@ -13,7 +13,9 @@ import (
 
 type PeerClient interface {
 	FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error)
+	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
 	Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error
+	AddPeer(peerAddr string, payload *bytes.Buffer) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
 	ExecuteService(ctx context.Context, peerAddr string, serviceName string) (map[string]string, error)
@@ -230,4 +232,36 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerAddr string, q
     }
 
     return bid, nil
+}
+
+func (c *HTTPPeerClient) AddPeer(peerAddr string, payload *bytes.Buffer) error {
+	url := fmt.Sprintf("%s/peers/add", peerAddr)
+	reqPeer, _ := http.NewRequest(http.MethodPost, url, payload)
+	reqPeer.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(reqPeer)
+	if err != nil {
+		return fmt.Errorf("couldn't add peer for %s: %w", peerAddr, err)
+	}
+	err = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error) {
+	url := fmt.Sprintf("%s/peers/announce", sponsorAddres)
+	bodyBytes, _ := json.Marshal(peerRequest)
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return map[string]string{}, fmt.Errorf("couldn't announce to %s: %w", sponsorAddres, err)
+	}
+	defer func(){ _ = resp.Body.Close() }()
+	var peers map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		return map[string]string{}, err
+	}
+	return peers, nil
 }

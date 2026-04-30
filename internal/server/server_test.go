@@ -46,7 +46,7 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 
 	customTransport := &http.Transport{
 		TLSClientConfig:   clientTLS,
-		DisableKeepAlives: true, 
+		DisableKeepAlives: true,
 	}
 
 	var finalClient p2p.PeerClient
@@ -72,12 +72,12 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 
 	t.Cleanup(func() {
 		ts.CloseClientConnections()
-        ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-        defer cancel()
-        err := app.Shutdown(ctx)
-        require.NoError(t, err, "Node shutdown should not return an error")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		err := app.Shutdown(ctx)
+		require.NoError(t, err, "Node shutdown should not return an error")
 		ts.Close()
-    })
+	})
 
 	return &TestServer{
 		Server:      app,
@@ -93,8 +93,8 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 	require.NoError(t, err)
 	_, err = io.WriteString(fileWriter, content)
 	require.NoError(t, err)
-	err = writer.Close() 
-    require.NoError(t, err, "Failed to close multipart writer")
+	err = writer.Close()
+	require.NoError(t, err, "Failed to close multipart writer")
 
 	reqUp, err := http.NewRequest("POST", sv.Config.Address+"/upload", &requestBody)
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 
 	respUp, err := sv.Client().Do(reqUp)
 	require.NoError(t, err)
-	defer func(){ _ = respUp.Body.Close() }()
+	defer func() { _ = respUp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, respUp.StatusCode, "The upload should have return status 201 Created")
 	return testutil.CalculateHash(t, content)
@@ -115,7 +115,7 @@ func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
 
 	respDel, err := sv.Client().Do(reqDel)
 	require.NoError(t, err)
-	defer func(){ _ = respDel.Body.Close() }()
+	defer func() { _ = respDel.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, respDel.StatusCode, "Delete should have return 200 OK")
 }
@@ -142,7 +142,7 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 
 	resp, err := updatedServer.Client().Do(req)
 	require.NoError(t, err)
-	defer func(){ _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }()
 	buf := new(strings.Builder)
 	_, err = io.Copy(buf, resp.Body)
 	if err != nil {
@@ -169,8 +169,8 @@ func TestAServerCanConnectToAnother(t *testing.T) {
 
 	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
 	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
-	require.NoError(t, sv1.ExecuteSync([]string{"1"}))
-	require.NoError(t, sv2.ExecuteSync([]string{"2"}))
+	require.NoError(t, sv1.ExecuteSync())
+	require.NoError(t, sv2.ExecuteSync())
 }
 
 func TestP2PNetworkEventualConsistency(t *testing.T) {
@@ -268,7 +268,7 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 
 	respDL, err := sv.Client().Do(reqDL)
 	require.NoError(t, err)
-	defer func(){ _ = respDL.Body.Close() }()
+	defer func() { _ = respDL.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, respDL.StatusCode, "Server should answer with OK 200 status when requesting Hash")
 	buf := new(strings.Builder)
@@ -295,7 +295,7 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	resp, err := sv.Client().Do(req)
 	require.NoError(t, err)
-	defer func(){ _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode, "The endpoint /manifest must answer with status code: 200 OK")
 
@@ -351,8 +351,8 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		Parameters:  savedParameters,
 	}
 	var mockHandler compute.ServiceHandler = func(context.Context, map[string]any) (map[string]any, error) {
-        return map[string]any{}, nil
-    }
+		return map[string]any{}, nil
+	}
 	err := svWithService.Compute.RegisterNewService(schema1, mockHandler)
 	require.NoError(t, err)
 
@@ -393,22 +393,6 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
 }
 
-func TestUnauthorizedAccessIsRejected(t *testing.T) {
-	t.Parallel()
-	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
-
-	clientWithoutCert := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	resp, err := clientWithoutCert.Get(sv.Config.Address + "/peers")
-	if resp != nil {
-		defer func(){ _ = resp.Body.Close() }()
-	}
-	require.Error(t, err, "Should fail at TLS handshake due to missing client certs")
-}
-
 func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-server-1")
@@ -441,13 +425,13 @@ func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 		},
 	}
 
-	srv := NewServer(t, cfg, mockClient) 
+	srv := NewServer(t, cfg, mockClient)
 	for i := range 5 {
 		srv.Storage.SetSubscription(fmt.Sprintf("file_%d.txt", i), true)
 	}
 	srv.AddPeer("peer1", "https://fake:8080")
 	start := time.Now()
-	err := srv.ExecuteSync([]string{"peer1"})
+	err := srv.ExecuteSync()
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -465,10 +449,10 @@ func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 	}, 6*time.Second, 100*time.Millisecond)
 
 	duration := time.Since(start)
-	
+
 	// 5 files at 1 seg per file, with 2 workers, should take ~3 seconds.
 	// if it takes < 2s, it's downloading everything at once.
-	// if it takes >= 5s, the concurrency is failing. 
+	// if it takes >= 5s, the concurrency is failing.
 	require.GreaterOrEqual(t, duration, 2*time.Second, "Too fast. Worker pool isn't limiting concurrency.")
 	require.Less(t, duration, 4*time.Second, "Too slow. System is working sequentially.")
 }
@@ -488,15 +472,40 @@ func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
 		},
 	}
 
-	srv := NewServer(t, cfg, mockClient) 
+	srv := NewServer(t, cfg, mockClient)
 	srv.AddPeer("slow-peer", "https://fake-address:8080")
 	start := time.Now()
 
-	err := srv.ExecuteSync([]string{"slow-peer"})
+	err := srv.ExecuteSync()
 	require.NoError(t, err)
 
 	duration := time.Since(start)
 
 	require.GreaterOrEqual(t, duration, 2*time.Second, "Exited too early, didn't wait for timeout")
 	require.Less(t, duration, 3*time.Second, "Hung too long, failed to respect context timeout")
+}
+
+func TestUnauthorizedAccessIsRejectedAndPairingIsAllowed(t *testing.T) {
+	t.Parallel()
+	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+
+	clientWithoutCert := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	t.Run("Protected routes reject naked clients", func(t *testing.T) {
+		resp, err := clientWithoutCert.Get(sv.Config.Address + "/peers")
+		require.NoError(t, err, "TLS handshake should be successful because of the VerifyClientCertIfGiven")
+		defer func() { _ = resp.Body.Close() }()
+		require.Equal(t, http.StatusForbidden, resp.StatusCode, "The middleware should reject the access with the status 403 Forbidden")
+	})
+
+	t.Run("Pairing route allows naked clients", func(t *testing.T) {
+		resp, err := clientWithoutCert.Get(sv.Config.Address + "/cluster/join")
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		require.NotEqual(t, http.StatusForbidden, resp.StatusCode, "The middleware mTLSGuard should let the petition through to the pairing endpoint")
+	})
 }

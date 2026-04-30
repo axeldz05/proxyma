@@ -13,52 +13,45 @@ import (
 	"proxyma/internal/server"
 	"syscall"
 	"time"
+
 	"github.com/spf13/cobra"
 )
 
 var (
-	runID      string
-	runAddr    string
-	runStorage string
-	runCA      string
-	runCert    string
-	runKey     string
-	runWorkers int
+	runStorage 	 string
+	runDebugMode bool
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run",
-	Short: "Inicia un nodo de Proxyma",
-	Long:  `Levanta el servidor HTTP/P2P, inicializa los motores de almacenamiento y cómputo, y espera conexiones.`,
+	Short: "Starts the Proxyma node using the local configuration",
 	Run: func(cmd *cobra.Command, args []string) {
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		logger.Info("Starting Proxyma node", "id", runID, "address", runAddr)
-
-		if runCert == "" {
-			runCert = fmt.Sprintf("./certs/%s.crt", runID)
+		var opts slog.HandlerOptions
+		if runDebugMode {
+			opts = slog.HandlerOptions{
+				Level: slog.LevelDebug,
+			}
 		}
-		if runKey == "" {
-			runKey = fmt.Sprintf("./certs/%s.key", runID)
-		}
-
-		if err := ensureDir(runStorage); err != nil {
-			logger.Error("Initialization failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("Storage directory verified", "path", runStorage)
-
-		serverTLS, clientTLS, err := p2p.LoadNodeTLS(runCA, runCert, runKey)
+		logger := slog.New(slog.NewTextHandler(os.Stdout, &opts))		
+		cfg, err := protocol.LoadConfig(runStorage)
 		if err != nil {
-			logger.Error("Failed to initialize TLS", "error", err)
+			logger.Error("Configuration not found. Did you run 'proxyma init' or 'proxyma join' first?", "error", err)
 			os.Exit(1)
 		}
+		cfg.Logger = logger
+		logger.Info("Starting Proxyma node", "id", cfg.ID, "address", cfg.Address)
 
-		cfg := protocol.NodeConfig{
-			ID:          runID,
-			Address:     runAddr,
-			StoragePath: runStorage,
-			Workers:     runWorkers,
-			Logger:      logger,
+		cfg.StoragePath = runStorage
+		cfg.CAPath = filepath.Join(runStorage, "certs", "ca.crt")
+
+		certsDir := filepath.Dir(cfg.CAPath)
+		nodeCertFile := filepath.Join(certsDir, fmt.Sprintf("%s.crt", cfg.ID))
+		nodeKeyFile := filepath.Join(certsDir, fmt.Sprintf("%s.key", cfg.ID))
+
+		serverTLS, clientTLS, err := p2p.LoadNodeTLS(cfg.CAPath, nodeCertFile, nodeKeyFile)
+		if err != nil {
+			logger.Error("Failed to initialize mTLS", "error", err)
+			os.Exit(1)
 		}
 
 		httpClient := &http.Client{
@@ -66,56 +59,51 @@ var runCmd = &cobra.Command{
 				TLSClientConfig: clientTLS,
 			},
 		}
-
 		peerClient := p2p.NewHTTPPeerClient(httpClient)
 
 		srv := server.New(cfg, peerClient)
+
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 		go func() {
 			if err := srv.ListenAndServe(serverTLS); err != nil && err != http.ErrServerClosed {
-				logger.Error("Server encountered a critical error", "error", err)
+				logger.Error("Critical server error", "error", err)
 				os.Exit(1)
 			}
 		}()
+		if cfg.BootstrapNode != "" {
+			go func() {
+				time.Sleep(2 * time.Second) 
+				logger.Info("Announcing presence to bootstrap node...", "sponsor", cfg.BootstrapNode)
+				err := srv.AnnouncePresence(cfg.BootstrapNode)
+				if err != nil {
+					logger.Warn("Failed to announce to bootstrap node", "error", err)
+				}
+			}()
+		}
 
 		<-stop
+		logger.Info("Initiating graceful shutdown...")
 
-		logger.Info("Shutting down Proxyma node...")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		if err := srv.Shutdown(ctx); err != nil {
-			logger.Error("Server shutdown failed", "error", err)
+			logger.Error("Failure during shutdown", "error", err)
 			os.Exit(1)
 		}
 
-		logger.Info("Proxyma node stopped successfully. Goodbye!")
+		logger.Info("Node stopped successfully.")
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(runCmd)
-
-	runCmd.Flags().StringVar(&runID, "id", "", "ID único del nodo (requerido)")
-	runCmd.Flags().StringVar(&runAddr, "addr", "https://localhost:8080", "Dirección de escucha del nodo")
-	runCmd.Flags().StringVar(&runStorage, "storage", "./data", "Ruta al directorio de blobs")
-	runCmd.Flags().StringVar(&runCA, "ca", "./certs/ca.crt", "Ruta al certificado de la CA")
-	runCmd.Flags().StringVar(&runCert, "cert", "", "Ruta al certificado del nodo (requerido)")
-	runCmd.Flags().StringVar(&runKey, "key", "", "Ruta a la llave privada del nodo (requerido)")
-	runCmd.Flags().IntVar(&runWorkers, "workers", 4, "Ruta a la llave privada del nodo (requerido)")
-
-	_ = runCmd.MarkFlagRequired("id")
-}
-
-func ensureDir(path string) error {
-	cleanPath := filepath.Clean(path)
-
-	err := os.MkdirAll(cleanPath, 0755)
-	if err != nil {
-		return fmt.Errorf("could not create directory %s: %w", cleanPath, err)
+	defaultStorage := os.Getenv("PROXYMA_STORAGE")
+	if defaultStorage == "" {
+		defaultStorage = "./data"
 	}
-	
-	return nil
+	runCmd.Flags().StringVar(&runStorage, "storage", defaultStorage, "Path to the node's anchor directory")
+	runCmd.Flags().BoolVar(&runDebugMode, "debug", false, "Show debug logs")
 }

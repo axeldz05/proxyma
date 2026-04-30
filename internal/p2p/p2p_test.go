@@ -1,7 +1,6 @@
 package p2p_test
 
 import (
-	"crypto/tls"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -52,18 +51,6 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.NoError(t, err, "The client should be able to connect")
 		defer func(){ _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("Reject clients without a cert", func(t *testing.T) {
-		nakedClient := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-
-		_, err := nakedClient.Get(secureServer.URL)
-		require.Error(t, err, "The client should not be able to connect")
-		require.Contains(t, err.Error(), "certificate required", "The server must require a certificate")
 	})
 
 	t.Run("Reject certificates from an unknown CA", func(t *testing.T) {

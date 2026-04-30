@@ -24,6 +24,8 @@ type Server struct {
 	peerClient  	p2p.PeerClient
 	httpServer 		*http.Server
 	downloadQueue 	chan DownloadJob
+	inviteMu        sync.RWMutex
+	pendingInvites  map[string]time.Time
 }
 
 type DownloadJob struct {
@@ -38,6 +40,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		peers:      	make(map[string]string),
 		peerClient: 	peerClient,
 		downloadQueue: 	make(chan DownloadJob, 100),
+		pendingInvites: make(map[string]time.Time),
 	}
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
@@ -57,6 +60,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	for range cfg.Workers {
 		go s.downloadWorker(context.Background())
 	}
+	go s.inviteSweeper(context.Background())
 	return s
 }
 
@@ -103,7 +107,9 @@ func (s *Server) SetAddress(addr string) {
 
 func (s *Server) AddPeer(peerID, address string) {
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
+	s.inviteMu.Lock()
 	s.peers[peerID] = address
+	s.inviteMu.Unlock()
 }
 
 func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
@@ -188,23 +194,16 @@ func (s *Server) GetPeersCopy() map[string]string{
 	return peers
 }
 
-func (srv *Server) ExecuteSync(peerIDs []string) error {
-	for _, peerID := range peerIDs {
-		peerAddress, exists := srv.peers[peerID]
-		if !exists {
-			continue
-		}
-
+func (srv *Server) ExecuteSync() error {
+	for peerID, peerAddress := range srv.peers{
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-
 		manifest, err := srv.peerClient.FetchManifest(ctx, peerAddress) 
 		cancel()
 		if err != nil {
+			srv.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
 			continue 
 		}
-
 		missingFiles := srv.Storage.ProcessRemoteManifest(manifest) 
-		
 		for _, file := range missingFiles {
 			srv.downloadQueue <- DownloadJob{
 				File:   file,
@@ -212,6 +211,26 @@ func (srv *Server) ExecuteSync(peerIDs []string) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (s *Server) AnnouncePresence(sponsorAddress string) error {
+	payload := protocol.AddPeerRequest{
+		ID:      s.Config.ID,
+		Address: s.Config.Address,
+	}
+	
+	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
+	if err != nil {
+		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
+	}
+	s.Config.Logger.Info("AnnounceResp received without errors", "resp", announceResp)	
+	for id, addr := range announceResp {
+		if id != s.Config.ID {
+			s.AddPeer(id, addr)
+		}
+	}
+	s.Config.Logger.Info("Successfully synced topology from sponsor", "peers_count", len(announceResp))
 	return nil
 }
 
@@ -233,6 +252,27 @@ func (srv *Server) downloadWorker(ctx context.Context) {
 		cancel()
 		if err != nil {
 			srv.Config.Logger.Error("Failed to apply remote blob", "error", err)
+		}
+	}
+}
+
+func (s *Server) inviteSweeper(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.inviteMu.Lock()
+			for secret, expiration := range s.pendingInvites {
+				if now.After(expiration) {
+					delete(s.pendingInvites, secret)
+					s.Config.Logger.Debug("Expired invite removed from memory")
+				}
+			}
+			s.inviteMu.Unlock()
 		}
 	}
 }
