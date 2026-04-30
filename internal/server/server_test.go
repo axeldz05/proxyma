@@ -509,3 +509,44 @@ func TestUnauthorizedAccessIsRejectedAndPairingIsAllowed(t *testing.T) {
 		require.NotEqual(t, http.StatusForbidden, resp.StatusCode, "The middleware mTLSGuard should let the petition through to the pairing endpoint")
 	})
 }
+
+func TestListenAndServeAndGracefulShutdown(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "listen-test")
+
+	// Set port "0" to allow the os to select any available port.
+	cfg.Address = "https://127.0.0.1:0"
+
+	caPath := filepath.Dir(cfg.StoragePath)
+	require.NoError(t, p2p.InitCluster(caPath))
+	require.NoError(t, p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID))
+
+	caCertFile := filepath.Join(caPath, "ca.crt")
+	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
+	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
+	serverTLS, _, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+	require.NoError(t, err)
+
+	srv := server.New(cfg, nil)
+
+	serverErr := make(chan error, 1)
+
+	go func() {
+		serverErr <- srv.ListenAndServe(serverTLS)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err = srv.Shutdown(ctx)
+	require.NoError(t, err, "Node shutdown should run without errors")
+
+	select {
+	case err := <-serverErr:
+		require.ErrorIs(t, err, http.ErrServerClosed, "ListenAndServe should have returned http.ErrServerClosed after shutdown")
+	case <-time.After(1 * time.Second):
+		t.Fatal("ListenAndServe was stuck and did not return after the shutdown")
+	}
+}
