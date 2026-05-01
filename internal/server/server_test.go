@@ -39,6 +39,7 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 	err = p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID)
 	require.NoError(t, err)
 	caCertFile := filepath.Join(caPath, "ca.crt")
+	cfg.CAPath = caCertFile
 	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
 	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
 	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
@@ -549,4 +550,58 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("ListenAndServe was stuck and did not return after the shutdown")
 	}
+}
+
+func TestInviteAndJoinLifecycle(t *testing.T) {
+	t.Parallel()
+	sv := NewServer(t, testutil.DefaultConfig(t, "sponsor"), nil)
+	reqBody := server.InviteRequest{ValidForMinutes: 15}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	resp, err := sv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "Should have created a token successfully")
+
+	var inviteResp server.InviteResponse
+	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
+	require.NoError(t, err)
+
+	parts := strings.Split(inviteResp.Token, ".")
+	require.Len(t, parts, 2, "SmartToken format should be: https://InvitePayload:secret")
+	secret := parts[1]
+	nakedClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	t.Run("Rejects an invalid token", func(t *testing.T) {
+		badJoinReq := protocol.JoinRequest{Secret: "false-token-123", CSR: "dummy-csr"}
+		badBody, _ := json.Marshal(badJoinReq)
+
+		respBad, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(badBody))
+		require.NoError(t, err)
+		defer func() { _ = respBad.Body.Close() }()
+
+		require.Equal(t, http.StatusUnauthorized, respBad.StatusCode, "Invalid token should return 401")
+	})
+
+	t.Run("Accepts a valid token and deletes it after one use", func(t *testing.T) {
+		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr"}
+		goodBody, _ := json.Marshal(goodJoinReq)
+
+		respGood, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
+		require.NoError(t, err)
+		defer func() { _ = respGood.Body.Close() }()
+
+		require.Equal(t, http.StatusInternalServerError, respGood.StatusCode, "Token accepted, fails to sign false CSR")
+
+		respReused, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
+		require.NoError(t, err)
+		defer func() { _ = respReused.Body.Close() }()
+
+		require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after one use")
+	})
 }
