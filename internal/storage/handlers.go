@@ -79,6 +79,7 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {
 		if err == storage.ErrFileDoesNotExist {
+			s.logger.Warn("Tried to download a blob that does not exist", "hash", requestedHash)
 			http.Error(w, "Blob not found", http.StatusNotFound)
 		}
 		return

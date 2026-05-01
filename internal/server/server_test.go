@@ -109,6 +109,27 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 	return testutil.CalculateHash(t, content)
 }
 
+func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, targetServer *TestServer) {
+	t.Helper()
+	downloadURL := fmt.Sprintf("%s/download/%s", targetServer.Config.Address, expectedHash)
+	req, err := http.NewRequest("GET", downloadURL, nil)
+	require.NoError(t, err)
+
+	resp, err := targetServer.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, resp.Body)
+	if err != nil {
+		t.Errorf("Could not copy fileContent from '%s'", resp.Body)
+	}
+	uploadedContent := buf.String()
+
+	if uploadedContent != fileContent {
+		t.Errorf("Expected content '%s', got '%s'", fileContent, string(uploadedContent))
+	}
+}
+
 func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
 	t.Helper()
 	reqDel, err := http.NewRequest("DELETE", sv.Config.Address+"/file?name="+fileName, nil)
@@ -133,27 +154,6 @@ func GetPeersSimulated(t *testing.T, sv *TestServer) string {
 		t.Errorf("Could not copy response from %s", resp.Body)
 	}
 	return buf.String()
-}
-
-func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, updatedServer *TestServer) {
-	t.Helper()
-	downloadURL := fmt.Sprintf("%s/download/%s", updatedServer.Config.Address, expectedHash)
-	req, err := http.NewRequest("GET", downloadURL, nil)
-	require.NoError(t, err)
-
-	resp, err := updatedServer.Client().Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy fileContent from %s", resp.Body)
-	}
-	uploadedContent := buf.String()
-
-	if uploadedContent != fileContent {
-		t.Errorf("Expected content %s, got %s", fileContent, string(uploadedContent))
-	}
 }
 
 func TestAServerCanConnectToAnother(t *testing.T) {
@@ -604,4 +604,48 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 
 		require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after one use")
 	})
+}
+
+func TestNodeAnnounceAndSyncPropagation(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-node"), nil)
+	newcomer := NewServer(t, testutil.DefaultConfig(t, "newcomer-node"), nil)
+
+	fileName := "sync_target.txt"
+	sponsor.Storage.SetSubscription(fileName, true)
+	newcomer.Storage.SetSubscription(fileName, true)
+
+	fileContent := "Data that newcomer needs to download"
+	expectedHash := UploadFileSimulated(t, sponsor, fileName, fileContent)
+
+	_, exists := newcomer.Storage.GetFileMeta(fileName)
+	require.False(t, exists, "Newcomer shouldn't have the file yet")
+
+	err := newcomer.AnnouncePresence(sponsor.Config.Address)
+	require.NoError(t, err, "The announce shouldn't fail")
+
+	peersOfSponsor := sponsor.GetPeersCopy()
+	expectedPeersOfSponsor := map[string]string{newcomer.Config.ID: newcomer.Config.Address}
+	expectedPeersOfNewcomer := map[string]string{sponsor.Config.ID: sponsor.Config.Address}
+	require.Exactly(t, peersOfSponsor, expectedPeersOfSponsor, "Sponsor should have only registered newcomer as peer")
+
+	peersOfNewcomer := newcomer.GetPeersCopy()
+	require.Exactly(t, peersOfNewcomer, expectedPeersOfNewcomer, "Newcomer should have only registered sponsor as peer")
+
+	err = newcomer.ExecuteSync()
+	require.NoError(t, err, "ExecuteSync shouldn't return error")
+
+	require.Eventually(t, func() bool {
+		// force this 'Eventually' block to wait until the metadate is available, then
+		// proceed to wait until the physicalBlob is available. This is necessary to prevent
+		// a race condition between this block and 'assertRemoteHashToBeTheSameAs'
+		meta, exists := newcomer.Storage.GetFileMeta(fileName)
+		if !exists || meta.Hash != expectedHash {
+			return false
+		}
+		hasBlob, _ := newcomer.Storage.HasPhysicalBlob(expectedHash)
+		return hasBlob
+	}, 3*time.Second, 100*time.Millisecond, "Newcomer should have synchronized with sponsor")
+
+	assertRemoteHashToBeTheSameAs(t, expectedHash, fileContent, newcomer)
 }
