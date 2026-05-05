@@ -649,3 +649,57 @@ func TestNodeAnnounceAndSyncPropagation(t *testing.T) {
 
 	assertRemoteHashToBeTheSameAs(t, expectedHash, fileContent, newcomer)
 }
+
+func TestDownloadWorkerProcessesDeletion(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-delete-worker")
+
+	fileName := "worker_delete_target.txt"
+	fileContent := "this file will be deleted via the download worker"
+	expectedHash := testutil.CalculateHash(t, fileContent)
+
+	// The manifest is shared by reference so we can mutate it between sync phases
+	manifest := map[string]protocol.IndexEntry{
+		fileName: {Name: fileName, Hash: expectedHash, Version: 1, Size: int64(len(fileContent))},
+	}
+
+	mockClient := &testutil.MockPeerClient{
+		OnFetchManifest: func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error) {
+			return manifest, nil
+		},
+		OnDownloadBlob: func(ctx context.Context, addr, hash string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte(fileContent))), nil
+		},
+	}
+
+	srv := NewServer(t, cfg, mockClient)
+	srv.Storage.SetSubscription(fileName, true)
+	srv.AddPeer("peer1", "https://fake:8080")
+
+	// Phase 1: Sync the file so the blob exists locally
+	err := srv.ExecuteSync()
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		hasBlob, _ := srv.Storage.HasPhysicalBlob(expectedHash)
+		return hasBlob
+	}, 3*time.Second, 100*time.Millisecond, "File should have been downloaded")
+
+	// Phase 2: Peer sends a deletion notification (tombstone) via the real-time path.
+	// This simulates what happens when a peer calls notifyPeers after deleting a file.
+	// HandleNotification → vfs.Upsert updates metadata, but since File.Deleted=true
+	// and the handler has !notification.File.Deleted, it won't enqueue a download.
+	// So we must verify the metadata tombstone is applied.
+	tombstone := protocol.IndexEntry{
+		Name: fileName, Hash: expectedHash, Version: 2, Deleted: true,
+	}
+	srv.Storage.ProcessRemoteDeletion(tombstone)
+
+	meta, exists := srv.Storage.GetFileMeta(fileName)
+	require.True(t, exists, "Metadata entry should still exist after deletion")
+	require.True(t, meta.Deleted, "Metadata should be marked as deleted")
+	require.Equal(t, 2, meta.Version, "Version should have been incremented to 2")
+
+	hasBlob, _ := srv.Storage.HasPhysicalBlob(expectedHash)
+	require.False(t, hasBlob, "Physical blob should have been removed by ProcessRemoteDeletion")
+}
