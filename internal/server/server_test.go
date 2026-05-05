@@ -780,3 +780,73 @@ func TestAddPeerViaHTTPEndpoint(t *testing.T) {
 	expectedPeers := fmt.Sprintf(`{"%s":"%s"}`, sv2.Config.ID, sv2.Config.Address)
 	require.Equal(t, expectedPeers, gotPeers, "sv1 should have sv2 registered as a peer")
 }
+
+func RequestManifestSimulated(t *testing.T, sv *TestServer) map[string]protocol.IndexEntry {
+	t.Helper()
+	req, err := http.NewRequest("GET", sv.Config.Address+"/manifest", nil)
+	require.NoError(t, err)
+	resp, err := sv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var manifest map[string]protocol.IndexEntry
+	err = json.NewDecoder(resp.Body).Decode(&manifest)
+	require.NoError(t, err)
+	return manifest
+}
+
+func TestSnapshotReflectsFullClusterState(t *testing.T) {
+	t.Parallel()
+	clusterSize := 3
+	servers := make([]*TestServer, clusterSize)
+	for i := range clusterSize {
+		servers[i] = NewServer(t, testutil.DefaultConfig(t, fmt.Sprintf("snap-%d", i)), nil)
+	}
+
+	// Full mesh connection
+	for i, current := range servers {
+		for j, peer := range servers {
+			if i != j {
+				current.AddPeer(peer.Config.ID, peer.Config.Address)
+			}
+		}
+	}
+
+	type testFile struct {
+		Name    string
+		Content string
+	}
+	files := []testFile{
+		{"snapshot_a.txt", "content from node 0"},
+		{"snapshot_b.txt", "content from node 1"},
+		{"snapshot_c.txt", "content from node 2"},
+	}
+
+	// All nodes subscribe to all files
+	for _, srv := range servers {
+		for _, f := range files {
+			srv.Storage.SetSubscription(f.Name, true)
+		}
+	}
+
+	// Each node uploads its own file
+	expectedHashes := make(map[string]string)
+	for i, f := range files {
+		expectedHashes[f.Name] = UploadFileSimulated(t, servers[i], f.Name, f.Content)
+	}
+
+	// Wait for all nodes to have all files in their manifests
+	require.Eventually(t, func() bool {
+		for _, srv := range servers {
+			manifest := RequestManifestSimulated(t, srv)
+			for _, f := range files {
+				entry, exists := manifest[f.Name]
+				if !exists || entry.Hash != expectedHashes[f.Name] {
+					return false
+				}
+			}
+		}
+		return true
+	}, 5*time.Second, 200*time.Millisecond, "All nodes should have all 3 files in their manifests")
+}
