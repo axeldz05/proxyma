@@ -32,6 +32,10 @@ func (ts *TestServer) Client() *http.Client {
 	return ts.httpTestSrv.Client()
 }
 
+func (ts *TestServer) ExpireInvite(secret string) {
+	ts.SetPendingInviteExpiration(secret, time.Now().Add(-1*time.Minute))
+}
+
 func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient) *TestServer {
 	caPath := filepath.Dir(cfg.StoragePath)
 	err := p2p.InitCluster(caPath)
@@ -702,4 +706,52 @@ func TestDownloadWorkerProcessesDeletion(t *testing.T) {
 
 	hasBlob, _ := srv.Storage.HasPhysicalBlob(expectedHash)
 	require.False(t, hasBlob, "Physical blob should have been removed by ProcessRemoteDeletion")
+}
+
+func TestExpiredInviteIsRejected(t *testing.T) {
+	t.Parallel()
+	sv := NewServer(t, testutil.DefaultConfig(t, "invite-expiry"), nil)
+
+	// Generate a real invite
+	reqBody := server.InviteRequest{ValidForMinutes: 15}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	resp, err := sv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var inviteResp server.InviteResponse
+	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
+	require.NoError(t, err)
+
+	parts := strings.Split(inviteResp.Token, ".")
+	require.Len(t, parts, 2)
+	secret := parts[1]
+
+	// Force the invite to expire
+	sv.ExpireInvite(secret)
+
+	// Attempt to join with the expired token
+	nakedClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	joinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr"}
+	joinBody, _ := json.Marshal(joinReq)
+
+	respJoin, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(joinBody))
+	require.NoError(t, err)
+	defer func() { _ = respJoin.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, respJoin.StatusCode, "Expired token should return 401 Unauthorized")
+
+	// The token should have been consumed (deleted), so using it again should also be rejected
+	respReused, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(joinBody))
+	require.NoError(t, err)
+	defer func() { _ = respReused.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after the expired attempt")
 }
