@@ -1,13 +1,19 @@
 package p2p_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -76,3 +82,213 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.Contains(t, err.Error(), "bad certificate", "The server should reject unknown origin of certificates")
 	})
 }
+
+// newMockServer creates a TLS httptest server with the given handler and returns
+// an HTTPPeerClient configured to talk to it. The server is closed on test cleanup.
+func newMockServer(t *testing.T, handler http.Handler) (string, *p2p.HTTPPeerClient) {
+	t.Helper()
+	ts := httptest.NewTLSServer(handler)
+	t.Cleanup(ts.Close)
+
+	client := p2p.NewHTTPPeerClient(ts.Client())
+	return ts.URL, client
+}
+
+func TestHTTPPeerClientFetchManifest(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"file1.txt":{"name":"file1.txt","hash":"abc123","version":1,"size":42}}`))
+	})
+	addr, client := newMockServer(t, mux)
+
+	ctx := context.Background()
+	manifest, err := client.FetchManifest(ctx, addr)
+	require.NoError(t, err)
+	require.Len(t, manifest, 1)
+	require.Equal(t, "file1.txt", manifest["file1.txt"].Name)
+	require.Equal(t, "abc123", manifest["file1.txt"].Hash)
+	require.Equal(t, 1, manifest["file1.txt"].Version)
+}
+
+func TestHTTPPeerClientDownloadBlob(t *testing.T) {
+	t.Parallel()
+	expectedContent := "binary blob content here"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Path[len("/download/"):]
+		if hash != "abc123" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte(expectedContent))
+	})
+	addr, client := newMockServer(t, mux)
+
+	ctx := context.Background()
+	body, err := client.DownloadBlob(ctx, addr, "abc123")
+	require.NoError(t, err)
+	defer func() { _ = body.Close() }()
+
+	content, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, expectedContent, string(content))
+}
+
+func TestHTTPPeerClientNotify(t *testing.T) {
+	t.Parallel()
+	var received protocol.PeerNotification
+	notifyCalled := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/notify", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		err := json.NewDecoder(r.Body).Decode(&received)
+		require.NoError(t, err)
+		w.WriteHeader(http.StatusOK)
+		notifyCalled <- struct{}{}
+	})
+	addr, client := newMockServer(t, mux)
+
+	notification := protocol.PeerNotification{
+		File:   protocol.IndexEntry{Name: "updated.txt", Hash: "hash999", Version: 3},
+		Source: "https://some-peer:8080",
+	}
+
+	ctx := context.Background()
+	err := client.Notify(ctx, addr, notification)
+	require.NoError(t, err)
+
+	select {
+	case <-notifyCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Notify handler was never called")
+	}
+
+	require.Equal(t, "updated.txt", received.File.Name)
+	require.Equal(t, "hash999", received.File.Hash)
+	require.Equal(t, 3, received.File.Version)
+	require.Equal(t, "https://some-peer:8080", received.Source)
+}
+
+func TestHTTPPeerClientAnnounce(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peers/announce", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req protocol.AddPeerRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		require.NoError(t, err)
+		require.Equal(t, "newcomer", req.ID)
+
+		w.Header().Set("Content-Type", "application/json")
+		// Respond with the cluster topology including the newcomer
+		_, _ = w.Write([]byte(`{"sponsor":"https://sponsor:8080","newcomer":"https://newcomer:9090"}`))
+	})
+	addr, client := newMockServer(t, mux)
+
+	peers, err := client.Announce(addr, protocol.AddPeerRequest{
+		ID:      "newcomer",
+		Address: "https://newcomer:9090",
+	})
+	require.NoError(t, err)
+	require.Len(t, peers, 2)
+	require.Equal(t, "https://sponsor:8080", peers["sponsor"])
+	require.Equal(t, "https://newcomer:9090", peers["newcomer"])
+}
+
+func TestHTTPPeerClientAddPeer(t *testing.T) {
+	t.Parallel()
+	addPeerCalled := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peers/add", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		var req protocol.AddPeerRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		require.NoError(t, err)
+		require.Equal(t, "new-node", req.ID)
+		require.Equal(t, "https://new-node:8080", req.Address)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"message":"Peer successfully added"}`))
+		addPeerCalled <- struct{}{}
+	})
+	addr, client := newMockServer(t, mux)
+
+	payload := bytes.NewBuffer([]byte(`{"id":"new-node","address":"https://new-node:8080"}`))
+	err := client.AddPeer(addr, payload)
+	require.NoError(t, err)
+
+	select {
+	case <-addPeerCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("AddPeer handler was never called")
+	}
+}
+
+func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
+	t.Parallel()
+
+	// This mock server handles both /services/submit and /services/callback
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/services/submit", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		var taskReq protocol.TaskRequest
+		err := json.NewDecoder(r.Body).Decode(&taskReq)
+		require.NoError(t, err)
+		require.Equal(t, "task-001", taskReq.TaskID)
+		require.Equal(t, "ocr", taskReq.Service)
+
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"accepted","job_id":"task-001"}`))
+	})
+
+	callbackReceived := make(chan protocol.ServiceTaskResponse, 1)
+	mux.HandleFunc("/services/callback", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		var resp protocol.ServiceTaskResponse
+		err := json.NewDecoder(r.Body).Decode(&resp)
+		require.NoError(t, err)
+		w.WriteHeader(http.StatusOK)
+		callbackReceived <- resp
+	})
+
+	addr, client := newMockServer(t, mux)
+
+	// Test SubmitTask
+	ctx := context.Background()
+	taskReq := protocol.TaskRequest{
+		TaskID:  "task-001",
+		Service: "ocr",
+		Payload: map[string]any{"image": "hash-abc"},
+		ReplyTo: addr + "/services/callback",
+	}
+	err := client.SubmitTask(ctx, addr, taskReq)
+	require.NoError(t, err)
+
+	// Test SendTaskResponse (callback)
+	taskResp := protocol.ServiceTaskResponse{
+		TaskID:  "task-001",
+		Service: "ocr",
+		Status:  "completed",
+		Outputs: map[string]any{"text": "Hello world"},
+	}
+	err = client.SendTaskResponse(ctx, addr+"/services/callback", taskResp)
+	require.NoError(t, err)
+
+	select {
+	case received := <-callbackReceived:
+		require.Equal(t, "task-001", received.TaskID)
+		require.Equal(t, "completed", received.Status)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Callback handler was never called")
+	}
+}
+
