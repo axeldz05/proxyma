@@ -755,3 +755,28 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after the expired attempt")
 }
+
+func TestAddPeerViaHTTPEndpoint(t *testing.T) {
+	t.Parallel()
+	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
+	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
+
+	// POST to /peers/add on sv1 with sv2's info
+	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: sv2.Config.Address}
+	body, _ := json.Marshal(addReq)
+
+	req, err := http.NewRequest("POST", sv1.Config.Address+"/peers/add", bytes.NewBuffer(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sv1.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Adding a peer should return 200 OK")
+
+	// Verify sv1 now has sv2 in its peer list
+	gotPeers := strings.TrimSpace(GetPeersSimulated(t, sv1))
+	expectedPeers := fmt.Sprintf(`{"%s":"%s"}`, sv2.Config.ID, sv2.Config.Address)
+	require.Equal(t, expectedPeers, gotPeers, "sv1 should have sv2 registered as a peer")
+}
