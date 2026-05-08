@@ -16,8 +16,8 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0, 
-		func(entry protocol.IndexEntry) {}, 
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
 
@@ -42,7 +42,7 @@ func TestLocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0, 
+		cfg.Logger, cfg.StoragePath, nil, 0,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -57,7 +57,7 @@ func TestLocalDeleteCreatesTombstone(t *testing.T) {
 
 	err = engine.DeleteLocalFile(fileName)
 	require.NoError(t, err)
-	
+
 	metaAfter, exists := engine.GetFileMeta(fileName)
 	require.True(t, exists, "The protocol.IndexEntry of the file should still exist after deleting")
 	require.True(t, metaAfter.Deleted, "Deleted should be true in the protocol.IndexEntry")
@@ -70,27 +70,27 @@ func TestLocalDeleteCreatesTombstone(t *testing.T) {
 func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
-	
+
 	fileName := "missingFile.txt"
 	fileContent := "helloo from test10"
 	expectedHash := testutil.CalculateHash(t, fileContent)
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0, 
-		func(e protocol.IndexEntry) {}, 
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(e protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
 
 	engine.SetSubscription(fileName, true)
-	
+
 	remoteManifest := map[string]protocol.IndexEntry{
 		fileName: {Name: fileName, Hash: expectedHash, Version: 1, Size: int64(len(fileContent))},
 	}
-	
+
 	missingFiles := engine.ProcessRemoteManifest(remoteManifest)
 	require.Len(t, missingFiles, 1, "Should identify one missing file")
 	require.Equal(t, fileName, missingFiles[0].Name)
-	
+
 	fakeHTTPBody := io.NopCloser(bytes.NewReader([]byte(fileContent)))
 	err := engine.StoreRemoteBlob(missingFiles[0], fakeHTTPBody)
 	require.NoError(t, err)
@@ -113,8 +113,8 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 	hashB := testutil.CalculateHash(t, "Content B")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0, 
-		func(e protocol.IndexEntry) {}, 
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(e protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
 
@@ -134,7 +134,76 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 	metaB, existsB := engine.GetFileMeta(fileBName)
 	require.True(t, existsB)
 	require.Equal(t, hashB, metaB.Hash)
-	
+
 	hasBlobA, _ := engine.HasPhysicalBlob(hashA)
 	require.False(t, hasBlobA)
+}
+
+func TestSnapshotReflectsFullIndexState(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-snapshot-1")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	fileA := "alpha.txt"
+	contentA := []byte("content of alpha")
+	err := engine.SaveLocalFile(fileA, bytes.NewReader(contentA))
+	require.NoError(t, err)
+
+	fileB := "beta.txt"
+	contentB := []byte("content of beta")
+	err = engine.SaveLocalFile(fileB, bytes.NewReader(contentB))
+	require.NoError(t, err)
+
+	fileC := "gamma.txt"
+	contentC := []byte("content of gamma")
+	err = engine.SaveLocalFile(fileC, bytes.NewReader(contentC))
+	require.NoError(t, err)
+
+	contentA2 := []byte("updated content of alpha")
+	err = engine.SaveLocalFile(fileA, bytes.NewReader(contentA2))
+	require.NoError(t, err)
+
+	err = engine.DeleteLocalFile(fileC)
+	require.NoError(t, err)
+
+	snapshot := engine.GetVFSSnapshot()
+
+	require.Len(t, snapshot, 3, "Snapshot must contain all tracked files including tombstones")
+
+	for _, fileName := range []string{fileA, fileB, fileC} {
+		snapshotEntry, existsInSnapshot := snapshot[fileName]
+		require.True(t, existsInSnapshot, "Snapshot must include entry for %s", fileName)
+
+		metaEntry, existsInMeta := engine.GetFileMeta(fileName)
+		require.True(t, existsInMeta, "GetFileMeta must return entry for %s", fileName)
+
+		require.Equal(t, metaEntry.Name, snapshotEntry.Name, "Name mismatch for %s", fileName)
+		require.Equal(t, metaEntry.Version, snapshotEntry.Version, "Version mismatch for %s", fileName)
+		require.Equal(t, metaEntry.Hash, snapshotEntry.Hash, "Hash mismatch for %s", fileName)
+		require.Equal(t, metaEntry.Size, snapshotEntry.Size, "Size mismatch for %s", fileName)
+		require.Equal(t, metaEntry.Deleted, snapshotEntry.Deleted, "Deleted flag mismatch for %s", fileName)
+	}
+
+	require.Equal(t, 2, snapshot[fileA].Version, "fileA should be at version 2 after one update")
+	require.False(t, snapshot[fileA].Deleted, "fileA should NOT be deleted")
+	require.Equal(t, testutil.CalculateHash(t, string(contentA2)), snapshot[fileA].Hash,
+		"fileA hash must correspond to the latest content")
+
+	require.Equal(t, 1, snapshot[fileB].Version, "fileB should be at version 1")
+	require.False(t, snapshot[fileB].Deleted, "fileB should NOT be deleted")
+	require.Equal(t, testutil.CalculateHash(t, string(contentB)), snapshot[fileB].Hash,
+		"fileB hash must correspond to its original content")
+
+	require.Equal(t, 2, snapshot[fileC].Version, "fileC should be at version 2 after deletion")
+	require.True(t, snapshot[fileC].Deleted, "fileC must be marked as deleted (tombstone)")
+
+	for name := range snapshot {
+		isKnown := name == fileA || name == fileB || name == fileC
+		require.True(t, isKnown, "Snapshot contains unexpected entry: %s", name)
+	}
 }
