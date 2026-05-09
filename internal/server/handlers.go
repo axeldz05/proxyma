@@ -1,9 +1,9 @@
 package server
 
 import (
-	"maps"
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"os"
 	"proxyma/internal/p2p"
@@ -41,7 +41,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("/services/bid", s.Compute.HandleServiceBid)
 	mux.HandleFunc("/services/submit", s.Compute.HandleServiceSubmit)
 	mux.HandleFunc("/services/callback", s.Compute.HandleServiceCallback)
-	
+
 	mux.HandleFunc("/peers", s.GetPeers)
 	mux.HandleFunc("/peers/announce", s.HandleAnnounce)
 	mux.HandleFunc("/peers/add", s.HandleAddPeer)
@@ -67,18 +67,20 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
-	
+
 	peersSnapshot := make(map[string]string)
-	s.inviteMu.Lock()
+	s.peersMu.Lock()
 	maps.Copy(peersSnapshot, s.peers)
-	s.inviteMu.Unlock()
+	s.peersMu.Unlock()
 	peersSnapshot[s.Config.ID] = s.Config.Address
 
 	go func(newID, newAddress string, clusterPeers map[string]string) {
-		payload := protocol.AddPeerRequest{ ID: newID, Address: newAddress }
+		payload := protocol.AddPeerRequest{ID: newID, Address: newAddress}
 		bodyBytes, _ := json.Marshal(payload)
 		for peerID, peerAddress := range clusterPeers {
-			if peerID == s.Config.ID || peerID == newID { continue }
+			if peerID == s.Config.ID || peerID == newID {
+				continue
+			}
 			if err := s.peerClient.AddPeer(peerAddress, bytes.NewBuffer(bodyBytes)); err != nil {
 				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerAddress, "newPeer", req.Address, "error", err)
 			}
@@ -120,7 +122,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caKeyPath := strings.Replace(s.Config.CAPath, ".crt", ".key", 1)
-	
+
 	newCertPEM, err := p2p.SignCSR([]byte(req.CSR), s.Config.CAPath, caKeyPath)
 	if err != nil {
 		s.Config.Logger.Error("Error signing CSR", "error", err)
@@ -140,7 +142,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		Certificate: string(newCertPEM),
 		CACert:      string(caCertPEM),
 	})
-	
+
 	s.Config.Logger.Info("New node successfully joined the cluster via invitation")
 }
 
@@ -155,7 +157,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ValidForMinutes <= 0 {
-		req.ValidForMinutes = 15 
+		req.ValidForMinutes = 15
 	}
 	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath)
 	if err != nil {
@@ -191,7 +193,7 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.Config.Logger.Error("Invalid body petition in /peers/add", "error", err)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return 
+		return
 	}
 	s.AddPeer(req.ID, req.Address)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
@@ -200,14 +202,14 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"message": "Peer successfully added"}`))
 }
 
-func (srv *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	err := srv.ExecuteSync()
+	err := s.ExecuteSync()
 	if err != nil {
-		srv.Config.Logger.Error("Sync failed", "error", err)
+		s.Config.Logger.Error("Sync failed", "error", err)
 		http.Error(w, "Sync process encountered errors", http.StatusInternalServerError)
 		return
 	}

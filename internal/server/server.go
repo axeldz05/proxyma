@@ -24,7 +24,8 @@ type Server struct {
 	peerClient     p2p.PeerClient
 	httpServer     *http.Server
 	downloadQueue  chan DownloadJob
-	inviteMu       sync.RWMutex
+	peersMu        sync.RWMutex
+	inviteMu       sync.Mutex
 	pendingInvites map[string]time.Time
 }
 
@@ -44,7 +45,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
-		for _, peerAddress := range s.peers {
+		for _, peerAddress := range s.GetPeersCopy() {
 			if rawSource == peerAddress {
 				s.downloadQueue <- DownloadJob{
 					File:   file,
@@ -105,20 +106,14 @@ func (s *Server) SetAddress(addr string) {
 }
 
 func (s *Server) AddPeer(peerID, address string) {
-	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
-	s.inviteMu.Lock()
+	s.peersMu.Lock()
 	s.peers[peerID] = address
-	s.inviteMu.Unlock()
+	s.peersMu.Unlock()
+	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 }
 
 func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
-	peers := make(map[string]string, len(s.peers))
-	maps.Copy(peers, s.peers)
-
-	for peerID, peerAddr := range peers {
-		if peerID == s.Config.ID {
-			continue
-		}
+	for peerID, peerAddr := range s.GetPeersCopy() {
 		payload := protocol.PeerNotification{
 			File:   fileInfo,
 			Source: s.Config.Address,
@@ -190,23 +185,25 @@ func (s *Server) DispatchTask(targetPeerAddr string, req protocol.TaskRequest) e
 }
 
 func (s *Server) GetPeersCopy() map[string]string {
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
 	peers := make(map[string]string, len(s.peers))
 	maps.Copy(peers, s.peers)
 	return peers
 }
 
-func (srv *Server) ExecuteSync() error {
-	for peerID, peerAddress := range srv.peers {
+func (s *Server) ExecuteSync() error {
+	for peerID, peerAddress := range s.GetPeersCopy() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		manifest, err := srv.peerClient.FetchManifest(ctx, peerAddress)
+		manifest, err := s.peerClient.FetchManifest(ctx, peerAddress)
 		cancel()
 		if err != nil {
-			srv.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
+			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
 			continue
 		}
-		missingFiles := srv.Storage.ProcessRemoteManifest(manifest)
+		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
 		for _, file := range missingFiles {
-			srv.downloadQueue <- DownloadJob{
+			s.downloadQueue <- DownloadJob{
 				File:   file,
 				Source: peerAddress,
 			}
@@ -235,24 +232,24 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	return nil
 }
 
-func (srv *Server) downloadWorker(ctx context.Context) {
-	for job := range srv.downloadQueue {
+func (s *Server) downloadWorker(ctx context.Context) {
+	for job := range s.downloadQueue {
 		if job.File.Deleted {
-			srv.Storage.ProcessRemoteDeletion(job.File)
+			s.Storage.ProcessRemoteDeletion(job.File)
 			continue
 		}
 		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		body, err := srv.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
+		body, err := s.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
 		if err != nil {
 			cancel()
-			srv.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
+			s.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
 			continue
 		}
-		err = srv.Storage.StoreRemoteBlob(job.File, body)
+		err = s.Storage.StoreRemoteBlob(job.File, body)
 		_ = body.Close()
 		cancel()
 		if err != nil {
-			srv.Config.Logger.Error("Failed to apply remote blob", "error", err)
+			s.Config.Logger.Error("Failed to apply remote blob", "error", err)
 		}
 	}
 }
