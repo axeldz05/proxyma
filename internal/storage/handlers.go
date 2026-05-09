@@ -1,48 +1,44 @@
 package storage
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"proxyma/internal/protocol"
-	"proxyma/internal/storage/physical"
+	storage "proxyma/internal/storage/physical"
 	"proxyma/internal/utils"
 )
 
 func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
 	if err != nil {
-		http.Error(w, "Unable to parse form", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Unable to parse form")
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "Error retrieving file", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Error retrieving file")
 		return
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		if err = file.Close(); err != nil {
+			s.logger.Error("failed to close file", "error", err)
+		}
+	}()
 
 	err = s.SaveLocalFile(header.Filename, file)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
-	if err = file.Close(); err != nil {
-		http.Error(w, "Couldn't close file", http.StatusInternalServerError)
-	}
 
-	w.WriteHeader(http.StatusCreated)
-	if err = json.NewEncoder(w).Encode(map[string]string{
+	utils.RespondJSON(w, http.StatusCreated, map[string]string{
 		"message": "Blob uploaded successfully",
-	}); err != nil {
-		s.logger.Error("failed to encode upload response", "error", err)
-	}
+	})
 }
 
 // handleNotification handles notifications from peers about new files
@@ -80,54 +76,49 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err == storage.ErrFileDoesNotExist {
 			s.logger.Warn("Tried to download a blob that does not exist", "hash", requestedHash)
-			http.Error(w, "Blob not found", http.StatusNotFound)
+			utils.RespondError(w, http.StatusNotFound, "Blob not found")
+			return
 		}
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to download blob")
 		return
 	}
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 	fileName := r.URL.Query().Get("name")
 	if fileName == "" {
-		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
 		return
 	}
 	s.SetSubscription(fileName, true)
-	w.WriteHeader(http.StatusOK)
 	s.logger.Info("Subscription added", "file", fileName)
-	if _, err := fmt.Fprintf(w, "Subscribed to %s", fileName); err != nil {
-		http.Error(w, "Couldn't write message", http.StatusInternalServerError)
-		return
-	}
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Subscribed to " + fileName})
 }
 
 func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
-	if err := json.NewEncoder(w).Encode(s.vfs.Snapshot()); err != nil {
-		s.logger.Error("failed to encode snapshot response", "error", err)
-	}
+	utils.RespondJSON(w, http.StatusOK, s.vfs.Snapshot())
 }
 
 func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 	fileName := r.URL.Query().Get("name")
 	if fileName == "" {
-		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
 		return
 	}
 
 	err := s.DeleteLocalFile(fileName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		utils.RespondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("File deleted successfully"))
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "File deleted successfully"})
 }

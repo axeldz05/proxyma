@@ -8,6 +8,7 @@ import (
 	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"strings"
 	"time"
 )
@@ -20,7 +21,7 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 		}
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 			s.Config.Logger.Warn("Reject mTLS: tried access without a certificate", "ip", r.RemoteAddr, "path", r.URL.Path)
-			http.Error(w, "mTLS certificate required", http.StatusForbidden)
+			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -61,9 +62,13 @@ type InviteResponse struct {
 }
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	var req protocol.AddPeerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
@@ -87,19 +92,18 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		}
 	}(req.ID, req.Address, peersSnapshot)
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(peersSnapshot)
+	utils.RespondJSON(w, http.StatusOK, peersSnapshot)
 }
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	var req protocol.JoinRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
@@ -112,12 +116,12 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	s.inviteMu.Unlock()
 
 	if !exists {
-		http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
 		return
 	}
 
 	if time.Now().After(expiration) {
-		http.Error(w, "Token has expired", http.StatusUnauthorized)
+		utils.RespondError(w, http.StatusUnauthorized, "Token has expired")
 		return
 	}
 
@@ -126,19 +130,17 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	newCertPEM, err := p2p.SignCSR([]byte(req.CSR), s.Config.CAPath, caKeyPath)
 	if err != nil {
 		s.Config.Logger.Error("Error signing CSR", "error", err)
-		http.Error(w, "Failed to generate certificate", http.StatusInternalServerError)
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to generate certificate")
 		return
 	}
 
 	caCertPEM, err := os.ReadFile(s.Config.CAPath)
 	if err != nil {
-		http.Error(w, "Internal error reading CA", http.StatusInternalServerError)
+		utils.RespondError(w, http.StatusInternalServerError, "Internal error reading CA")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(protocol.JoinResponse{
+	utils.RespondJSON(w, http.StatusOK, protocol.JoinResponse{
 		Certificate: string(newCertPEM),
 		CACert:      string(caCertPEM),
 	})
@@ -148,12 +150,12 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 	var req InviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	if req.ValidForMinutes <= 0 {
@@ -162,7 +164,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath)
 	if err != nil {
 		s.Config.Logger.Error("Failed to generate smart token", "error", err)
-		http.Error(w, "Internal error", http.StatusInternalServerError)
+		utils.RespondError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 
@@ -171,8 +173,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	s.pendingInvites[secretHex] = expiration
 	s.inviteMu.Unlock()
 
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(InviteResponse{
+	utils.RespondJSON(w, http.StatusCreated, InviteResponse{
 		Token:   smartToken,
 		Expires: expiration,
 	})
@@ -186,33 +187,30 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 	var req protocol.AddPeerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.Config.Logger.Error("Invalid body petition in /peers/add", "error", err)
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message": "Peer successfully added"}`))
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
 }
 
 func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 	err := s.ExecuteSync()
 	if err != nil {
 		s.Config.Logger.Error("Sync failed", "error", err)
-		http.Error(w, "Sync process encountered errors", http.StatusInternalServerError)
+		utils.RespondError(w, http.StatusInternalServerError, "Sync process encountered errors")
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message": "Sync successfully processed"}`))
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Sync successfully processed"})
 }

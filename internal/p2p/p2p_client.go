@@ -70,12 +70,15 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 }
 
 func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error {
-	url := fmt.Sprintf("%s/notify", peerAddr)
+	safeURL, err := validateAndBuildURL(peerAddr, "notify")
+	if err != nil {
+		return err
+	}
 	body, err := json.Marshal(notification)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", safeURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -90,11 +93,14 @@ func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notificati
 	return nil
 }
 
-// If the returned error is nil, the [ReadCloser] is a non-nil Body which the user is expected to close. 
+// If the returned error is nil, the [ReadCloser] is a non-nil Body which the user is expected to close.
 // The Body should both be read to EOF and closed, otherwise it does not satisfy [Client] protocols
 func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error) {
-	downloadURL := fmt.Sprintf("%s/download/%s", peerAddr, hash)
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	safeURL, err := validateAndBuildURL(peerAddr, "download/"+hash)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", safeURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -103,16 +109,20 @@ func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerAddr, hash string
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return resp.Body, nil
 }
 
 func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerAddr string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", peerAddr+"/services", nil)
+	safeURL, err := validateAndBuildURL(peerAddr, "services")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", safeURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -182,61 +192,64 @@ func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerAddr string, req pr
 }
 
 func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error {
-    body, err := json.Marshal(resp)
-    if err != nil {
-        return err
-    }
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
 
-    req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-    if err != nil {
-        return err
-    }
-    req.Header.Set("Content-Type", "application/json")
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-    httpResp, err := c.client.Do(req)
-    if err != nil {
-        return err
-    }
+	httpResp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		_ = httpResp.Body.Close()
 	}()
 
-    return nil
+	return nil
 }
 
 func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerAddr string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
-    queryJSON, _ := json.Marshal(query)
-    
-    url := peerAddr + "/services/bid"
-    req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(queryJSON))
-    if err != nil {
-        return protocol.ServiceBid{}, err
-    }
-    req.Header.Set("Content-Type", "application/json")
+	queryJSON, _ := json.Marshal(query)
 
-    resp, err := c.client.Do(req)
-    if err != nil {
-        return protocol.ServiceBid{}, err
-    }
+	url := peerAddr + "/services/bid"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(queryJSON))
+	if err != nil {
+		return protocol.ServiceBid{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return protocol.ServiceBid{}, err
+	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
-    if resp.StatusCode != http.StatusOK {
-        return protocol.ServiceBid{}, fmt.Errorf("peer returned status %d", resp.StatusCode)
-    }
+	if resp.StatusCode != http.StatusOK {
+		return protocol.ServiceBid{}, fmt.Errorf("peer returned status %d", resp.StatusCode)
+	}
 
-    var bid protocol.ServiceBid
-    if err := json.NewDecoder(resp.Body).Decode(&bid); err != nil {
-        return protocol.ServiceBid{}, err
-    }
+	var bid protocol.ServiceBid
+	if err := json.NewDecoder(resp.Body).Decode(&bid); err != nil {
+		return protocol.ServiceBid{}, err
+	}
 
-    return bid, nil
+	return bid, nil
 }
 
 func (c *HTTPPeerClient) AddPeer(peerAddr string, payload *bytes.Buffer) error {
-	url := fmt.Sprintf("%s/peers/add", peerAddr)
-	reqPeer, _ := http.NewRequest(http.MethodPost, url, payload)
+	safeURL, err := validateAndBuildURL(peerAddr, "peers/add")
+	if err != nil {
+		return err
+	}
+	reqPeer, _ := http.NewRequest(http.MethodPost, safeURL, payload)
 	reqPeer.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(reqPeer)
 	if err != nil {
@@ -250,15 +263,18 @@ func (c *HTTPPeerClient) AddPeer(peerAddr string, payload *bytes.Buffer) error {
 }
 
 func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error) {
-	url := fmt.Sprintf("%s/peers/announce", sponsorAddres)
+	safeURL, err := validateAndBuildURL(sponsorAddres, "peers/announce")
+	if err != nil {
+		return nil, err
+	}
 	bodyBytes, _ := json.Marshal(peerRequest)
-	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, safeURL, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return map[string]string{}, fmt.Errorf("couldn't announce to %s: %w", sponsorAddres, err)
 	}
-	defer func(){ _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }()
 	var peers map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
 		return map[string]string{}, err
