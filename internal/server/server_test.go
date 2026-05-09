@@ -160,34 +160,57 @@ func GetPeersSimulated(t *testing.T, sv *TestServer) string {
 	return buf.String()
 }
 
-func TestAServerCanConnectToAnother(t *testing.T) {
+func invalidMultipartWithoutFile(t *testing.T) io.Reader {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	// write a non-file field to make a valid multipart, but no "file" part
+	require.NoError(t, w.WriteField("dummy", "value"))
+	require.NoError(t, w.Close())
+	return &buf
+}
+
+func TestPeerAdditionAndConnectivity(t *testing.T) {
 	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
-	sv1.AddPeer("2", sv2.Config.Address)
-	sv2.AddPeer("1", sv1.Config.Address)
+	sv1 := NewServer(t, testutil.DefaultConfig(t, "sv1"), nil)
+	sv2 := NewServer(t, testutil.DefaultConfig(t, "sv2"), nil)
 
-	gotPeersOfSv2 := strings.TrimSpace(GetPeersSimulated(t, sv2))
-	expectedPeersOfSv2 := fmt.Sprintf(`{"1":"%s"}`, sv1.Config.Address)
-	gotPeersOfSv1 := strings.TrimSpace(GetPeersSimulated(t, sv1))
-	expectedPeersOfSv1 := fmt.Sprintf(`{"2":"%s"}`, sv2.Config.Address)
+	// Add peer via HTTP endpoint
+	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: sv2.Config.Address}
+	body, _ := json.Marshal(addReq)
+	req, err := http.NewRequest("POST", sv1.Config.Address+"/peers/add", bytes.NewBuffer(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := sv1.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	require.Equal(t, expectedPeersOfSv2, gotPeersOfSv2)
-	require.Equal(t, expectedPeersOfSv1, gotPeersOfSv1)
+	// Add peer programmatically on the other side
+	sv2.AddPeer(sv1.Config.ID, sv1.Config.Address)
+
+	// Both peers should now know each other
+	gotPeersSv1 := strings.TrimSpace(GetPeersSimulated(t, sv1))
+	expectedSv1 := fmt.Sprintf(`{"%s":"%s"}`, sv2.Config.ID, sv2.Config.Address)
+	require.Equal(t, expectedSv1, gotPeersSv1)
+
+	gotPeersSv2 := strings.TrimSpace(GetPeersSimulated(t, sv2))
+	expectedSv2 := fmt.Sprintf(`{"%s":"%s"}`, sv1.Config.ID, sv1.Config.Address)
+	require.Equal(t, expectedSv2, gotPeersSv2)
+
 	require.NoError(t, sv1.ExecuteSync())
 	require.NoError(t, sv2.ExecuteSync())
 }
 
-func TestP2PNetworkEventualConsistency(t *testing.T) {
+func TestFilePropagationAcrossCluster(t *testing.T) {
 	t.Parallel()
 	clusterSize := 3
 	servers := make([]*TestServer, clusterSize)
 	for i := range clusterSize {
-		serverName := fmt.Sprintf("%d", i)
-		servers[i] = NewServer(t, testutil.DefaultConfig(t, serverName), nil)
+		servers[i] = NewServer(t, testutil.DefaultConfig(t, fmt.Sprintf("node-%d", i)), nil)
 	}
 
-	// Full connection between the peers
+	// Full mesh connection
 	for i, current := range servers {
 		for j, peer := range servers {
 			if i != j {
@@ -195,54 +218,26 @@ func TestP2PNetworkEventualConsistency(t *testing.T) {
 			}
 		}
 	}
-	fileName := "test05.txt"
+
+	fileName := "shared.txt"
+	fileContent := "content to propagate"
 	for _, srv := range servers {
 		srv.Storage.SetSubscription(fileName, true)
 	}
-	fileContent := "everyone wants me"
+
 	expectedHash := UploadFileSimulated(t, servers[0], fileName, fileContent)
-	require.Eventually(t, func() bool {
-		for _, srv := range servers {
+
+	// All nodes must eventually have the correct metadata and physical blob
+	for _, srv := range servers {
+		require.Eventually(t, func() bool {
 			meta, exists := srv.Storage.GetFileMeta(fileName)
 			if !exists || meta.Hash != expectedHash {
 				return false
 			}
-		}
-		return true
-	}, 3*time.Second, 100*time.Millisecond, "The cluster couldn't synchronize the file at a reasonable time.")
-}
-
-func TestAllServersSyncsToLastUpdated(t *testing.T) {
-	t.Parallel()
-	updatedServer := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
-	noUpdatedServer := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
-	noUpdatedServer2 := NewServer(t, testutil.DefaultConfig(t, "3"), nil)
-
-	updatedServer.AddPeer("2", noUpdatedServer.Config.Address)
-	updatedServer.AddPeer("3", noUpdatedServer2.Config.Address)
-
-	noUpdatedServer.AddPeer("1", updatedServer.Config.Address)
-	noUpdatedServer.AddPeer("3", noUpdatedServer2.Config.Address)
-
-	noUpdatedServer.AddPeer("1", updatedServer.Config.Address)
-	noUpdatedServer.AddPeer("2", noUpdatedServer.Config.Address)
-	fileName := "test03.txt"
-	noUpdatedServer.Storage.SetSubscription(fileName, true)
-	noUpdatedServer2.Storage.SetSubscription(fileName, true)
-
-	fileContent := "Hello!!!"
-	expectedHash := UploadFileSimulated(t, updatedServer, fileName, fileContent)
-
-	_, exists := updatedServer.Storage.GetFileMeta(fileName)
-	if !exists {
-		t.Errorf("Blob hash '%s' was not registered in the metadata", expectedHash)
+			hasBlob, _ := srv.Storage.HasPhysicalBlob(expectedHash)
+			return hasBlob
+		}, 5*time.Second, 100*time.Millisecond, "Node %s did not sync file", srv.Config.ID)
 	}
-
-	assertRemoteHashToBeTheSameAs(t, expectedHash, fileContent, updatedServer)
-	require.Eventually(t, func() bool {
-		_, exists := noUpdatedServer.Storage.GetFileMeta(fileName)
-		return exists
-	}, 2*time.Second, 100*time.Millisecond, "All servers should have been synced to last updated files")
 }
 
 func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
@@ -756,31 +751,6 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after the expired attempt")
 }
 
-func TestAddPeerViaHTTPEndpoint(t *testing.T) {
-	t.Parallel()
-	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
-	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
-
-	// POST to /peers/add on sv1 with sv2's info
-	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: sv2.Config.Address}
-	body, _ := json.Marshal(addReq)
-
-	req, err := http.NewRequest("POST", sv1.Config.Address+"/peers/add", bytes.NewBuffer(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := sv1.Client().Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	require.Equal(t, http.StatusOK, resp.StatusCode, "Adding a peer should return 200 OK")
-
-	// Verify sv1 now has sv2 in its peer list
-	gotPeers := strings.TrimSpace(GetPeersSimulated(t, sv1))
-	expectedPeers := fmt.Sprintf(`{"%s":"%s"}`, sv2.Config.ID, sv2.Config.Address)
-	require.Equal(t, expectedPeers, gotPeers, "sv1 should have sv2 registered as a peer")
-}
-
 func RequestManifestSimulated(t *testing.T, sv *TestServer) map[string]protocol.IndexEntry {
 	t.Helper()
 	req, err := http.NewRequest("GET", sv.Config.Address+"/manifest", nil)
@@ -849,4 +819,67 @@ func TestSnapshotReflectsFullClusterState(t *testing.T) {
 		}
 		return true
 	}, 5*time.Second, 200*time.Millisecond, "All nodes should have all 3 files in their manifests")
+}
+
+func TestHTTPErrorResponses(t *testing.T) {
+	t.Parallel()
+	sv := NewServer(t, testutil.DefaultConfig(t, "err-node"), nil)
+
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		body           io.Reader
+		contentType    string
+		expectedStatus int
+	}{
+		{
+			name:           "subscribe without name",
+			method:         http.MethodPost,
+			path:           "/subscribe",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "delete without name",
+			method:         http.MethodDelete,
+			path:           "/file",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "upload without file part",
+			method:         http.MethodPost,
+			path:           "/upload",
+			body:           invalidMultipartWithoutFile(t),
+			contentType:    "multipart/form-data; boundary=xxx",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "notify with invalid JSON",
+			method:         http.MethodPost,
+			path:           "/notify",
+			body:           strings.NewReader("{invalid}"),
+			contentType:    "application/json",
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body io.Reader
+			if tt.body != nil {
+				body = tt.body
+			}
+			req, err := http.NewRequest(tt.method, sv.Config.Address+tt.path, body)
+			require.NoError(t, err)
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+
+			resp, err := sv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			require.Equal(t, tt.expectedStatus, resp.StatusCode, "unexpected status for %s", tt.name)
+		})
+	}
 }

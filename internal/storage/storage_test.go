@@ -2,10 +2,15 @@ package storage_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/testutil"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -206,4 +211,215 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 		isKnown := name == fileA || name == fileB || name == fileC
 		require.True(t, isKnown, "Snapshot contains unexpected entry: %s", name)
 	}
+}
+
+func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-vfs-version")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	entry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v3", Version: 3, Size: 100}
+	updated := engine.Upsert(entry)
+	require.True(t, updated, "First insert should succeed")
+
+	olderEntry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v2", Version: 2, Size: 50}
+	updated = engine.Upsert(olderEntry)
+	require.False(t, updated, "Upsert with lower version should be rejected")
+
+	meta, exists := engine.GetFileMeta("versioned.txt")
+	require.True(t, exists)
+	require.Equal(t, 3, meta.Version, "Version should remain at 3")
+	require.Equal(t, "hash-v3", meta.Hash, "Hash should remain unchanged")
+}
+
+func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-integrity")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	correctContent := "correct content"
+	expectedHash := testutil.CalculateHash(t, correctContent)
+
+	fileInfo := protocol.IndexEntry{Name: "integrity.txt", Hash: expectedHash, Version: 1, Size: int64(len(correctContent))}
+	engine.Upsert(fileInfo)
+
+	corruptedBody := io.NopCloser(bytes.NewReader([]byte("corrupted content")))
+	err := engine.StoreRemoteBlob(fileInfo, corruptedBody)
+	require.Error(t, err, "StoreRemoteBlob should return error on hash mismatch")
+	require.Contains(t, err.Error(), "hash mismatch")
+
+	hasBlob, _ := engine.HasPhysicalBlob(expectedHash)
+	require.False(t, hasBlob, "The expected blob should not exist after corruption")
+
+	corruptedHash := testutil.CalculateHash(t, "corrupted content")
+	hasBlobCorrupt, _ := engine.HasPhysicalBlob(corruptedHash)
+	require.False(t, hasBlobCorrupt, "The corrupted blob should have been deleted")
+}
+
+func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-tombstone-manifest")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	fileName := "deleted_file.txt"
+	engine.SetSubscription(fileName, true)
+
+	remoteManifest := map[string]protocol.IndexEntry{
+		fileName: {Name: fileName, Hash: "hash-deleted", Version: 2, Deleted: true},
+	}
+
+	missingFiles := engine.ProcessRemoteManifest(remoteManifest)
+	require.Empty(t, missingFiles, "Tombstoned entries should NOT be added to missingFiles")
+
+	meta, exists := engine.GetFileMeta(fileName)
+	require.True(t, exists, "Metadata should still be updated via Upsert")
+	require.True(t, meta.Deleted, "Entry should be marked as deleted")
+}
+
+func TestHandleNotificationRespectsSubscription(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "notif-sub-filter")
+	var downloadInvoked bool
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error {
+			downloadInvoked = true
+			return nil
+		},
+	)
+
+	subscribedFile := "subscribed.txt"
+	unsubscribedFile := "unsubscribed.txt"
+	engine.SetSubscription(subscribedFile, true)
+
+	tests := []struct {
+		name           string
+		fileName       string
+		expectDownload bool
+	}{
+		{"ignores unsubscribed file", unsubscribedFile, false},
+		{"enqueues download for subscribed file", subscribedFile, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			downloadInvoked = false
+			notification := protocol.PeerNotification{
+				File:   protocol.IndexEntry{Name: tt.fileName, Hash: "hash-" + tt.fileName, Version: 1},
+				Source: "https://peer:8080",
+			}
+			body, _ := json.Marshal(notification)
+			req := httptest.NewRequest(http.MethodPost, "/notify", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			engine.HandleNotification(w, req)
+
+			require.Equal(t, tt.expectDownload, downloadInvoked,
+				"download callback invocation mismatch for %s", tt.name)
+		})
+	}
+}
+
+func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-remote-del-new")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	tombstone := protocol.IndexEntry{
+		Name: "never_existed.txt", Hash: "hash-phantom", Version: 1, Deleted: true,
+	}
+
+	// Should not panic or error — the file never existed locally
+	engine.ProcessRemoteDeletion(tombstone)
+
+	meta, exists := engine.GetFileMeta("never_existed.txt")
+	require.True(t, exists, "A tombstone record should have been created")
+	require.True(t, meta.Deleted, "The record should be marked as deleted")
+	require.Equal(t, 1, meta.Version)
+}
+
+func TestConcurrentStorageEngineAccess(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-concurrent")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	var wg sync.WaitGroup
+	const goroutines = 10
+
+	// Writers: SaveLocalFile
+	for i := range goroutines {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
+			content := fmt.Sprintf("content for file %d", idx)
+			_ = engine.SaveLocalFile(fileName, bytes.NewReader([]byte(content)))
+		}(i)
+	}
+
+	// Readers: GetFileMeta
+	for i := range goroutines {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
+			engine.GetFileMeta(fileName)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// After all goroutines finish, delete half the files concurrently
+	for i := range goroutines / 2 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
+			_ = engine.DeleteLocalFile(fileName)
+		}(i)
+	}
+
+	// Concurrent reads during deletes
+	for i := range goroutines {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
+			engine.GetFileMeta(fileName)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify consistent state: all files should exist in VFS
+	snapshot := engine.GetVFSSnapshot()
+	require.Equal(t, goroutines, len(snapshot), "All files should be tracked in VFS")
 }
