@@ -178,7 +178,7 @@ func (s *Server) DispatchTask(targetPeerAddr string, req protocol.TaskRequest) e
 
 	err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
 	if err != nil {
-		s.Compute.MarkTaskAsFailed(req.TaskID, req.Service, err.Error())
+		s.Compute.MarkTaskAsFailed(req, err.Error())
 		return fmt.Errorf("failed to dispatch task to peer: %v", err)
 	}
 	return nil

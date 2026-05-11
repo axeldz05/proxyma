@@ -174,10 +174,10 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
     })
 }
 
-func (c *ComputeEngine) MarkTaskAsFailed(taskID, service, reason string) {
+func (c *ComputeEngine) MarkTaskAsFailed(req protocol.TaskRequest, reason string) {
     c.setTaskStatus(protocol.ServiceTaskResponse{
-        TaskID:  taskID,
-        Service: service,
+        TaskID:  req.TaskID,
+        Service: req.Service,
         Status:  "failed",
         Outputs: map[string]any{"error": reason},
     })
