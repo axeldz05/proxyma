@@ -69,7 +69,7 @@ func (c *ComputeEngine) RegisterNewService(schema protocol.ServiceSchema, handle
 	return nil
 }
 
-func (c *ComputeEngine) GetTaskStatus(taskID string) (protocol.ServiceTaskResponse, bool) {
+func (c *ComputeEngine) GetTaskResponse(taskID string) (protocol.ServiceTaskResponse, bool) {
 	val, exists := c.taskStatuses.Load(taskID)
 	if !exists {
 		return protocol.ServiceTaskResponse{}, false
@@ -99,15 +99,17 @@ func (c *ComputeEngine) serviceWorker() {
         cancel()
 
         status := "completed"
+		var errorMessage string
         if err != nil {
             status = "failed"
-            outputs = map[string]any{"error": err.Error()}
+			errorMessage = err.Error()
         }		
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:  task.TaskID,
 			Service: task.Service,
 			Status:  status,
 			Outputs: outputs,
+			Error: 	 errorMessage,
 		}
 
 		c.setTaskStatus(responsePayload)

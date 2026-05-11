@@ -388,7 +388,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	require.NoError(t, err, "The node worker should have accepted the task")
 
 	require.Eventually(t, func() bool {
-		taskResult, exists := svDemandingService.Compute.GetTaskStatus(taskID)
+		taskResult, exists := svDemandingService.Compute.GetTaskResponse(taskID)
 		return exists && taskResult.Status == "completed"
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
 }

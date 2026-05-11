@@ -3,3 +3,8 @@
     - Cuando un nodo recibe peticion para unirse al cluster, tiene que verificar que el address sea accedible.
     - Announce el endpoing /peers/announce se deja expuesto frente a peticiones invalidas
 - Cambiar la forma de hacer Sync con HTTP a usar sockets en sistemas unix. Eliminar el "/sync" endpoint
+
+Cambiar el BuildGRPCHandler para aceptar tres tipos de conexiones:
+1. Streaming Bidireccional (gRPC Bidi o WebSockets). Considerar implementar algoritmos de resolución de conflictos como CRDTs (Conflict-free Replicated Data Types) u OT (Operational Transformation).
+2. Server-Streaming (gRPC Server Stream o HTTP Range Requests). Un handler que devuelva un io.Reader (o un canal <-chan []byte) en lugar de un map[string]any.
+3. Caso donde no se usa ni gRPC ni HTTP: WebRTC (UDP). Para el input considerar usar WebSockets o canales de datos de WebRTC (DataChannels).
