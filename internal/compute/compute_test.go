@@ -241,11 +241,11 @@ func setupMockGRPCWebhookServer(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			payload["status"] = "ok"
 			payload["processed_by"] = "grpc_webhook_mock"
-			json.NewEncoder(w).Encode(payload)
+			_ = json.NewEncoder(w).Encode(payload)
 
 		case "fail_server_error":
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error": "internal gRPC server error"}`))
+			_, _ = w.Write([]byte(`{"error": "internal gRPC server error"}`))
 
 		case "fail_timeout":
 			// Simulate a hanging RPC call that exceeds the context timeout
@@ -255,7 +255,7 @@ func setupMockGRPCWebhookServer(t *testing.T) *httptest.Server {
 		case "invalid_response":
 			// Simulate a corrupted response from the remote node
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{ "broken_json": true, `))
+			_,_ = w.Write([]byte(`{ "broken_json": true, `))
 
 		default:
 			http.Error(w, "unknown scenario", http.StatusBadRequest)

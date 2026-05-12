@@ -183,7 +183,7 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := sv1.Client().Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func () { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Add peer programmatically on the other side
@@ -877,7 +877,7 @@ func TestHTTPErrorResponses(t *testing.T) {
 
 			resp, err := sv.Client().Do(req)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			require.Equal(t, tt.expectedStatus, resp.StatusCode, "unexpected status for %s", tt.name)
 		})
