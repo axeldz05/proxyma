@@ -1,4 +1,4 @@
-package storage
+package storage_test
 
 import (
 	"bytes"
@@ -6,20 +6,15 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	storage "proxyma/internal/storage/physical"
 	"strings"
 	"testing"
+
 	"github.com/stretchr/testify/require"
 )
-func aFileAcceptedByStorage() []byte {
-	return []byte{1, 2, 3}
-}
-
-func aFileAcceptedByStorage2() []byte {
-	return []byte{4, 5, 6}
-}
 
 func Test01StorageStartsWithNofiles(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	got, err := aStorage.AmountOfBlobs()
 	require.NoError(t, err)
 	want := 0
@@ -27,7 +22,8 @@ func Test01StorageStartsWithNofiles(t *testing.T) {
 }
 
 func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	baseDir := t.TempDir()
+	aStorage := storage.NewStorage(baseDir)
 	content := "blob blob!"
 	hasher := sha256.New()
 	hasher.Write([]byte(content))
@@ -37,13 +33,13 @@ func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, gotHash, "SaveBlob must return the content's hash SHA-256")
 
-	fullPath := filepath.Join(aStorage.baseDir, expectedHash)
+	fullPath := filepath.Join(baseDir, expectedHash)
 	info, err := os.Stat(fullPath)
 	require.NoError(t, err, "The file must exist in storage with the hash as its name")
 	require.False(t, info.IsDir())
 }
 func Test03ReadBlobStreamsFromDiskUsingHash(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := "some content!"
 	savedHash, _, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
@@ -55,7 +51,7 @@ func Test03ReadBlobStreamsFromDiskUsingHash(t *testing.T) {
 }
 
 func Test04SaveBlobIsIdempotent(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := "duplicated content"
 	hash1, _, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
@@ -66,7 +62,7 @@ func Test04SaveBlobIsIdempotent(t *testing.T) {
 }
 
 func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 
 	content1 := aFileAcceptedByStorage()
 	_, _, err := aStorage.SaveBlob(bytes.NewReader(content1))
@@ -83,7 +79,7 @@ func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
 }
 
 func Test06StorageRecognizesTheSameSavedBlob(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := aFileAcceptedByStorage()
 	generatedHash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
 	require.NoError(t, err)
@@ -95,7 +91,7 @@ func Test06StorageRecognizesTheSameSavedBlob(t *testing.T) {
 }
 
 func Test07CanNotReadABlobThatDoesNotExistsInTheStorage(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := aFileAcceptedByStorage()
 	hasher := sha256.New()
 	hasher.Write([]byte(content))
@@ -103,12 +99,12 @@ func Test07CanNotReadABlobThatDoesNotExistsInTheStorage(t *testing.T) {
 
 	var buf bytes.Buffer
 	got := aStorage.ReadBlob(generatedHash, &buf)
-	want := ErrFileDoesNotExist
+	want := storage.ErrFileDoesNotExist
 	require.ErrorIs(t, got, want)
 }
 
 func Test8DoesNotDeleteADifferentBlobThanTheSpecified(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := aFileAcceptedByStorage()
 	hasher := sha256.New()
 	hasher.Write([]byte(content))
@@ -127,7 +123,7 @@ func Test8DoesNotDeleteADifferentBlobThanTheSpecified(t *testing.T) {
 }
 
 func Test9SaveBlobReturnsSHA256Hash(t *testing.T) {
-	aStorage := NewStorage(t.TempDir())
+	aStorage := storage.NewStorage(t.TempDir())
 	content := "Super secret message!"
 	hasher := sha256.New()
 	hasher.Write([]byte(content))

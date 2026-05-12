@@ -7,9 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
@@ -22,153 +20,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
-
-type TestServer struct {
-	*server.Server
-	httpTestSrv *httptest.Server
-}
-
-func (ts *TestServer) Client() *http.Client {
-	return ts.httpTestSrv.Client()
-}
-
-func (ts *TestServer) ExpireInvite(secret string) {
-	ts.SetPendingInviteExpiration(secret, time.Now().Add(-1*time.Minute))
-}
-
-func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient) *TestServer {
-	caPath := filepath.Dir(cfg.StoragePath)
-	err := p2p.InitCluster(caPath)
-	require.NoError(t, err)
-	err = p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID)
-	require.NoError(t, err)
-	caCertFile := filepath.Join(caPath, "ca.crt")
-	cfg.CAPath = caCertFile
-	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
-	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
-	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
-
-	customTransport := &http.Transport{
-		TLSClientConfig:   clientTLS,
-		DisableKeepAlives: true,
-	}
-
-	var finalClient p2p.PeerClient
-	if mockClient != nil {
-		finalClient = mockClient
-	} else {
-		httpClient := &http.Client{
-			Transport: customTransport,
-		}
-		finalClient = p2p.NewHTTPPeerClient(httpClient)
-	}
-
-	app := server.New(cfg, finalClient)
-	ts := httptest.NewUnstartedServer(app.MountHandlers())
-	ts.TLS = serverTLS
-	ts.StartTLS()
-
-	ts.Client().Transport = &http.Transport{
-		TLSClientConfig:   clientTLS,
-		DisableKeepAlives: true,
-	}
-	app.SetAddress(ts.URL)
-
-	t.Cleanup(func() {
-		ts.CloseClientConnections()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		err := app.Shutdown(ctx)
-		require.NoError(t, err, "Node shutdown should not return an error")
-		ts.Close()
-	})
-
-	return &TestServer{
-		Server:      app,
-		httpTestSrv: ts,
-	}
-}
-
-func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string) string {
-	t.Helper()
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-	fileWriter, err := writer.CreateFormFile("file", fileName)
-	require.NoError(t, err)
-	_, err = io.WriteString(fileWriter, content)
-	require.NoError(t, err)
-	err = writer.Close()
-	require.NoError(t, err, "Failed to close multipart writer")
-
-	reqUp, err := http.NewRequest("POST", sv.Config.Address+"/upload", &requestBody)
-	require.NoError(t, err)
-	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
-
-	respUp, err := sv.Client().Do(reqUp)
-	require.NoError(t, err)
-	defer func() { _ = respUp.Body.Close() }()
-
-	require.Equal(t, http.StatusCreated, respUp.StatusCode, "The upload should have return status 201 Created")
-	return testutil.CalculateHash(t, content)
-}
-
-func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, targetServer *TestServer) {
-	t.Helper()
-	downloadURL := fmt.Sprintf("%s/download/%s", targetServer.Config.Address, expectedHash)
-	req, err := http.NewRequest("GET", downloadURL, nil)
-	require.NoError(t, err)
-
-	resp, err := targetServer.Client().Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy fileContent from '%s'", resp.Body)
-	}
-	uploadedContent := buf.String()
-
-	if uploadedContent != fileContent {
-		t.Errorf("Expected content '%s', got '%s'", fileContent, string(uploadedContent))
-	}
-}
-
-func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
-	t.Helper()
-	reqDel, err := http.NewRequest("DELETE", sv.Config.Address+"/file?name="+fileName, nil)
-	require.NoError(t, err)
-
-	respDel, err := sv.Client().Do(reqDel)
-	require.NoError(t, err)
-	defer func() { _ = respDel.Body.Close() }()
-
-	require.Equal(t, http.StatusOK, respDel.StatusCode, "Delete should have return 200 OK")
-}
-
-func GetPeersSimulated(t *testing.T, sv *TestServer) string {
-	t.Helper()
-	req := httptest.NewRequest("GET", "/peers", nil)
-	w := httptest.NewRecorder()
-	sv.GetPeers(w, req)
-	resp := w.Result()
-	buf := new(strings.Builder)
-	_, err := io.Copy(buf, resp.Body)
-	if err != nil {
-		t.Errorf("Could not copy response from %s", resp.Body)
-	}
-	return buf.String()
-}
-
-func invalidMultipartWithoutFile(t *testing.T) io.Reader {
-	t.Helper()
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-	// write a non-file field to make a valid multipart, but no "file" part
-	require.NoError(t, w.WriteField("dummy", "value"))
-	require.NoError(t, w.Close())
-	return &buf
-}
 
 func TestPeerAdditionAndConnectivity(t *testing.T) {
 	t.Parallel()
@@ -749,21 +600,6 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	defer func() { _ = respReused.Body.Close() }()
 
 	require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after the expired attempt")
-}
-
-func RequestManifestSimulated(t *testing.T, sv *TestServer) map[string]protocol.IndexEntry {
-	t.Helper()
-	req, err := http.NewRequest("GET", sv.Config.Address+"/manifest", nil)
-	require.NoError(t, err)
-	resp, err := sv.Client().Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var manifest map[string]protocol.IndexEntry
-	err = json.NewDecoder(resp.Body).Decode(&manifest)
-	require.NoError(t, err)
-	return manifest
 }
 
 func TestSnapshotReflectsFullClusterState(t *testing.T) {

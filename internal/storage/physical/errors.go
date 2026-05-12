@@ -5,7 +5,7 @@ import (
 	"os"
 	"fmt"
 )
-// make better error messages. Put context into it. FileDoesNotExist isnt enough
+// Put context into it.
 var (
 	ErrClientAlreadyHasAStorage = errors.New("client already has an storage")
 	ErrFileDoesNotExist = os.ErrNotExist

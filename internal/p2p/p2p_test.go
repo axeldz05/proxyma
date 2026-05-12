@@ -1,4 +1,4 @@
-package p2p_test
+	package p2p_test
 
 import (
 	"bytes"
@@ -81,17 +81,6 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.Error(t, err, "Should fail because the CA is not the same from what the cluster use")
 		require.Contains(t, err.Error(), "bad certificate", "The server should reject unknown origin of certificates")
 	})
-}
-
-// newMockServer creates a TLS httptest server with the given handler and returns
-// an HTTPPeerClient configured to talk to it. The server is closed on test cleanup.
-func newMockServer(t *testing.T, handler http.Handler) (string, *p2p.HTTPPeerClient) {
-	t.Helper()
-	ts := httptest.NewTLSServer(handler)
-	t.Cleanup(ts.Close)
-
-	client := p2p.NewHTTPPeerClient(ts.Client())
-	return ts.URL, client
 }
 
 func TestHTTPPeerClientFetchManifest(t *testing.T) {

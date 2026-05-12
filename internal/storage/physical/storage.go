@@ -11,6 +11,12 @@ import (
 	"path/filepath"
 )
 
+func NewStorage(baseDir string) *Storage{
+	return &Storage{
+		baseDir: baseDir,
+	}
+}
+
 type Storage struct {
 	baseDir string
 }
@@ -57,11 +63,6 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 		}
 	}
 	return generatedHash, writtenBytes, nil
-}
-
-func ReadFileFromClient(clientIP string, pathToRead string) (io.ReadCloser, error) {
-	// For now this is mocked. It should do a HTTP GET request to the client.
-	return os.Open(pathToRead)
 }
 
 func (st *Storage) AmountOfBlobs() (int, error) {
