@@ -11,6 +11,7 @@ type MockPeerClient struct {
 	OnFetchManifest    func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
 	OnAnnounce		   func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
 	OnNotify           func(ctx context.Context, addr string, n protocol.PeerNotification) error
+	OnNotifyServiceUpdate func(ctx context.Context, addr string, n protocol.ServiceNotification) error
 	OnAddPeer          func(addr string, payload *bytes.Buffer) error
 	OnDownloadBlob     func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
 	OnDiscoverServices func(ctx context.Context, addr string) ([]string, error)
@@ -37,6 +38,13 @@ func (m *MockPeerClient) FetchManifest(ctx context.Context, addr string) (map[st
 func (m *MockPeerClient) Notify(ctx context.Context, addr string, n protocol.PeerNotification) error {
 	if m.OnNotify != nil {
 		return m.OnNotify(ctx, addr, n)
+	}
+	return nil
+}
+
+func (m *MockPeerClient) NotifyServiceUpdate(ctx context.Context, addr string, n protocol.ServiceNotification) error {
+	if m.OnNotifyServiceUpdate != nil {
+		return m.OnNotifyServiceUpdate(ctx, addr, n)
 	}
 	return nil
 }

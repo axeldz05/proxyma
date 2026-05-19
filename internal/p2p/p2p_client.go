@@ -15,6 +15,7 @@ type PeerClient interface {
 	FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error)
 	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
 	Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error
+	NotifyServiceUpdate(ctx context.Context, peerAddr string, notification protocol.ServiceNotification) error
 	AddPeer(peerAddr string, payload *bytes.Buffer) error
 	DownloadBlob(ctx context.Context, peerAddr, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerAddr string) ([]string, error)
@@ -71,6 +72,30 @@ func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerAddr string) (ma
 
 func (c *HTTPPeerClient) Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error {
 	safeURL, err := validateAndBuildURL(peerAddr, "notify")
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(notification)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", safeURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	return nil
+}
+
+func (c *HTTPPeerClient) NotifyServiceUpdate(ctx context.Context, peerAddr string, notification protocol.ServiceNotification) error {
+	safeURL, err := validateAndBuildURL(peerAddr, "services/notify")
 	if err != nil {
 		return err
 	}

@@ -77,6 +77,12 @@ type PeerNotification struct {
 	Source string     `json:"source"`
 }
 
+type ServiceNotification struct {
+	Action string        `json:"action"` // "add", "remove"
+	NodeID string        `json:"node_id"`
+	Schema ServiceSchema `json:"schema"`
+}
+
 type JoinRequest struct {
 	Secret 	   string `json:"secret"`
 	CSR    	   string `json:"csr"`

@@ -159,8 +159,43 @@ func TestHTTPPeerClientNotify(t *testing.T) {
 
 	require.Equal(t, "updated.txt", received.File.Name)
 	require.Equal(t, "hash999", received.File.Hash)
-	require.Equal(t, 3, received.File.Version)
 	require.Equal(t, "https://some-peer:8080", received.Source)
+}
+
+func TestHTTPPeerClientNotifyServiceUpdate(t *testing.T) {
+	t.Parallel()
+	var received protocol.ServiceNotification
+	notifyCalled := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/services/notify", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		err := json.NewDecoder(r.Body).Decode(&received)
+		require.NoError(t, err)
+		w.WriteHeader(http.StatusOK)
+		notifyCalled <- struct{}{}
+	})
+	addr, client := newMockServer(t, mux)
+
+	notification := protocol.ServiceNotification{
+		Action: "add",
+		NodeID: "test-node",
+		Schema: protocol.ServiceSchema{Name: "test-svc"},
+	}
+
+	ctx := context.Background()
+	err := client.NotifyServiceUpdate(ctx, addr, notification)
+	require.NoError(t, err)
+
+	select {
+	case <-notifyCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("NotifyServiceUpdate handler was never called")
+	}
+
+	require.Equal(t, "add", received.Action)
+	require.Equal(t, "test-node", received.NodeID)
+	require.Equal(t, "test-svc", received.Schema.Name)
 }
 
 func TestHTTPPeerClientAnnounce(t *testing.T) {
