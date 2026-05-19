@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"proxyma/internal/compute"
@@ -750,4 +751,46 @@ func TestServerLoadsLocalServicesOnStartup(t *testing.T) {
 	require.True(t, exists, "Server should have loaded 'test-script' from services.json")
 	require.Equal(t, "A dummy test script", schema.Description)
 	require.Equal(t, "string", schema.Parameters["p1"].Type)
+}
+
+func TestServerHandlesServiceNotifications(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "service-notify-node")
+	srv := server.New(cfg, nil)
+	
+	notification := protocol.ServiceNotification{
+		Action: "add",
+		NodeID: "peer-99",
+		Schema: protocol.ServiceSchema{
+			Name: "test-svc",
+			Description: "desc",
+		},
+	}
+	
+	bodyBytes, _ := json.Marshal(notification)
+	req, _ := http.NewRequest(http.MethodPost, srv.Config.Address+"/services/notify", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	
+	// Create a recorder
+	recorder := httptest.NewRecorder()
+	srv.HandleServiceNotify(recorder, req)
+	
+	require.Equal(t, http.StatusOK, recorder.Code)
+	
+	services := srv.GetClusterServices("peer-99")
+	require.Len(t, services, 1)
+	require.Equal(t, "desc", services["test-svc"].Description)
+
+	// Test remove
+	notification.Action = "remove"
+	bodyBytes, _ = json.Marshal(notification)
+	req, _ = http.NewRequest(http.MethodPost, srv.Config.Address+"/services/notify", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder = httptest.NewRecorder()
+	srv.HandleServiceNotify(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	services = srv.GetClusterServices("peer-99")
+	require.Len(t, services, 0)
 }

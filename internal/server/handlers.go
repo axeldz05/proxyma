@@ -38,10 +38,10 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("/subscribe", s.Storage.HandleSubscribe)
 	mux.HandleFunc("/notify", s.Storage.HandleNotification)
 
-	// --- DOMINIO DE CÓMPUTO (ComputeEngine) ---
 	mux.HandleFunc("/services/bid", s.Compute.HandleServiceBid)
 	mux.HandleFunc("/services/submit", s.Compute.HandleServiceSubmit)
 	mux.HandleFunc("/services/callback", s.Compute.HandleServiceCallback)
+	mux.HandleFunc("/services/notify", s.HandleServiceNotify)
 
 	mux.HandleFunc("/peers", s.GetPeers)
 	mux.HandleFunc("/peers/announce", s.HandleAnnounce)
@@ -213,4 +213,31 @@ func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Sync successfully processed"})
+}
+
+func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	var req protocol.ServiceNotification
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	s.clusterServicesMu.Lock()
+	if s.clusterServices[req.NodeID] == nil {
+		s.clusterServices[req.NodeID] = make(map[string]protocol.ServiceSchema)
+	}
+	if req.Action == "add" || req.Action == "modify" {
+		s.clusterServices[req.NodeID][req.Schema.Name] = req.Schema
+		s.Config.Logger.Info("Cluster service registered", "service", req.Schema.Name, "peer", req.NodeID)
+	} else if req.Action == "remove" {
+		delete(s.clusterServices[req.NodeID], req.Schema.Name)
+		s.Config.Logger.Info("Cluster service removed", "service", req.Schema.Name, "peer", req.NodeID)
+	}
+	s.clusterServicesMu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
 }

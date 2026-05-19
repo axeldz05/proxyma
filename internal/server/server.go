@@ -28,6 +28,8 @@ type Server struct {
 	httpServer     *http.Server
 	downloadQueue  chan DownloadJob
 	peersMu        sync.RWMutex
+	clusterServices   map[string]map[string]protocol.ServiceSchema
+	clusterServicesMu sync.RWMutex
 	inviteMu       sync.Mutex
 	pendingInvites map[string]time.Time
 }
@@ -43,6 +45,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		peers:          make(map[string]string),
 		peerClient:     peerClient,
 		downloadQueue:  make(chan DownloadJob, 100),
+		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
 		pendingInvites: make(map[string]time.Time),
 	}
 
@@ -145,6 +148,16 @@ func (s *Server) LoadLocalServices() {
 			s.Config.Logger.Info("Local service registered", "service", name, "type", svc.Type)
 		}
 	}
+}
+
+func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
+	s.clusterServicesMu.RLock()
+	defer s.clusterServicesMu.RUnlock()
+	services := make(map[string]protocol.ServiceSchema)
+	if peerServices, ok := s.clusterServices[peerID]; ok {
+		maps.Copy(services, peerServices)
+	}
+	return services
 }
 
 func (s *Server) SetAddress(addr string) {
