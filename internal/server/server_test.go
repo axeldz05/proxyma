@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
@@ -239,7 +240,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	require.NoError(t, err, "The node worker should have accepted the task")
 
 	require.Eventually(t, func() bool {
-		taskResult, exists := svDemandingService.Compute.GetTaskResponse(taskID)
+		taskResult, exists := svWithService.Compute.GetTaskResponse(taskID)
 		return exists && taskResult.Status == "completed"
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
 }
@@ -718,4 +719,35 @@ func TestHTTPErrorResponses(t *testing.T) {
 			require.Equal(t, tt.expectedStatus, resp.StatusCode, "unexpected status for %s", tt.name)
 		})
 	}
+}
+
+func TestServerLoadsLocalServicesOnStartup(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "startup-services")
+
+	// Create a dummy services.json in the storage path
+	servicesFile := filepath.Join(cfg.StoragePath, "services.json")
+	mockServices := `{
+		"test-script": {
+			"type": "script",
+			"exec": "python3 dummy.py",
+			"schema": {
+				"name": "test-script",
+				"description": "A dummy test script",
+				"parameters": {
+					"p1": {"type": "string", "required": true}
+				}
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(servicesFile, []byte(mockServices), 0644))
+
+	// Initialize the server, which should load local services
+	srv := server.New(cfg, nil)
+	srv.LoadLocalServices()
+
+	schema, exists := srv.Compute.GetService("test-script")
+	require.True(t, exists, "Server should have loaded 'test-script' from services.json")
+	require.Equal(t, "A dummy test script", schema.Description)
+	require.Equal(t, "string", schema.Parameters["p1"].Type)
 }

@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -98,6 +101,50 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	s.Config.Logger.Info("Node shutdown complete.")
 	return nil
+}
+
+func (s *Server) LoadLocalServices() {
+	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
+	data, err := os.ReadFile(servicesFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.Config.Logger.Info("No services.json found, skipping local service registration")
+			return
+		}
+		s.Config.Logger.Error("Failed to read services.json", "error", err)
+		return
+	}
+
+	type LocalService struct {
+		Type   string                 `json:"type"`
+		Exec   string                 `json:"exec,omitempty"`
+		Schema protocol.ServiceSchema `json:"schema"`
+	}
+
+	var services map[string]LocalService
+	if err := json.Unmarshal(data, &services); err != nil {
+		s.Config.Logger.Error("Failed to unmarshal services.json", "error", err)
+		return
+	}
+
+	for name, svc := range services {
+		var handler compute.ServiceHandler
+		if svc.Type == "script" || svc.Type == "exec" {
+			handler = compute.BuildScriptHandler(svc.Exec)
+		} else if svc.Type == "grpc" {
+			// dummy grpc handler builder if none, but let's assume BuildGRPCHandler exists
+			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second) 
+		} else {
+			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
+			continue
+		}
+
+		if err := s.Compute.RegisterNewService(svc.Schema, handler); err != nil {
+			s.Config.Logger.Error("Failed to register local service", "service", name, "error", err)
+		} else {
+			s.Config.Logger.Info("Local service registered", "service", name, "type", svc.Type)
+		}
+	}
 }
 
 func (s *Server) SetAddress(addr string) {
