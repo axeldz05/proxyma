@@ -18,7 +18,7 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 			return nil, fmt.Errorf("failed to marshal payload: %w", err)
 		}
 
-		cmd := exec.CommandContext(ctx, executablePath)
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", executablePath)
 		cmd.Stdin = bytes.NewReader(payloadBytes)
 
 		var stdout, stderr bytes.Buffer
