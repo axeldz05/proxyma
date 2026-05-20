@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -71,6 +72,33 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
 		return
 	}
+
+	// STUN-like Public IP Detection
+	remoteIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		remoteIP = host
+	}
+	
+	// Try to parse the first announced address to extract scheme and port
+	if parsedUrl, err := url.Parse(req.Address.Addresses[0]); err == nil {
+		port := parsedUrl.Port()
+		if port != "" {
+			perceivedAddr := parsedUrl.Scheme + "://" + remoteIP + ":" + port
+			
+			// Add perceivedAddr if it's not already in the list
+			exists := false
+			for _, addr := range req.Address.Addresses {
+				if addr == perceivedAddr {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				req.Address.Addresses = append(req.Address.Addresses, perceivedAddr)
+			}
+		}
+	}
+
 	s.AddPeer(req.ID, req.Address)
 
 	peersSnapshot := make(map[string]protocol.AddressRecord)

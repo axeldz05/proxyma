@@ -801,3 +801,45 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	services = srv.GetClusterServices("peer-99")
 	require.Len(t, services, 0)
 }
+
+func TestAnnounceCapturesPublicIP(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-stun"), nil)
+	
+	// Create a request pretending to come from a different IP
+	announceReq := protocol.AddPeerRequest{
+		ID: "new-stun-node",
+		Address: protocol.AddressRecord{
+			Addresses: []string{"https://192.168.1.99:8443"},
+			Sequence:  1,
+		},
+	}
+	
+	bodyBytes, _ := json.Marshal(announceReq)
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	
+	// Because we use a real http client, r.RemoteAddr will be 127.0.0.1:something
+	// We expect the server to detect 127.0.0.1 and add it to the addresses
+	resp, err := sponsor.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	
+	var peers map[string]protocol.AddressRecord
+	err = json.NewDecoder(resp.Body).Decode(&peers)
+	require.NoError(t, err)
+	
+	// the newcomer should be in the peers map, and its address list should include the local IP AND the perceived IP
+	newcomerRecord := peers["new-stun-node"]
+	require.Len(t, newcomerRecord.Addresses, 2, "Server should have added the perceived IP to the address record")
+	
+	hasPerceivedIP := false
+	for _, addr := range newcomerRecord.Addresses {
+		if strings.Contains(addr, "127.0.0.1:8443") {
+			hasPerceivedIP = true
+		}
+	}
+	require.True(t, hasPerceivedIP, "The perceived STUN-like IP should be in the address list")
+}
