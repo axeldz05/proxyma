@@ -21,6 +21,9 @@ var initCmd = &cobra.Command{
 	Short: "Initializes a new node and cluster from scratch",
 	Long:  `Creates the directory structure, generates the Certificate Authority (CA) for the cluster, issues local certificates, and saves the node's configuration.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if initID == "" {
+			initID = generateDefaultNodeID()
+		}
 		fmt.Printf("🏗️ Initializing node '%s'...\n", initID)
 		if err := os.MkdirAll(initStorage, 0755); err != nil {
 			fmt.Printf("❌ Error creating storage directory: %v\n", err)
@@ -62,14 +65,9 @@ var initCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(initCmd)
-	
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
-	initCmd.Flags().StringVar(&initID, "id", "", "Node name in the cluster (required)")
+
+	defaultStorage := getDefaultStorage()
+	initCmd.Flags().StringVar(&initID, "id", "", "Node name in the cluster (optional, auto-generated if empty)")
 	initCmd.Flags().StringVar(&initPort, "port", "8080", "Listening port for IPv4")
 	initCmd.Flags().StringVar(&initStorage, "storage", defaultStorage, "Path to the node's anchor directory")
-
-	_ = initCmd.MarkFlagRequired("id")
 }

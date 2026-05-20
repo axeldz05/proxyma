@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"proxyma/internal/p2p"
-	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 	"syscall"
 	"time"
@@ -18,7 +17,7 @@ import (
 )
 
 var (
-	runStorage 	 string
+	runStorage   string
 	runDebugMode bool
 )
 
@@ -32,12 +31,8 @@ var runCmd = &cobra.Command{
 				Level: slog.LevelDebug,
 			}
 		}
-		logger := slog.New(slog.NewTextHandler(os.Stdout, &opts))		
-		cfg, err := protocol.LoadConfig(runStorage)
-		if err != nil {
-			logger.Error("Configuration not found. Did you run 'proxyma init' or 'proxyma join' first?", "error", err)
-			os.Exit(1)
-		}
+		logger := slog.New(slog.NewTextHandler(os.Stdout, &opts))
+		cfg := loadConfigOrDie(runStorage)
 		cfg.Logger = logger
 		logger.Info("Starting Proxyma node", "id", cfg.ID, "address", cfg.Address)
 
@@ -75,7 +70,7 @@ var runCmd = &cobra.Command{
 		}()
 		if cfg.BootstrapNode != "" {
 			go func() {
-				time.Sleep(2 * time.Second) 
+				time.Sleep(2 * time.Second)
 				logger.Info("Announcing presence to bootstrap node...", "sponsor", cfg.BootstrapNode)
 				err := srv.AnnouncePresence(cfg.BootstrapNode)
 				if err != nil {
@@ -101,10 +96,7 @@ var runCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(runCmd)
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
+	defaultStorage := getDefaultStorage()
 	runCmd.Flags().StringVar(&runStorage, "storage", defaultStorage, "Path to the node's anchor directory")
 	runCmd.Flags().BoolVar(&runDebugMode, "debug", false, "Show debug logs")
 }

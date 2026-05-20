@@ -34,74 +34,95 @@ var serviceCmd = &cobra.Command{
 }
 
 var addServiceCmd = &cobra.Command{
-	Use:   "add [nombre_servicio]",
+	Use:   "add [nombre_servicio_o_archivo.json]",
 	Short: "Add a new service to the local node",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		serviceName := args[0]
-		
-		if _, err := protocol.LoadConfig(serviceStorage); err != nil {
-			return fmt.Errorf("❌ Error: Couldn't find config.json. Run 'proxyma init' or 'proxyma join' first")
-		}
+		serviceArg := args[0]
+
+		_ = loadConfigOrDie(serviceStorage)
 
 		servicesFile := filepath.Join(serviceStorage, "services.json")
 		services := make(map[string]LocalService)
-		
+
 		if data, err := os.ReadFile(servicesFile); err == nil {
 			_ = json.Unmarshal(data, &services)
 		}
 
-		schema := protocol.ServiceSchema{
-			Name:        serviceName,
-			Description: serviceDesc,
-			Parameters:  make(map[string]protocol.ServiceParameter),
-		}
+		var localService LocalService
+		var serviceName string
 
-		if schemaFile != "" {
-			data, err := os.ReadFile(schemaFile)
+		if strings.HasSuffix(serviceArg, ".json") {
+			data, err := os.ReadFile(serviceArg)
 			if err != nil {
-				return fmt.Errorf("❌ Couldn't read the squeme file: %v", err)
+				return fmt.Errorf("❌ Couldn't read service file: %v", err)
 			}
-			if err := json.Unmarshal(data, &schema); err != nil {
+			if err := json.Unmarshal(data, &localService); err != nil {
 				return fmt.Errorf("❌ Invalid file format: %v", err)
 			}
-			// schemaFile excludes the usage of param and desc, but they are already ignored.
+			serviceName = localService.Schema.Name
+			if serviceName == "" {
+				return fmt.Errorf("❌ Service name is missing in JSON schema")
+			}
+			// Allow CLI flags to override JSON values if explicitly provided
+			if serviceType != "exec" && localService.Type == "" {
+				localService.Type = serviceType
+			}
+			if serviceExec != "" {
+				localService.Exec = serviceExec
+			}
 		} else {
-			// Parse no-required list
-			noReqMap := make(map[string]bool)
-			if serviceNoReq != "" {
-				for _, p := range strings.Split(serviceNoReq, ",") {
-					noReqMap[strings.TrimSpace(p)] = true
+			serviceName = serviceArg
+			schema := protocol.ServiceSchema{
+				Name:        serviceName,
+				Description: serviceDesc,
+				Parameters:  make(map[string]protocol.ServiceParameter),
+			}
+
+			if schemaFile != "" {
+				data, err := os.ReadFile(schemaFile)
+				if err != nil {
+					return fmt.Errorf("❌ Couldn't read the squeme file: %v", err)
+				}
+				if err := json.Unmarshal(data, &schema); err != nil {
+					return fmt.Errorf("❌ Invalid file format: %v", err)
+				}
+			} else {
+				noReqMap := make(map[string]bool)
+				if serviceNoReq != "" {
+					for _, p := range strings.Split(serviceNoReq, ",") {
+						noReqMap[strings.TrimSpace(p)] = true
+					}
+				}
+
+				if serviceParams != "" {
+					for _, p := range strings.Split(serviceParams, ",") {
+						parts := strings.Split(p, ":")
+						if len(parts) < 2 {
+							return fmt.Errorf("❌ Invalid parameter format '%s'. Use name:type", p)
+						}
+
+						paramName := strings.TrimSpace(parts[0])
+						paramType := strings.TrimSpace(parts[1])
+
+						isRequired := !noReqMap[paramName]
+
+						schema.Parameters[paramName] = protocol.ServiceParameter{
+							Type:     paramType,
+							Required: isRequired,
+						}
+					}
 				}
 			}
 
-			if serviceParams != "" {
-				for _, p := range strings.Split(serviceParams, ",") {
-					parts := strings.Split(p, ":")
-					if len(parts) < 2 {
-						return fmt.Errorf("❌ Invalid parameter format '%s'. Use name:type", p)
-					}
-
-					paramName := strings.TrimSpace(parts[0])
-					paramType := strings.TrimSpace(parts[1])
-					
-					isRequired := !noReqMap[paramName]
-
-					schema.Parameters[paramName] = protocol.ServiceParameter{
-						Type:     paramType,
-						Required: isRequired,
-					}
-				}
+			localService = LocalService{
+				Type:   serviceType,
+				Exec:   serviceExec,
+				Schema: schema,
 			}
 		}
-			
-		// TODO: Repensar si usar LocalService, ya que protocol tendria que tambien conocer
-		// si es un exec, grpc, etc.
-		services[serviceName] = LocalService{
-			Type:   serviceType,
-			Exec:   serviceExec,
-			Schema: schema,
-		}
+
+		services[serviceName] = localService
 
 		newData, _ := json.MarshalIndent(services, "", "  ")
 		if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
@@ -115,7 +136,7 @@ var addServiceCmd = &cobra.Command{
 }
 
 var removeServiceCmd = &cobra.Command{
-	// (El comando remove queda casi idéntico al que armamos antes, 
+	// (El comando remove queda casi idéntico al que armamos antes,
 	// pero usando `serviceStorage` y validando LoadConfig)
 }
 
@@ -124,11 +145,8 @@ func init() {
 	serviceCmd.AddCommand(addServiceCmd)
 	serviceCmd.AddCommand(removeServiceCmd)
 
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
-	
+	defaultStorage := getDefaultStorage()
+
 	serviceCmd.PersistentFlags().StringVar(&serviceStorage, "storage", defaultStorage, "Path to local node directory")
 
 	// Flags for 'add'

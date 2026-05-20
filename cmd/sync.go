@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 
-	"proxyma/internal/protocol"
-
 	"github.com/spf13/cobra"
 )
 
@@ -18,11 +16,7 @@ var syncCmd = &cobra.Command{
 	Short: "Triggers a full synchronization with all known peers",
 	Long:  `Sends a command to the local Proxyma daemon to pull missing files from all nodes registered in its peer list.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := protocol.LoadConfig(syncStorage)
-		if err != nil {
-			fmt.Println("❌ Error: Couldn't find config.json. Run 'proxyma init' or 'proxyma join' first.")
-			os.Exit(1)
-		}
+		cfg := loadConfigOrDie(syncStorage)
 
 		fmt.Printf("🔄 Contacting local daemon at %s to start sync...\n", cfg.Address)
 		client := setupLocalAdminClient(cfg)
@@ -53,9 +47,6 @@ var syncCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(syncCmd)
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
+	defaultStorage := getDefaultStorage()
 	syncCmd.Flags().StringVar(&syncStorage, "storage", defaultStorage, "Path to the local node's directory")
 }

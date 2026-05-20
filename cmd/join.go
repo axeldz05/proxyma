@@ -28,10 +28,9 @@ var joinCmd = &cobra.Command{
 	Use:   "join",
 	Short: "Use an Invite Token to join another cluster",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := protocol.LoadConfig(joinStorage)
-		if err != nil {
-			fmt.Println("❌ Error: couldn't find config.json. Did you run 'proxyma run' first?")
-			os.Exit(1)
+		cfg := loadConfigOrDie(joinStorage)
+		if joinID == "" {
+			joinID = generateDefaultNodeID()
 		}
 		fmt.Printf("🚀 Initializing pairing process for node '%s'...\n", joinID)
 
@@ -68,7 +67,7 @@ var joinCmd = &cobra.Command{
 		reqBody := protocol.JoinRequest{
 			Secret:  secret,
 			CSR:     string(csrPEM),
-			ID:		 cfg.ID,
+			ID:      cfg.ID,
 			Address: cfg.Address,
 		}
 		bodyBytes, _ := json.Marshal(reqBody)
@@ -130,15 +129,11 @@ var joinCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(joinCmd)
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
+	defaultStorage := getDefaultStorage()
 
 	joinCmd.Flags().StringVar(&joinToken, "token", "", "El Smart Token provisto por el administrador (requerido)")
-	joinCmd.Flags().StringVar(&joinID, "id", "", "El ID único para este nuevo nodo (requerido)")
+	joinCmd.Flags().StringVar(&joinID, "id", "", "El ID único para este nuevo nodo (opcional, se auto-genera si está vacío)")
 	joinCmd.Flags().StringVar(&joinStorage, "storage", defaultStorage, "Ruta al directorio de almacenamiento")
 
 	_ = joinCmd.MarkFlagRequired("token")
-	_ = joinCmd.MarkFlagRequired("id")
 }

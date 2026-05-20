@@ -12,7 +12,7 @@ import (
 
 func TestServiceAddCmd(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Create a mock config.json so LoadConfig doesn't fail
 	cfg := protocol.NodeConfig{
 		ID:          "test-node",
@@ -49,7 +49,7 @@ func TestServiceAddCmd(t *testing.T) {
 		require.Equal(t, "script", svc.Type)
 		require.Equal(t, "python3 main.py", svc.Exec)
 		require.Equal(t, "My test script", svc.Schema.Description)
-		
+
 		p1, ok := svc.Schema.Parameters["param1"]
 		require.True(t, ok)
 		require.Equal(t, "string", p1.Type)
@@ -63,7 +63,7 @@ func TestServiceAddCmd(t *testing.T) {
 
 	t.Run("Add service via schema file", func(t *testing.T) {
 		schema := protocol.ServiceSchema{
-			Name: "my-grpc",
+			Name:        "my-grpc",
 			Description: "grpc schema",
 			Parameters: map[string]protocol.ServiceParameter{
 				"token": {Type: "string", Required: true},
@@ -94,7 +94,7 @@ func TestServiceAddCmd(t *testing.T) {
 		svc, exists := services["my-grpc"]
 		require.True(t, exists)
 		require.Equal(t, "grpc", svc.Type)
-		
+
 		tokenParam, ok := svc.Schema.Parameters["token"]
 		require.True(t, ok)
 		require.Equal(t, "string", tokenParam.Type)
