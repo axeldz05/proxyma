@@ -76,3 +76,25 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 		return result, nil
 	}
 }
+
+// notImplementedHandler generates a stub for unsupported connections.
+func notImplementedHandler(name string) ServiceHandler {
+	return func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return nil, fmt.Errorf("%s not yet implemented", name)
+	}
+}
+
+// BuildGRPCBidiHandler creates a handler for Bidirectional Streaming.
+func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+	return notImplementedHandler("BuildGRPCBidiHandler")
+}
+
+// BuildGRPCServerStreamHandler creates a handler for Server-Streaming.
+func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+	return notImplementedHandler("BuildGRPCServerStreamHandler")
+}
+
+// BuildWebRTCHandler creates a handler for WebRTC connections.
+func BuildWebRTCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+	return notImplementedHandler("BuildWebRTCHandler")
+}

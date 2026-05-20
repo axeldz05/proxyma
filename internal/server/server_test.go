@@ -429,8 +429,12 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 		},
 	}
 
+	dummyNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer dummyNode.Close()
+	validAddress := dummyNode.URL
+
 	t.Run("Rejects an invalid token", func(t *testing.T) {
-		badJoinReq := protocol.JoinRequest{Secret: "false-token-123", CSR: "dummy-csr"}
+		badJoinReq := protocol.JoinRequest{Secret: "false-token-123", CSR: "dummy-csr", Address: validAddress}
 		badBody, _ := json.Marshal(badJoinReq)
 
 		respBad, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(badBody))
@@ -441,7 +445,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	})
 
 	t.Run("Accepts a valid token and deletes it after one use", func(t *testing.T) {
-		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr"}
+		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: validAddress}
 		goodBody, _ := json.Marshal(goodJoinReq)
 
 		respGood, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
@@ -582,12 +586,15 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	sv.ExpireInvite(secret)
 
 	// Attempt to join with the expired token
+	dummyNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer dummyNode.Close()
+
 	nakedClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	joinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr"}
+	joinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: dummyNode.URL}
 	joinBody, _ := json.Marshal(joinReq)
 
 	respJoin, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(joinBody))

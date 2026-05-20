@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"io"
-	"net/http"
+	"net"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -17,31 +17,34 @@ var syncCmd = &cobra.Command{
 	Long:  `Sends a command to the local Proxyma daemon to pull missing files from all nodes registered in its peer list.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := loadConfigOrDie(syncStorage)
+		sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
 
-		fmt.Printf("🔄 Contacting local daemon at %s to start sync...\n", cfg.Address)
-		client := setupLocalAdminClient(cfg)
-		url := fmt.Sprintf("%s/sync", cfg.Address)
-		req, err := http.NewRequest(http.MethodPost, url, nil)
-		if err != nil {
-			fmt.Printf("❌ Failed to create request: %v\n", err)
-			os.Exit(1)
-		}
-
-		resp, err := client.Do(req)
+		fmt.Printf("🔄 Triggering sync via local daemon socket at %s...\n", sockPath)
+		conn, err := net.Dial("unix", sockPath)
 		if err != nil {
 			fmt.Printf("❌ Daemon is unreachable. Is 'proxyma run' active? Error: %v\n", err)
 			os.Exit(1)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		defer conn.Close()
 
-		respBody, _ := io.ReadAll(resp.Body)
-
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			fmt.Println("✅ Sync triggered successfully across the cluster.")
-		} else {
-			fmt.Printf("❌ Local daemon rejected sync request (Status %d): %s\n", resp.StatusCode, string(respBody))
+		_, err = conn.Write([]byte{1})
+		if err != nil {
+			fmt.Printf("❌ Failed to send sync command: %v\n", err)
 			os.Exit(1)
 		}
+
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		if err != nil {
+			fmt.Printf("❌ Connection lost while waiting for sync to finish: %v\n", err)
+			os.Exit(1)
+		}
+		if buf[0] == 0 {
+			fmt.Printf("❌ Local daemon failed to complete sync successfully.\n")
+			os.Exit(1)
+		}
+
+		fmt.Println("✅ Sync triggered successfully across the cluster.")
 	},
 }
 

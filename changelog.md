@@ -1,5 +1,20 @@
 # Changelog - Proxyma P2P Dynamic Clustering Update
 
+## 20-05-2026
+### Refactorizaciones (CLI & HTTP Handlers)
+* **CLI helpers**: Se eliminó la duplicación de código en la lectura de configuración de los comandos (`init`, `join`, `run`, `sync`, `invite`, `service`) extrayéndolo a `cmd/helpers.go`.
+* **Auto-generación de IDs**: Al inicializar (`proxyma init`) o unirse (`proxyma join`) a la red, el flag `--id` ahora es opcional. El sistema lo genera automáticamente usando el nombre del host.
+* **Declaración de Servicios**: `proxyma service add` ahora permite pasar un archivo `.json` directamente, sin perder la funcionalidad original del CLI paramétrico.
+* **Enrutamiento Go 1.22+**: Se adoptaron las nuevas capacidades de la librería estándar para especificar el método HTTP directamente en la ruta (`POST /ruta`), eliminando validaciones manuales redundantes en toda la capa de red (`internal/server`, `internal/compute`, `internal/storage`).
+* **Compresión Semántica (JSON)**: Se reutilizó de manera centralizada `utils.DecodeJSON` para todas las lecturas de *payloads* POST.
+
+### Mejoras de Arquitectura y Resoluciones
+* **Workers Asíncronos**: El `ComputeEngine` ahora despacha las tareas entrantes de forma totalmente asíncrona creando nuevas *goroutines* bajo demanda, pero limitando la concurrencia a través de un semáforo según el número de *workers* configurados.
+* **Sync Seguro via Unix Sockets**: Se eliminó por completo el endpoint público de sincronización HTTP (`/sync`). El comando `proxyma sync` ahora se comunica localmente mediante un Socket Unix (`proxyma.sock`) almacenado en el directorio de la aplicación, incrementando significativamente la seguridad y previniendo ataques de denegación de servicio remotos.
+* **Validaciones Preventivas**: `HandleClusterJoin` ahora prueba alcanzar al nodo solicitante (TCP Dial Timeout) antes de otorgar un certificado. El endpoint de anuncios valida que no lleguen parámetros vacíos.
+* **gRPC Stubs**: Se plantaron las bases de `BuildGRPCBidiHandler`, `BuildGRPCServerStreamHandler` y `BuildWebRTCHandler` en `handlerBuilder.go` para futuras implementaciones.
+
+
 ## 30-04-2026
 ### Funcionalidades
 * **Pairing:** Se agregaron los comandos y endpoints `/peers/invite` y `/cluster/join`. Los nodos ahora pueden unirse a la red mediante un "Smart Token" de un solo uso que expira automáticamente (gestionado por una nueva Goroutine `inviteSweeper`).

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -47,7 +48,6 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /peers/announce", s.HandleAnnounce)
 	mux.HandleFunc("POST /peers/add", s.HandleAddPeer)
 	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
-	mux.HandleFunc("POST /sync", s.HandleSync)
 	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
 	return s.mTLSGuard(mux)
 }
@@ -65,6 +65,10 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	req, err := utils.DecodeJSON[protocol.AddPeerRequest](r)
 	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	if req.ID == "" || req.Address == "" {
+		utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
@@ -115,6 +119,18 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusUnauthorized, "Token has expired")
 		return
 	}
+
+	if req.Address == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Address is required")
+		return
+	}
+	parsedUrl, err := url.Parse(req.Address)
+	if err != nil || parsedUrl.Host == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid address format")
+		return
+	}
+	// Note: We cannot perform a net.DialTimeout here because the joining node
+	// is currently running 'proxyma join' and its HTTP server hasn't started yet.
 
 	caKeyPath := strings.Replace(s.Config.CAPath, ".crt", ".key", 1)
 
@@ -181,16 +197,6 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	s.AddPeer(req.ID, req.Address)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
-}
-
-func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
-	err := s.ExecuteSync()
-	if err != nil {
-		s.Config.Logger.Error("Sync failed", "error", err)
-		utils.RespondError(w, http.StatusInternalServerError, "Sync process encountered errors")
-		return
-	}
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Sync successfully processed"})
 }
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {

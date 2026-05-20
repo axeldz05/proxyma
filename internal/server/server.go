@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Server struct {
 	clusterServicesMu sync.RWMutex
 	inviteMu          sync.Mutex
 	pendingInvites    map[string]time.Time
+	unixListener      net.Listener
 }
 
 type DownloadJob struct {
@@ -71,6 +73,8 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 }
 
 func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
+	go s.listenUnixSocket()
+
 	mux := s.MountHandlers()
 	addr := fmt.Sprintf(":%s", strings.Split(s.Config.Address, ":")[2])
 
@@ -102,8 +106,49 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.Config.Logger.Info("Compute Engine closed.")
 	}
 
+	if s.unixListener != nil {
+		_ = s.unixListener.Close()
+	}
+
 	s.Config.Logger.Info("Node shutdown complete.")
 	return nil
+}
+
+func (s *Server) listenUnixSocket() {
+	sockPath := filepath.Join(s.Config.StoragePath, "proxyma.sock")
+	_ = os.Remove(sockPath) // clean up old socket if it exists
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		s.Config.Logger.Error("Failed to listen on unix socket", "error", err)
+		return
+	}
+	s.unixListener = l
+	s.Config.Logger.Info("Listening for local commands on unix socket", "path", sockPath)
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go s.handleUnixConnection(conn)
+	}
+}
+
+func (s *Server) handleUnixConnection(c net.Conn) {
+	defer c.Close()
+	buf := make([]byte, 1)
+	_, err := c.Read(buf) // wait for any byte
+	if err != nil {
+		return
+	}
+	s.Config.Logger.Info("Sync triggered via unix socket")
+	err = s.ExecuteSync()
+	if err != nil {
+		s.Config.Logger.Error("Sync via unix socket failed", "error", err)
+		_, _ = c.Write([]byte{0})
+	} else {
+		_, _ = c.Write([]byte{1})
+	}
 }
 
 func (s *Server) LoadLocalServices() {

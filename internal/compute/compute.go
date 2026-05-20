@@ -45,10 +45,8 @@ func NewComputeEngine(logger *slog.Logger, pc p2p.PeerClient, workerCount int, i
 		peerClient:   pc,
 		nodeID:       id,
 	}
-	for range workerCount {
-		engine.wg.Add(1)
-		go engine.serviceWorker()
-	}
+	engine.wg.Add(1)
+	go engine.serviceWorker(workerCount)
 
 	return engine
 }
@@ -81,50 +79,60 @@ func (c *ComputeEngine) GetTaskResponse(taskID string) (protocol.ServiceTaskResp
 	return res, true
 }
 
-// TODO: make this serviceWorker totally asynchroneous, with a limit of
-// how much activeWorkers to have at the same time
-func (c *ComputeEngine) serviceWorker() {
+func (c *ComputeEngine) serviceWorker(maxWorkers int) {
 	defer c.wg.Done()
+	sem := make(chan struct{}, maxWorkers)
 	for task := range c.taskQueue {
-		c.activeWorkers.Add(1)
-		c.logger.Info("Working on task...", "job_id", task.TaskID)
+		sem <- struct{}{}
+		c.wg.Add(1)
+		go func(t protocol.TaskRequest) {
+			defer c.wg.Done()
+			defer func() { <-sem }()
+			c.processTask(t)
+		}(task)
+	}
+}
 
-		handler, exists := c.registry.GetHandler(task.Service)
-		if !exists {
-			c.logger.Error("Service not found during execution", "service", task.Service)
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		outputs, err := handler(ctx, task.Payload)
+func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
+	c.activeWorkers.Add(1)
+	defer c.activeWorkers.Add(-1)
+
+	c.logger.Info("Working on task...", "job_id", t.TaskID)
+
+	handler, exists := c.registry.GetHandler(t.Service)
+	if !exists {
+		c.logger.Error("Service not found during execution", "service", t.Service)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	outputs, err := handler(ctx, t.Payload)
+	cancel()
+
+	status := "completed"
+	var errorMessage string
+	if err != nil {
+		status = "failed"
+		errorMessage = err.Error()
+	}
+	responsePayload := protocol.ServiceTaskResponse{
+		TaskID:  t.TaskID,
+		Service: t.Service,
+		Status:  status,
+		Outputs: outputs,
+		Error:   errorMessage,
+	}
+
+	c.setTaskStatus(responsePayload)
+
+	if t.ReplyTo != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.peerClient.SendTaskResponse(ctx, t.ReplyTo, responsePayload)
 		cancel()
-
-		status := "completed"
-		var errorMessage string
 		if err != nil {
-			status = "failed"
-			errorMessage = err.Error()
+			c.logger.Error("Failed to deliver webhook", "job_id", t.TaskID, "error", err)
 		}
-		responsePayload := protocol.ServiceTaskResponse{
-			TaskID:  task.TaskID,
-			Service: task.Service,
-			Status:  status,
-			Outputs: outputs,
-			Error:   errorMessage,
-		}
-
-		c.setTaskStatus(responsePayload)
-
-		if task.ReplyTo != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := c.peerClient.SendTaskResponse(ctx, task.ReplyTo, responsePayload)
-			cancel()
-			if err != nil {
-				c.logger.Error("Failed to deliver webhook", "job_id", task.TaskID, "error", err)
-			}
-		} else {
-			c.logger.Warn("[Compute Engine] - There's no one to reply to", "taskID", task.TaskID)
-		}
-		c.activeWorkers.Add(-1)
+	} else {
+		c.logger.Warn("[Compute Engine] - There's no one to reply to", "taskID", t.TaskID)
 	}
 }
 
