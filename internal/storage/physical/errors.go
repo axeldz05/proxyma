@@ -2,15 +2,16 @@ package storage
 
 import (
 	"errors"
-	"os"
 	"fmt"
+	"os"
 )
+
 // Put context into it.
 var (
-	ErrClientAlreadyHasAStorage = errors.New("client already has an storage")
-	ErrFileDoesNotExist = os.ErrNotExist
-	ErrFileAlreadyExist = os.ErrExist
-	ErrFailedSanitizationOfFileName = errors.New("the sanitization failed")
+	ErrClientAlreadyHasAStorage                 = errors.New("client already has an storage")
+	ErrFileDoesNotExist                         = os.ErrNotExist
+	ErrFileAlreadyExist                         = os.ErrExist
+	ErrFailedSanitizationOfFileName             = errors.New("the sanitization failed")
 	ErrFileNameShouldNotTryToAccessParentFolder = errors.New("file name should not have multiple dots with slashes at the beginning of its name")
 )
 

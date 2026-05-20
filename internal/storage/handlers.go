@@ -8,10 +8,6 @@ import (
 )
 
 func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
 
 	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
 	if err != nil {
@@ -43,13 +39,9 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // handleNotification handles notifications from peers about new files
 func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
 	notification, err := utils.DecodeJSON[protocol.PeerNotification](r)
 	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 	updated := se.vfs.Upsert(notification.File)
@@ -85,10 +77,6 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
 	fileName := r.URL.Query().Get("name")
 	if fileName == "" {
 		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
@@ -104,10 +92,6 @@ func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
 	fileName := r.URL.Query().Get("name")
 	if fileName == "" {
 		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")

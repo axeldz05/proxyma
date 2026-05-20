@@ -8,16 +8,16 @@ import (
 )
 
 type MockPeerClient struct {
-	OnFetchManifest    func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
-	OnAnnounce		   func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
-	OnNotify           func(ctx context.Context, addr string, n protocol.PeerNotification) error
+	OnFetchManifest       func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
+	OnAnnounce            func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
+	OnNotify              func(ctx context.Context, addr string, n protocol.PeerNotification) error
 	OnNotifyServiceUpdate func(ctx context.Context, addr string, n protocol.ServiceNotification) error
-	OnAddPeer          func(addr string, payload *bytes.Buffer) error
-	OnDownloadBlob     func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
-	OnDiscoverServices func(ctx context.Context, addr string) ([]string, error)
-	OnSubmitTask       func(ctx context.Context, addr string, req protocol.TaskRequest) error
-	OnFetchServiceBid  func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
-	OnSendTaskResponse func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	OnAddPeer             func(addr string, payload *bytes.Buffer) error
+	OnDownloadBlob        func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
+	OnDiscoverServices    func(ctx context.Context, addr string) ([]string, error)
+	OnSubmitTask          func(ctx context.Context, addr string, req protocol.TaskRequest) error
+	OnFetchServiceBid     func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
+	OnSendTaskResponse    func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
 }
 
 func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {

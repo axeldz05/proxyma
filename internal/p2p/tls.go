@@ -78,8 +78,8 @@ func LoadNodeTLS(caCertPath, nodeCertPath, nodeKeyPath string) (*tls.Config, *tl
 	}
 
 	clientTLS := &tls.Config{
-		Certificates: []tls.Certificate{nodeTLSCert},
-		InsecureSkipVerify: true, 
+		Certificates:       []tls.Certificate{nodeTLSCert},
+		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 			if len(rawCerts) == 0 {
 				return errors.New("no certificates provided by peer")
@@ -164,14 +164,14 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
 
 	certTemplate := x509.Certificate{
-		SerialNumber: serialNumber,
-		DNSNames:     []string{csr.Subject.CommonName, "localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		Subject:      csr.Subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(1, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		SerialNumber:          serialNumber,
+		DNSNames:              []string{csr.Subject.CommonName, "localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		Subject:               csr.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
 
@@ -259,7 +259,7 @@ func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID 
 			Organization: []string{"Proxyma Node"},
 			CommonName:   nodeID,
 		},
-		DNSNames:    []string{nodeID, "localhost"}, 
+		DNSNames:    []string{nodeID, "localhost"},
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		NotBefore:   time.Now(),
 		NotAfter:    time.Now().AddDate(1, 0, 0),

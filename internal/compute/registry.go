@@ -16,7 +16,7 @@ func NewServiceRegistry() *ServiceRegistry {
 	}
 }
 
-func (r *ServiceRegistry) GetHandler(serviceName string) (ServiceHandler, bool){
+func (r *ServiceRegistry) GetHandler(serviceName string) (ServiceHandler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	service, exists := r.services[serviceName]
@@ -41,7 +41,7 @@ func (r *ServiceRegistry) Register(schema protocol.ServiceSchema, handler Servic
 func (r *ServiceRegistry) Get(name string) (protocol.ServiceSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	service, exists := r.services[name]
 	return service.schema, exists
 }

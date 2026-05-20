@@ -20,18 +20,18 @@ import (
 )
 
 type Server struct {
-	Config         protocol.NodeConfig
-	Compute        *compute.ComputeEngine
-	Storage        *storage.StorageEngine
-	peers          map[string]string
-	peerClient     p2p.PeerClient
-	httpServer     *http.Server
-	downloadQueue  chan DownloadJob
-	peersMu        sync.RWMutex
+	Config            protocol.NodeConfig
+	Compute           *compute.ComputeEngine
+	Storage           *storage.StorageEngine
+	peers             map[string]string
+	peerClient        p2p.PeerClient
+	httpServer        *http.Server
+	downloadQueue     chan DownloadJob
+	peersMu           sync.RWMutex
 	clusterServices   map[string]map[string]protocol.ServiceSchema
 	clusterServicesMu sync.RWMutex
-	inviteMu       sync.Mutex
-	pendingInvites map[string]time.Time
+	inviteMu          sync.Mutex
+	pendingInvites    map[string]time.Time
 }
 
 type DownloadJob struct {
@@ -41,12 +41,12 @@ type DownloadJob struct {
 
 func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	s := &Server{
-		Config:         cfg,
-		peers:          make(map[string]string),
-		peerClient:     peerClient,
-		downloadQueue:  make(chan DownloadJob, 100),
+		Config:          cfg,
+		peers:           make(map[string]string),
+		peerClient:      peerClient,
+		downloadQueue:   make(chan DownloadJob, 100),
 		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
-		pendingInvites: make(map[string]time.Time),
+		pendingInvites:  make(map[string]time.Time),
 	}
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
@@ -136,7 +136,7 @@ func (s *Server) LoadLocalServices() {
 			handler = compute.BuildScriptHandler(svc.Exec)
 		} else if svc.Type == "grpc" {
 			// dummy grpc handler builder if none, but let's assume BuildGRPCHandler exists
-			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second) 
+			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
 		} else {
 			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
 			continue

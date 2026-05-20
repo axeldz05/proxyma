@@ -15,18 +15,18 @@ import (
 )
 
 func TestCannotRegisterDuplicateServices(t *testing.T) {
-    registry := compute.NewServiceRegistry() 
-    
-    schema := protocol.ServiceSchema{ Name: "ocr" }
-	
+	registry := compute.NewServiceRegistry()
+
+	schema := protocol.ServiceSchema{Name: "ocr"}
+
 	var mockHandler compute.ServiceHandler = func(context.Context, map[string]any) (map[string]any, error) {
-        return map[string]any{}, nil
-    }
-    err1 := registry.Register(schema, mockHandler)
-    err2 := registry.Register(schema, mockHandler)
-    
-    require.NoError(t, err1)
-    require.ErrorIs(t, err2, compute.ErrServiceDuplicate)
+		return map[string]any{}, nil
+	}
+	err1 := registry.Register(schema, mockHandler)
+	err2 := registry.Register(schema, mockHandler)
+
+	require.NoError(t, err1)
+	require.ErrorIs(t, err2, compute.ErrServiceDuplicate)
 }
 
 func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
@@ -45,7 +45,7 @@ func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 
 	mockBinPath := setupMockExecutable(t)
 	handler := compute.BuildScriptHandler(mockBinPath)
-	err := engine.RegisterNewService(schema, handler) 
+	err := engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 
 	t.Run("Successful Execution", func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			resp, exists := engine.GetTaskResponse(taskID)
-			if !exists{
+			if !exists {
 				return false
 			}
 			require.Equal(t, taskID, resp.TaskID)
@@ -139,7 +139,7 @@ func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	mockPeerClient := &testutil.MockPeerClient{}
-	
+
 	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node-grpc")
 	defer engine.Close()
 
@@ -229,7 +229,7 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 				return false
 			}
 			require.Equal(t, "failed", resp.Status)
-			require.Contains(t, strings.ToLower(resp.Error), "context deadline exceeded") 
+			require.Contains(t, strings.ToLower(resp.Error), "context deadline exceeded")
 			return true
 		}, 4*time.Second, 100*time.Millisecond, "Expected task to fail due to context timeout")
 	})

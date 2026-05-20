@@ -80,4 +80,3 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 		httpTestSrv: ts,
 	}
 }
-

@@ -1,15 +1,17 @@
 package storage
+
 // a kind of file clerk
-import(
-	"path/filepath"
+import (
 	"io/fs"
+	"path/filepath"
 )
-func VisitAndDo(fm *Storage, execute func(string, fs.DirEntry)error, whenConditionIsMet func(string, fs.DirEntry)bool) error {
+
+func VisitAndDo(fm *Storage, execute func(string, fs.DirEntry) error, whenConditionIsMet func(string, fs.DirEntry) bool) error {
 	return filepath.WalkDir(fm.baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if whenConditionIsMet(path,d) {
+		if whenConditionIsMet(path, d) {
 			err = execute(path, d)
 			if err != nil {
 				return err
@@ -19,8 +21,8 @@ func VisitAndDo(fm *Storage, execute func(string, fs.DirEntry)error, whenConditi
 	})
 }
 
-func ExistsFileRelativeToBase(baseDir string, pathToFile string)(func(path string, de fs.DirEntry)bool){
-	return func(path string, de fs.DirEntry)bool {
+func ExistsFileRelativeToBase(baseDir string, pathToFile string) func(path string, de fs.DirEntry) bool {
+	return func(path string, de fs.DirEntry) bool {
 		relPath, err := filepath.Rel(baseDir, path)
 		if err != nil {
 			// this should never happen
@@ -33,7 +35,7 @@ func ExistsFileRelativeToBase(baseDir string, pathToFile string)(func(path strin
 func FindFileAndDo[T any](fm *Storage, pathToFile string, fn func(string, fs.DirEntry) (T, error)) (T, error) {
 	var result T
 
-	onFileFoundDo := func(path string, d fs.DirEntry) error{
+	onFileFoundDo := func(path string, d fs.DirEntry) error {
 		res, err := fn(path, d)
 		if err != nil {
 			return err
@@ -41,7 +43,7 @@ func FindFileAndDo[T any](fm *Storage, pathToFile string, fn func(string, fs.Dir
 		result = res
 		return filepath.SkipAll // when file is found, end the visitor
 	}
-	err := VisitAndDo(fm, 
+	err := VisitAndDo(fm,
 		onFileFoundDo, ExistsFileRelativeToBase(fm.baseDir, pathToFile))
 	return result, err
 }

@@ -1,4 +1,5 @@
 package compute
+
 import (
 	"bytes"
 	"context"
@@ -75,4 +76,3 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 		return result, nil
 	}
 }
-

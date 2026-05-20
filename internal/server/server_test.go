@@ -36,7 +36,7 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := sv1.Client().Do(req)
 	require.NoError(t, err)
-	defer func () { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Add peer programmatically on the other side
@@ -757,26 +757,26 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "service-notify-node")
 	srv := server.New(cfg, nil)
-	
+
 	notification := protocol.ServiceNotification{
 		Action: "add",
 		NodeID: "peer-99",
 		Schema: protocol.ServiceSchema{
-			Name: "test-svc",
+			Name:        "test-svc",
 			Description: "desc",
 		},
 	}
-	
+
 	bodyBytes, _ := json.Marshal(notification)
 	req, _ := http.NewRequest(http.MethodPost, srv.Config.Address+"/services/notify", bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	// Create a recorder
 	recorder := httptest.NewRecorder()
 	srv.HandleServiceNotify(recorder, req)
-	
+
 	require.Equal(t, http.StatusOK, recorder.Code)
-	
+
 	services := srv.GetClusterServices("peer-99")
 	require.Len(t, services, 1)
 	require.Equal(t, "desc", services["test-svc"].Description)

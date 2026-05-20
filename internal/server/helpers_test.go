@@ -110,4 +110,3 @@ func RequestManifestSimulated(t *testing.T, sv *TestServer) map[string]protocol.
 	require.NoError(t, err)
 	return manifest
 }
-

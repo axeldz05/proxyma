@@ -1,4 +1,4 @@
-	package p2p_test
+package p2p_test
 
 import (
 	"bytes"
@@ -55,7 +55,7 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 
 		resp, err := legitClient.Get(secureServer.URL)
 		require.NoError(t, err, "The client should be able to connect")
-		defer func(){ _ = resp.Body.Close() }()
+		defer func() { _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
@@ -68,7 +68,7 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		caCertFile := filepath.Join(hackerDir, "ca.crt")
 		nodeCertFile := filepath.Join(hackerDir, "hacker-node.crt")
 		nodeKeyFile := filepath.Join(hackerDir, "hacker-node.key")
-		_, hackerClientTLS , err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+		_, hackerClientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 		require.NoError(t, err)
 
 		hackerClient := &http.Client{
@@ -315,4 +315,3 @@ func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
 		t.Fatal("Callback handler was never called")
 	}
 }
-

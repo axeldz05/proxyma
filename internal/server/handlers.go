@@ -31,24 +31,24 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 func (s *Server) MountHandlers() http.Handler {
 	mux := http.NewServeMux()
 	// --- DOMINIO DE ALMACENAMIENTO (StorageEngine) ---
-	mux.HandleFunc("/upload", s.Storage.HandleUpload)
-	mux.HandleFunc("/download/", s.Storage.HandleDownload)
-	mux.HandleFunc("/file", s.Storage.HandleDelete)
-	mux.HandleFunc("/manifest", s.Storage.HandleManifest)
-	mux.HandleFunc("/subscribe", s.Storage.HandleSubscribe)
-	mux.HandleFunc("/notify", s.Storage.HandleNotification)
+	mux.HandleFunc("POST /upload", s.Storage.HandleUpload)
+	mux.HandleFunc("GET /download/", s.Storage.HandleDownload)
+	mux.HandleFunc("DELETE /file", s.Storage.HandleDelete)
+	mux.HandleFunc("GET /manifest", s.Storage.HandleManifest)
+	mux.HandleFunc("POST /subscribe", s.Storage.HandleSubscribe)
+	mux.HandleFunc("POST /notify", s.Storage.HandleNotification)
 
-	mux.HandleFunc("/services/bid", s.Compute.HandleServiceBid)
-	mux.HandleFunc("/services/submit", s.Compute.HandleServiceSubmit)
-	mux.HandleFunc("/services/callback", s.Compute.HandleServiceCallback)
-	mux.HandleFunc("/services/notify", s.HandleServiceNotify)
+	mux.HandleFunc("POST /services/bid", s.Compute.HandleServiceBid)
+	mux.HandleFunc("POST /services/submit", s.Compute.HandleServiceSubmit)
+	mux.HandleFunc("POST /services/callback", s.Compute.HandleServiceCallback)
+	mux.HandleFunc("POST /services/notify", s.HandleServiceNotify)
 
-	mux.HandleFunc("/peers", s.GetPeers)
-	mux.HandleFunc("/peers/announce", s.HandleAnnounce)
-	mux.HandleFunc("/peers/add", s.HandleAddPeer)
-	mux.HandleFunc("/peers/invite", s.HandleGenerateInvite)
-	mux.HandleFunc("/sync", s.HandleSync)
-	mux.HandleFunc("/cluster/join", s.HandleClusterJoin)
+	mux.HandleFunc("GET /peers", s.GetPeers)
+	mux.HandleFunc("POST /peers/announce", s.HandleAnnounce)
+	mux.HandleFunc("POST /peers/add", s.HandleAddPeer)
+	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
+	mux.HandleFunc("POST /sync", s.HandleSync)
+	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
 	return s.mTLSGuard(mux)
 }
 
@@ -62,13 +62,9 @@ type InviteResponse struct {
 }
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var req protocol.AddPeerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+	req, err := utils.DecodeJSON[protocol.AddPeerRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
@@ -96,14 +92,9 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	var req protocol.JoinRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid request")
+	req, err := utils.DecodeJSON[protocol.JoinRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 
@@ -149,13 +140,9 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var req InviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+	req, err := utils.DecodeJSON[InviteRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 	if req.ValidForMinutes <= 0 {
@@ -186,14 +173,9 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var req protocol.AddPeerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.Config.Logger.Error("Invalid body petition in /peers/add", "error", err)
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+	req, err := utils.DecodeJSON[protocol.AddPeerRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
@@ -202,10 +184,6 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
 	err := s.ExecuteSync()
 	if err != nil {
 		s.Config.Logger.Error("Sync failed", "error", err)
@@ -216,13 +194,9 @@ func (s *Server) HandleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var req protocol.ServiceNotification
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+	req, err := utils.DecodeJSON[protocol.ServiceNotification](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 

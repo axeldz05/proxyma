@@ -2,8 +2,9 @@ package storage
 
 import (
 	"encoding/json"
-	"github.com/boltdb/bolt"
 	"proxyma/internal/protocol"
+
+	"github.com/boltdb/bolt"
 )
 
 type VFS struct {

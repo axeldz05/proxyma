@@ -1,21 +1,15 @@
 package compute
 
 import (
-	"encoding/json"
 	"net/http"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
 
 func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	var query protocol.DiscoveryQuery
-	if err := json.NewDecoder(r.Body).Decode(&query); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid query payload")
+	query, err := utils.DecodeJSON[protocol.DiscoveryQuery](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 
@@ -53,13 +47,8 @@ func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	var taskReq protocol.TaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&taskReq); err != nil {
+	taskReq, err := utils.DecodeJSON[protocol.TaskRequest](r)
+	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
@@ -82,13 +71,9 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.RespondError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-	var webhookPayload protocol.ServiceTaskResponse
-	if err := json.NewDecoder(r.Body).Decode(&webhookPayload); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON")
+	webhookPayload, err := utils.DecodeJSON[protocol.ServiceTaskResponse](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
 	s.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)

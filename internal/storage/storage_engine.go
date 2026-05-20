@@ -8,19 +8,19 @@ import (
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
-	"proxyma/internal/storage/physical"
+	storage "proxyma/internal/storage/physical"
 	"time"
 
 	"github.com/boltdb/bolt"
 )
 
 type StorageEngine struct {
-	physical      storage.Storage
-	vfs           *VFS
-	subscriptions *bolt.DB
-	logger        *slog.Logger
-	peerClient    p2p.PeerClient
-	notifyFunc    func(protocol.IndexEntry)
+	physical         storage.Storage
+	vfs              *VFS
+	subscriptions    *bolt.DB
+	logger           *slog.Logger
+	peerClient       p2p.PeerClient
+	notifyFunc       func(protocol.IndexEntry)
 	onDownloadNeeded func(file protocol.IndexEntry, rawSource string) error
 }
 
@@ -45,13 +45,13 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 	}
 
 	engine := &StorageEngine{
-		physical:      		*storage.NewStorage(path),
-		vfs:           		NewVFS(db),
-		subscriptions: 		db,
-		logger:        		logger,
-		peerClient:    		pc,
-		notifyFunc:    		notify,
-		onDownloadNeeded: 	downloadCallback,
+		physical:         *storage.NewStorage(path),
+		vfs:              NewVFS(db),
+		subscriptions:    db,
+		logger:           logger,
+		peerClient:       pc,
+		notifyFunc:       notify,
+		onDownloadNeeded: downloadCallback,
 	}
 
 	return engine
@@ -169,7 +169,7 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 
 func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 	savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
-	
+
 	if se.vfs.Upsert(fileInfo) {
 		if exists {
 			if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
@@ -187,7 +187,7 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	}
 
 	if savedHash != fileInfo.Hash {
-		_ = se.physical.DeleteBlob(savedHash) 
+		_ = se.physical.DeleteBlob(savedHash)
 		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
 		return fmt.Errorf("hash mismatch")
 	}
@@ -196,12 +196,12 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	if exists && entry.Version == fileInfo.Version && !entry.Deleted {
 		se.logger.Debug("Successfully downloaded and applied file", "file", fileInfo.Name)
 		return nil
-	} 
+	}
 
 	se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name)
 	if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
 		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
 	}
-	
+
 	return nil
 }

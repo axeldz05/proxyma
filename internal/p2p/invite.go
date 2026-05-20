@@ -26,7 +26,7 @@ func GenerateSmartToken(hostAddress string, caCertPath string) (smartToken strin
 	if block == nil {
 		return "", "", fmt.Errorf("failed to decode CA PEM")
 	}
-	hash := sha256.Sum256(block.Bytes) 
+	hash := sha256.Sum256(block.Bytes)
 	caHashHex := hex.EncodeToString(hash[:])
 
 	payload := InvitePayload{

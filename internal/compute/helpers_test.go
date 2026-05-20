@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 )
+
 func setupMockExecutable(t *testing.T) string {
 	t.Helper()
 
@@ -123,7 +124,7 @@ func setupMockGRPCWebhookServer(t *testing.T) *httptest.Server {
 		case "invalid_response":
 			// Simulate a corrupted response from the remote node
 			w.WriteHeader(http.StatusOK)
-			_,_ = w.Write([]byte(`{ "broken_json": true, `))
+			_, _ = w.Write([]byte(`{ "broken_json": true, `))
 
 		default:
 			http.Error(w, "unknown scenario", http.StatusBadRequest)
@@ -132,4 +133,3 @@ func setupMockGRPCWebhookServer(t *testing.T) *httptest.Server {
 
 	return httptest.NewServer(handler)
 }
-

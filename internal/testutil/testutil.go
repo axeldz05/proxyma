@@ -22,7 +22,7 @@ func DefaultConfig(t *testing.T, id string) protocol.NodeConfig {
 	writer := TestLogWriter{T: t}
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
 	handler := slog.NewTextHandler(writer, opts)
-	
+
 	return protocol.NodeConfig{
 		ID:          id,
 		StoragePath: t.TempDir(),

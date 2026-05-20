@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 )
 
-func NewStorage(baseDir string) *Storage{
+func NewStorage(baseDir string) *Storage {
 	return &Storage{
 		baseDir: baseDir,
 	}
@@ -39,7 +39,7 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 		return "", 0, err
 	}
 	tempName := file.Name()
-	defer func(){ _ = os.Remove(tempName) }()
+	defer func() { _ = os.Remove(tempName) }()
 	hasher := sha256.New()
 	mw := io.MultiWriter(file, hasher)
 	writtenBytes, err := io.Copy(mw, content)
@@ -56,8 +56,8 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 		return "", 0, fmt.Errorf("failed to close file safely: %w", err)
 	}
 
-	if os.IsNotExist(err){
-		err = os.Rename(file.Name(), fullpath)	
+	if os.IsNotExist(err) {
+		err = os.Rename(file.Name(), fullpath)
 		if err != nil {
 			return "", 0, err
 		}

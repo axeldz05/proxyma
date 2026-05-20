@@ -10,8 +10,8 @@ import (
 type TaskRequest struct {
 	TaskID  string         `json:"task_id"`
 	Service string         `json:"service"`
-	ReplyTo string         `json:"reply_to"` 
-	Payload  map[string]any `json:"payload"`
+	ReplyTo string         `json:"reply_to"`
+	Payload map[string]any `json:"payload"`
 }
 
 type DiscoveryQuery struct {
@@ -22,11 +22,11 @@ type DiscoveryQuery struct {
 }
 
 type ServiceTaskResponse struct {
-	TaskID    string         `json:"task_id"`
-	Service   string         `json:"service"`
-	Status    string         `json:"status"`
-	Error     string         `json:"error,omitempty"`
-	Outputs   map[string]any `json:"outputs,omitempty"`
+	TaskID  string         `json:"task_id"`
+	Service string         `json:"service"`
+	Status  string         `json:"status"`
+	Error   string         `json:"error,omitempty"`
+	Outputs map[string]any `json:"outputs,omitempty"`
 }
 
 type IndexEntry struct {
@@ -52,7 +52,7 @@ type ServiceBid struct {
 	NodeID          string        `json:"node_id"`
 	NodeAddr        string        `json:"node_addr"`
 	Schema          ServiceSchema `json:"schema"`
-	EstimatedMillis int64         `json:"estimated_millis"` 
+	EstimatedMillis int64         `json:"estimated_millis"`
 	CanAccept       bool          `json:"can_accept"`
 }
 
@@ -63,13 +63,13 @@ type NodeConfig struct {
 	Workers       int    `json:"workers"`
 	CAPath        string `json:"ca_path"`
 	BootstrapNode string `json:"bootstrap_node,omitempty"`
-	Logger		  *slog.Logger
+	Logger        *slog.Logger
 }
 
 const (
-	StrategyFastest    = "proxyma/strategy/fastest"
-	StrategyCheapest   = "proxyma/strategy/cheapest"
-	StrategyLowPower   = "proxyma/strategy/low_power"
+	StrategyFastest  = "proxyma/strategy/fastest"
+	StrategyCheapest = "proxyma/strategy/cheapest"
+	StrategyLowPower = "proxyma/strategy/low_power"
 )
 
 type PeerNotification struct {
@@ -84,20 +84,20 @@ type ServiceNotification struct {
 }
 
 type JoinRequest struct {
-	Secret 	   string `json:"secret"`
-	CSR    	   string `json:"csr"`
-	ID	   	   string `json:"id"`
-	Address	   string `json:"address"`
+	Secret  string `json:"secret"`
+	CSR     string `json:"csr"`
+	ID      string `json:"id"`
+	Address string `json:"address"`
 }
 
 type JoinResponse struct {
-	Certificate string 			  `json:"certificate"`
-	CACert      string 			  `json:"ca_cert"`
-	Peers 		map[string]string `json:"peers"`
+	Certificate string            `json:"certificate"`
+	CACert      string            `json:"ca_cert"`
+	Peers       map[string]string `json:"peers"`
 }
 
 type AddPeerRequest struct {
-	ID		string `json:"id"`
+	ID      string `json:"id"`
 	Address string `json:"address"`
 }
 
@@ -107,7 +107,7 @@ func SaveConfig(cfg NodeConfig) error {
 	if err != nil {
 		return err
 	}
-	defer func() {_ = file.Close()}()
+	defer func() { _ = file.Close() }()
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
@@ -120,7 +120,7 @@ func LoadConfig(storagePath string) (NodeConfig, error) {
 	if err != nil {
 		return NodeConfig{}, err
 	}
-	defer func() {_ = file.Close()}()
+	defer func() { _ = file.Close() }()
 
 	var cfg NodeConfig
 	err = json.NewDecoder(file).Decode(&cfg)
