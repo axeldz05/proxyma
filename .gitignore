@@ -1,2 +1,4 @@
 *.cov
 .env
+.agents/*
+skills-lock.json
