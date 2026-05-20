@@ -24,7 +24,7 @@ type Server struct {
 	Config            protocol.NodeConfig
 	Compute           *compute.ComputeEngine
 	Storage           *storage.StorageEngine
-	peers             map[string]string
+	peers             map[string]protocol.AddressRecord
 	peerClient        p2p.PeerClient
 	httpServer        *http.Server
 	downloadQueue     chan DownloadJob
@@ -44,7 +44,7 @@ type DownloadJob struct {
 func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	s := &Server{
 		Config:          cfg,
-		peers:           make(map[string]string),
+		peers:           make(map[string]protocol.AddressRecord),
 		peerClient:      peerClient,
 		downloadQueue:   make(chan DownloadJob, 100),
 		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
@@ -210,9 +210,9 @@ func (s *Server) SetAddress(addr string) {
 	s.Compute.SetAddress(addr)
 }
 
-func (s *Server) AddPeer(peerID, address string) {
+func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	s.peersMu.Lock()
-	s.peers[peerID] = address
+	s.peers[peerID] = addressRecord
 	s.peersMu.Unlock()
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 }
@@ -293,7 +293,11 @@ func (s *Server) GetPeersCopy() map[string]string {
 	s.peersMu.RLock()
 	defer s.peersMu.RUnlock()
 	peers := make(map[string]string, len(s.peers))
-	maps.Copy(peers, s.peers)
+	for k, v := range s.peers {
+		if len(v.Addresses) > 0 {
+			peers[k] = v.Addresses[0] // Return primary address for backward compatibility right now
+		}
+	}
 	return peers
 }
 
@@ -320,7 +324,7 @@ func (s *Server) ExecuteSync() error {
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	payload := protocol.AddPeerRequest{
 		ID:      s.Config.ID,
-		Address: s.Config.Address,
+		Address: protocol.AddressRecord{Addresses: []string{s.Config.Address}},
 	}
 
 	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
@@ -328,9 +332,9 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
 	}
 	s.Config.Logger.Info("AnnounceResp received without errors", "resp", announceResp)
-	for id, addr := range announceResp {
+	for id, addrRec := range announceResp {
 		if id != s.Config.ID {
-			s.AddPeer(id, addr)
+			s.AddPeer(id, addrRec)
 		}
 	}
 	s.Config.Logger.Info("Successfully synced topology from sponsor", "peers_count", len(announceResp))

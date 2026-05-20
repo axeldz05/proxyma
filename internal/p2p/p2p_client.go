@@ -13,7 +13,7 @@ import (
 
 type PeerClient interface {
 	FetchManifest(ctx context.Context, peerAddr string) (map[string]protocol.IndexEntry, error)
-	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
+	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	Notify(ctx context.Context, peerAddr string, notification protocol.PeerNotification) error
 	NotifyServiceUpdate(ctx context.Context, peerAddr string, notification protocol.ServiceNotification) error
 	AddPeer(peerAddr string, payload *bytes.Buffer) error
@@ -287,7 +287,7 @@ func (c *HTTPPeerClient) AddPeer(peerAddr string, payload *bytes.Buffer) error {
 	return nil
 }
 
-func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error) {
+func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
 	safeURL, err := validateAndBuildURL(sponsorAddres, "peers/announce")
 	if err != nil {
 		return nil, err
@@ -297,12 +297,12 @@ func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.Add
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return map[string]string{}, fmt.Errorf("couldn't announce to %s: %w", sponsorAddres, err)
+		return map[string]protocol.AddressRecord{}, fmt.Errorf("couldn't announce to %s: %w", sponsorAddres, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var peers map[string]string
+	var peers map[string]protocol.AddressRecord
 	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
-		return map[string]string{}, err
+		return map[string]protocol.AddressRecord{}, err
 	}
 	return peers, nil
 }

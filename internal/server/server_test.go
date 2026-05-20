@@ -29,7 +29,7 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 	sv2 := NewServer(t, testutil.DefaultConfig(t, "sv2"), nil)
 
 	// Add peer via HTTP endpoint
-	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: sv2.Config.Address}
+	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: protocol.AddressRecord{Addresses: []string{sv2.Config.Address}}}
 	body, _ := json.Marshal(addReq)
 	req, err := http.NewRequest("POST", sv1.Config.Address+"/peers/add", bytes.NewBuffer(body))
 	require.NoError(t, err)
@@ -40,15 +40,15 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Add peer programmatically on the other side
-	sv2.AddPeer(sv1.Config.ID, sv1.Config.Address)
+	sv2.AddPeer(sv1.Config.ID, protocol.AddressRecord{Addresses: []string{sv1.Config.Address}})
 
 	// Both peers should now know each other
 	gotPeersSv1 := strings.TrimSpace(GetPeersSimulated(t, sv1))
-	expectedSv1 := fmt.Sprintf(`{"%s":"%s"}`, sv2.Config.ID, sv2.Config.Address)
+	expectedSv1 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0}}`, sv2.Config.ID, sv2.Config.Address)
 	require.Equal(t, expectedSv1, gotPeersSv1)
 
 	gotPeersSv2 := strings.TrimSpace(GetPeersSimulated(t, sv2))
-	expectedSv2 := fmt.Sprintf(`{"%s":"%s"}`, sv1.Config.ID, sv1.Config.Address)
+	expectedSv2 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0}}`, sv1.Config.ID, sv1.Config.Address)
 	require.Equal(t, expectedSv2, gotPeersSv2)
 
 	require.NoError(t, sv1.ExecuteSync())
@@ -67,7 +67,7 @@ func TestFilePropagationAcrossCluster(t *testing.T) {
 	for i, current := range servers {
 		for j, peer := range servers {
 			if i != j {
-				current.AddPeer(peer.Config.ID, peer.Config.Address)
+				current.AddPeer(peer.Config.ID, protocol.AddressRecord{Addresses: []string{peer.Config.Address}})
 			}
 		}
 	}
@@ -165,8 +165,8 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 	sv1 := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 	sv2 := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
 
-	sv1.AddPeer("2", sv2.Config.Address)
-	sv2.AddPeer("1", sv1.Config.Address)
+	sv1.AddPeer("2", protocol.AddressRecord{Addresses: []string{sv2.Config.Address}})
+	sv2.AddPeer("1", protocol.AddressRecord{Addresses: []string{sv1.Config.Address}})
 
 	fileName := "test14.txt"
 	sv1.Storage.SetSubscription(fileName, true)
@@ -209,8 +209,8 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	err := svWithService.Compute.RegisterNewService(schema1, mockHandler)
 	require.NoError(t, err)
 
-	svDemandingService.AddPeer(svWithService.Config.ID, svWithService.Config.Address)
-	svWithService.AddPeer(svDemandingService.Config.ID, svDemandingService.Config.Address)
+	svDemandingService.AddPeer(svWithService.Config.ID, protocol.AddressRecord{Addresses: []string{svWithService.Config.Address}})
+	svWithService.AddPeer(svDemandingService.Config.ID, protocol.AddressRecord{Addresses: []string{svDemandingService.Config.Address}})
 
 	query := protocol.DiscoveryQuery{
 		Service:          "ocr",
@@ -282,7 +282,7 @@ func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 	for i := range 5 {
 		srv.Storage.SetSubscription(fmt.Sprintf("file_%d.txt", i), true)
 	}
-	srv.AddPeer("peer1", "https://fake:8080")
+	srv.AddPeer("peer1", protocol.AddressRecord{Addresses: []string{"https://fake:8080"}})
 	start := time.Now()
 	err := srv.ExecuteSync()
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
 	}
 
 	srv := NewServer(t, cfg, mockClient)
-	srv.AddPeer("slow-peer", "https://fake-address:8080")
+	srv.AddPeer("slow-peer", protocol.AddressRecord{Addresses: []string{"https://fake-address:8080"}})
 	start := time.Now()
 
 	err := srv.ExecuteSync()
@@ -530,7 +530,7 @@ func TestDownloadWorkerProcessesDeletion(t *testing.T) {
 
 	srv := NewServer(t, cfg, mockClient)
 	srv.Storage.SetSubscription(fileName, true)
-	srv.AddPeer("peer1", "https://fake:8080")
+	srv.AddPeer("peer1", protocol.AddressRecord{Addresses: []string{"https://fake:8080"}})
 
 	// Phase 1: Sync the file so the blob exists locally
 	err := srv.ExecuteSync()
@@ -623,7 +623,7 @@ func TestSnapshotReflectsFullClusterState(t *testing.T) {
 	for i, current := range servers {
 		for j, peer := range servers {
 			if i != j {
-				current.AddPeer(peer.Config.ID, peer.Config.Address)
+				current.AddPeer(peer.Config.ID, protocol.AddressRecord{Addresses: []string{peer.Config.Address}})
 			}
 		}
 	}

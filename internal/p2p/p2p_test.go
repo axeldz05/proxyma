@@ -212,18 +212,18 @@ func TestHTTPPeerClientAnnounce(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		// Respond with the cluster topology including the newcomer
-		_, _ = w.Write([]byte(`{"sponsor":"https://sponsor:8080","newcomer":"https://newcomer:9090"}`))
+		_, _ = w.Write([]byte(`{"sponsor":{"addresses":["https://sponsor:8080"]},"newcomer":{"addresses":["https://newcomer:9090"]}}`))
 	})
 	addr, client := newMockServer(t, mux)
 
 	peers, err := client.Announce(addr, protocol.AddPeerRequest{
 		ID:      "newcomer",
-		Address: "https://newcomer:9090",
+		Address: protocol.AddressRecord{Addresses: []string{"https://newcomer:9090"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, peers, 2)
-	require.Equal(t, "https://sponsor:8080", peers["sponsor"])
-	require.Equal(t, "https://newcomer:9090", peers["newcomer"])
+	require.Equal(t, "https://sponsor:8080", peers["sponsor"].Addresses[0])
+	require.Equal(t, "https://newcomer:9090", peers["newcomer"].Addresses[0])
 }
 
 func TestHTTPPeerClientAddPeer(t *testing.T) {
@@ -237,7 +237,7 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 		err := json.NewDecoder(r.Body).Decode(&req)
 		require.NoError(t, err)
 		require.Equal(t, "new-node", req.ID)
-		require.Equal(t, "https://new-node:8080", req.Address)
+		require.Equal(t, "https://new-node:8080", req.Address.Addresses[0])
 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"message":"Peer successfully added"}`))
@@ -245,7 +245,7 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 	})
 	addr, client := newMockServer(t, mux)
 
-	payload := bytes.NewBuffer([]byte(`{"id":"new-node","address":"https://new-node:8080"}`))
+	payload := bytes.NewBuffer([]byte(`{"id":"new-node","address":{"addresses":["https://new-node:8080"]}}`))
 	err := client.AddPeer(addr, payload)
 	require.NoError(t, err)
 

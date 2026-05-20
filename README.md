@@ -22,8 +22,8 @@ with grpc-gateway for particular cases where a JSON will work just fine.
 
 ### Phase 1: Core & Networking
 - [x] Implement a File System for servers and clients, based on a P2P Syncrhonization.
-- [ ] Implement automatic node discovery in local networks (mDNS).
-- [ ] Implement global discovery using a secure pairing.
+- [ ] Implement automatic node discovery in local networks (mDNS) (Deferred: Offline LAN only).
+- [x] Implement global discovery using a secure pairing.
 - [x] End-to-end TLS encryption.
 - [ ] Secure "Handshake" and pairing system for new devices.
 

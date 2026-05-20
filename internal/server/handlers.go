@@ -67,25 +67,26 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
-	if req.ID == "" || req.Address == "" {
+	if req.ID == "" || len(req.Address.Addresses) == 0 || req.Address.Addresses[0] == "" {
 		utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
 
-	peersSnapshot := make(map[string]string)
+	peersSnapshot := make(map[string]protocol.AddressRecord)
 	s.peersMu.Lock()
 	maps.Copy(peersSnapshot, s.peers)
 	s.peersMu.Unlock()
-	peersSnapshot[s.Config.ID] = s.Config.Address
+	peersSnapshot[s.Config.ID] = protocol.AddressRecord{Addresses: []string{s.Config.Address}}
 
-	go func(newID, newAddress string, clusterPeers map[string]string) {
+	go func(newID string, newAddress protocol.AddressRecord, clusterPeers map[string]protocol.AddressRecord) {
 		payload := protocol.AddPeerRequest{ID: newID, Address: newAddress}
 		bodyBytes, _ := json.Marshal(payload)
-		for peerID, peerAddress := range clusterPeers {
-			if peerID == s.Config.ID || peerID == newID {
+		for peerID, peerRecord := range clusterPeers {
+			if peerID == s.Config.ID || peerID == newID || len(peerRecord.Addresses) == 0 {
 				continue
 			}
+			peerAddress := peerRecord.Addresses[0]
 			if err := s.peerClient.AddPeer(peerAddress, bytes.NewBuffer(bodyBytes)); err != nil {
 				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerAddress, "newPeer", req.Address, "error", err)
 			}

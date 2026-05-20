@@ -9,7 +9,7 @@ import (
 
 type MockPeerClient struct {
 	OnFetchManifest       func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
-	OnAnnounce            func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error)
+	OnAnnounce            func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	OnNotify              func(ctx context.Context, addr string, n protocol.PeerNotification) error
 	OnNotifyServiceUpdate func(ctx context.Context, addr string, n protocol.ServiceNotification) error
 	OnAddPeer             func(addr string, payload *bytes.Buffer) error
@@ -24,8 +24,11 @@ func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {
 	return nil
 }
 
-func (m *MockPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]string, error) {
-	return map[string]string{}, nil
+func (m *MockPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
+	if m.OnAnnounce != nil {
+		return m.OnAnnounce(sponsorAddres, peerRequest)
+	}
+	return map[string]protocol.AddressRecord{}, nil
 }
 
 func (m *MockPeerClient) FetchManifest(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error) {

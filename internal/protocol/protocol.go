@@ -91,14 +91,19 @@ type JoinRequest struct {
 }
 
 type JoinResponse struct {
-	Certificate string            `json:"certificate"`
-	CACert      string            `json:"ca_cert"`
-	Peers       map[string]string `json:"peers"`
+	Certificate string                   `json:"certificate"`
+	CACert      string                   `json:"ca_cert"`
+	Peers       map[string]AddressRecord `json:"peers"`
+}
+
+type AddressRecord struct {
+	Addresses []string `json:"addresses"`
+	Sequence  int64    `json:"sequence"`
 }
 
 type AddPeerRequest struct {
-	ID      string `json:"id"`
-	Address string `json:"address"`
+	ID      string        `json:"id"`
+	Address AddressRecord `json:"address"`
 }
 
 func SaveConfig(cfg NodeConfig) error {
