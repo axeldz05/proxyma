@@ -805,7 +805,7 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 func TestAnnounceCapturesPublicIP(t *testing.T) {
 	t.Parallel()
 	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-stun"), nil)
-	
+
 	// Create a request pretending to come from a different IP
 	announceReq := protocol.AddPeerRequest{
 		ID: "new-stun-node",
@@ -814,27 +814,27 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 			Sequence:  1,
 		},
 	}
-	
+
 	bodyBytes, _ := json.Marshal(announceReq)
 	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	// Because we use a real http client, r.RemoteAddr will be 127.0.0.1:something
 	// We expect the server to detect 127.0.0.1 and add it to the addresses
 	resp, err := sponsor.Client().Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
-	
+
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	
+
 	var peers map[string]protocol.AddressRecord
 	err = json.NewDecoder(resp.Body).Decode(&peers)
 	require.NoError(t, err)
-	
+
 	// the newcomer should be in the peers map, and its address list should include the local IP AND the perceived IP
 	newcomerRecord := peers["new-stun-node"]
 	require.Len(t, newcomerRecord.Addresses, 2, "Server should have added the perceived IP to the address record")
-	
+
 	hasPerceivedIP := false
 	for _, addr := range newcomerRecord.Addresses {
 		if strings.Contains(addr, "127.0.0.1:8443") {
@@ -847,7 +847,7 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	t.Parallel()
 	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-update"), nil)
-	
+
 	// First announce
 	req1 := protocol.AddPeerRequest{
 		ID: "dynamic-node",
@@ -862,13 +862,13 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	resp1, err := sponsor.Client().Do(httpReq1)
 	require.NoError(t, err)
 	_ = resp1.Body.Close()
-	
+
 	// Verify it was added
 	var peers1 map[string]protocol.AddressRecord
 	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers1)
 	record1 := peers1["dynamic-node"]
 	require.Contains(t, record1.Addresses[0], "10.0.0.1")
-	
+
 	// IP changes, sequence increments
 	req2 := protocol.AddPeerRequest{
 		ID: "dynamic-node",
@@ -883,13 +883,13 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	resp2, err := sponsor.Client().Do(httpReq2)
 	require.NoError(t, err)
 	_ = resp2.Body.Close()
-	
+
 	// Verify it was updated
 	var peers2 map[string]protocol.AddressRecord
 	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers2)
 	record2 := peers2["dynamic-node"]
 	require.Equal(t, int64(2), record2.Sequence)
-	
+
 	// Ensure the new address is present
 	hasNewIP := false
 	for _, addr := range record2.Addresses {
@@ -898,7 +898,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 		}
 	}
 	require.True(t, hasNewIP, "The updated IP should be in the addresses list")
-	
+
 	// Old IP shouldn't be there if we overwrite correctly on higher sequence
 	hasOldIP := false
 	for _, addr := range record2.Addresses {
@@ -908,7 +908,6 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	}
 	require.False(t, hasOldIP, "The old IP should be removed on a higher sequence update")
 }
-
 
 func TestAddPeerIgnoresOldSequence(t *testing.T) {
 	t.Parallel()
@@ -932,4 +931,18 @@ func TestAddPeerIgnoresOldSequence(t *testing.T) {
 	require.Equal(t, int64(2), record.Sequence)
 	require.Contains(t, record.Addresses, "https://10.0.0.1:8443")
 	require.NotContains(t, record.Addresses, "https://10.0.0.2:8443")
+}
+
+func TestAnnouncePresenceFallbackError(t *testing.T) {
+	t.Parallel()
+	mockClient := &testutil.MockPeerClient{
+		OnAnnounce: func(sponsor string, req protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+	srv := NewServer(t, testutil.DefaultConfig(t, "fallback-test"), mockClient)
+
+	err := srv.AnnouncePresence("https://unreachable:8443")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error while trying to connect to cluster")
 }

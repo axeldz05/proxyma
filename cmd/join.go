@@ -78,7 +78,7 @@ var joinCmd = &cobra.Command{
 
 		resp, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("❌ Network error while connecting to the cluster: %v\n", err)
+			fmt.Printf("❌ Hubo un error intentando conectarse con el cluster: %v\n", err)
 			os.Exit(1)
 		}
 		defer func() { _ = resp.Body.Close() }()

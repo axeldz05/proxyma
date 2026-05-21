@@ -213,7 +213,7 @@ func (s *Server) SetAddress(addr string) {
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
-	
+
 	existing, exists := s.peers[peerID]
 	if exists {
 		if addressRecord.Sequence < existing.Sequence {
@@ -235,7 +235,7 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 			addressRecord.Addresses = newAddrs
 		}
 	}
-	
+
 	s.peers[peerID] = addressRecord
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 }
@@ -353,6 +353,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
 	if err != nil {
 		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
+		return fmt.Errorf("error while trying to connect to cluster: %v", err)
 	}
 	s.Config.Logger.Info("AnnounceResp received without errors", "resp", announceResp)
 	for id, addrRec := range announceResp {
