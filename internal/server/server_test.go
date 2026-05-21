@@ -843,3 +843,93 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 	}
 	require.True(t, hasPerceivedIP, "The perceived STUN-like IP should be in the address list")
 }
+
+func TestNodeIPChangeUpdatesPeers(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-update"), nil)
+	
+	// First announce
+	req1 := protocol.AddPeerRequest{
+		ID: "dynamic-node",
+		Address: protocol.AddressRecord{
+			Addresses: []string{"https://10.0.0.1:8443"},
+			Sequence:  1,
+		},
+	}
+	body1, _ := json.Marshal(req1)
+	httpReq1, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body1))
+	httpReq1.Header.Set("Content-Type", "application/json")
+	resp1, err := sponsor.Client().Do(httpReq1)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+	
+	// Verify it was added
+	var peers1 map[string]protocol.AddressRecord
+	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers1)
+	record1 := peers1["dynamic-node"]
+	require.Contains(t, record1.Addresses[0], "10.0.0.1")
+	
+	// IP changes, sequence increments
+	req2 := protocol.AddPeerRequest{
+		ID: "dynamic-node",
+		Address: protocol.AddressRecord{
+			Addresses: []string{"https://20.0.0.2:8443"},
+			Sequence:  2,
+		},
+	}
+	body2, _ := json.Marshal(req2)
+	httpReq2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body2))
+	httpReq2.Header.Set("Content-Type", "application/json")
+	resp2, err := sponsor.Client().Do(httpReq2)
+	require.NoError(t, err)
+	_ = resp2.Body.Close()
+	
+	// Verify it was updated
+	var peers2 map[string]protocol.AddressRecord
+	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers2)
+	record2 := peers2["dynamic-node"]
+	require.Equal(t, int64(2), record2.Sequence)
+	
+	// Ensure the new address is present
+	hasNewIP := false
+	for _, addr := range record2.Addresses {
+		if strings.Contains(addr, "20.0.0.2") {
+			hasNewIP = true
+		}
+	}
+	require.True(t, hasNewIP, "The updated IP should be in the addresses list")
+	
+	// Old IP shouldn't be there if we overwrite correctly on higher sequence
+	hasOldIP := false
+	for _, addr := range record2.Addresses {
+		if strings.Contains(addr, "10.0.0.1") {
+			hasOldIP = true
+		}
+	}
+	require.False(t, hasOldIP, "The old IP should be removed on a higher sequence update")
+}
+
+
+func TestAddPeerIgnoresOldSequence(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-seq"), nil)
+
+	// Add sequence 2
+	sponsor.AddPeer("dynamic-node", protocol.AddressRecord{
+		Addresses: []string{"https://10.0.0.1:8443"},
+		Sequence:  2,
+	})
+
+	// Add sequence 1
+	sponsor.AddPeer("dynamic-node", protocol.AddressRecord{
+		Addresses: []string{"https://10.0.0.2:8443"},
+		Sequence:  1,
+	})
+
+	var peers map[string]protocol.AddressRecord
+	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers)
+	record := peers["dynamic-node"]
+	require.Equal(t, int64(2), record.Sequence)
+	require.Contains(t, record.Addresses, "https://10.0.0.1:8443")
+	require.NotContains(t, record.Addresses, "https://10.0.0.2:8443")
+}

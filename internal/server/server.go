@@ -212,8 +212,31 @@ func (s *Server) SetAddress(addr string) {
 
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	s.peersMu.Lock()
+	defer s.peersMu.Unlock()
+	
+	existing, exists := s.peers[peerID]
+	if exists {
+		if addressRecord.Sequence < existing.Sequence {
+			s.Config.Logger.Debug("Ignoring older peer address record", "peerID", peerID, "currentSeq", existing.Sequence, "newSeq", addressRecord.Sequence)
+			return
+		}
+		if addressRecord.Sequence == existing.Sequence {
+			addrSet := make(map[string]bool)
+			for _, a := range existing.Addresses {
+				addrSet[a] = true
+			}
+			for _, a := range addressRecord.Addresses {
+				addrSet[a] = true
+			}
+			var newAddrs []string
+			for a := range addrSet {
+				newAddrs = append(newAddrs, a)
+			}
+			addressRecord.Addresses = newAddrs
+		}
+	}
+	
 	s.peers[peerID] = addressRecord
-	s.peersMu.Unlock()
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 }
 
