@@ -85,3 +85,20 @@ call_api() {
         --key "/app/data/certs/$node_id.key" \
         -X "$method" "$@" "https://localhost:$port/$path"
 }
+
+wait_for_condition() {
+    local max_retries=$1
+    local delay=$2
+    local expected=$3
+    shift 3
+    
+    for i in $(seq 1 "$max_retries"); do
+        local res
+        if res=$("$@") && echo "$res" | grep -q "$expected"; then
+            return 0
+        fi
+        sleep "$delay"
+    done
+    return 1
+}
+

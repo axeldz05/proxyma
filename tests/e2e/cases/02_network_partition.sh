@@ -97,19 +97,8 @@ exec_node node-1 ./proxyma sync > /dev/null
 
 # 7. Verificar convergencia
 echo "🔍 Verificando convergencia de metadatos en node-1..."
-MAX_RETRIES=10
-CONVERGED=false
-for i in $(seq 1 $MAX_RETRIES); do
-    MANIFEST_N1=$(call_api node-1 GET 8081 manifest) || MANIFEST_N1=""
-    if echo "$MANIFEST_N1" | grep -q "partition_a.txt" && echo "$MANIFEST_N1" | grep -q "partition_b.txt"; then
-        CONVERGED=true
-        break
-    fi
-    echo "   ... Esperando convergencia ($i/$MAX_RETRIES)..."
-    sleep 2
-done
-
-if [ "$CONVERGED" != "true" ]; then
+if ! wait_for_condition 10 2 "partition_a.txt" call_api node-1 GET 8081 manifest || \
+   ! wait_for_condition 10 2 "partition_b.txt" call_api node-1 GET 8081 manifest; then
     echo -e "${RED}❌ Error: El clúster no recuperó consistencia tras sanar la partición.${NC}"
     exit 1
 fi

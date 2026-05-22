@@ -145,18 +145,8 @@ exec_node node-2 ./proxyma sync > /dev/null
 call_api node-2 POST 8082 "services/submit" -d "{\"service\":\"ocr\", \"task_id\":\"ocr_job_1\", \"requester_node_id\":\"host-test\", \"payload\":{\"file_hash\":\"$PDF_HASH\"}}" > /dev/null
 
 # Esperar a que el PDF procesado con OCR aparezca en el manifest de node-3
-OCR_FOUND=false
-for i in $(seq 1 30); do
-    MANIFEST_N3=$(call_api node-3 GET 8083 manifest) || MANIFEST_N3=""
-    if echo "$MANIFEST_N3" | grep -q "optimized.pdf"; then
-        OCR_FOUND=true
-        break
-    fi
-    echo "   ... OCR no subido aún (reintentando $i/30)..."
-    sleep 2
-done
-
-if [ "$OCR_FOUND" != "true" ]; then
+echo "⏱️ Esperando a que el PDF procesado con OCR aparezca en el manifest de node-3..."
+if ! wait_for_condition 30 2 "optimized.pdf" call_api node-3 GET 8083 manifest; then
     echo -e "${RED}❌ Error: OCR falló o el archivo no se propagó.${NC}"
     exit 1
 fi
