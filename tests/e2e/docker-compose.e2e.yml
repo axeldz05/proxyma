@@ -4,6 +4,7 @@ networks:
 
 services:
   node-1:
+    image: proxyma-e2e-node-1
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -14,6 +15,7 @@ services:
       - "${E2E_DATA_DIR}/node-1:/app/data"
 
   node-2:
+    image: proxyma-e2e-node-2
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -24,6 +26,7 @@ services:
       - "${E2E_DATA_DIR}/node-2:/app/data"
 
   node-3:
+    image: proxyma-e2e-node-3
     build:
       context: ../..
       dockerfile: Dockerfile

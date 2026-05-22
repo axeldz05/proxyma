@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -89,9 +90,12 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		clone.URL.Scheme = parsedAddr.Scheme
 		clone.URL.Host = parsedAddr.Host
 		
-		// Attempt direct connection
+		// Attempt direct connection with a short timeout to fail-fast
 		r.logDebug("Routing direct request", "url", clone.URL.String())
-		resp, err := r.Base.RoundTrip(clone)
+		directCtx, directCancel := context.WithTimeout(clone.Context(), 500*time.Millisecond)
+		directReq := clone.Clone(directCtx)
+		resp, err := r.Base.RoundTrip(directReq)
+		directCancel()
 		if err == nil {
 			return resp, nil
 		}
