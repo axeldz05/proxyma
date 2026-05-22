@@ -865,7 +865,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 
 	// Verify it was added
 	var peers1 map[string]protocol.AddressRecord
-	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers1)
+	require.NoError(t, json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers1))
 	record1 := peers1["dynamic-node"]
 	require.Contains(t, record1.Addresses[0], "10.0.0.1")
 
@@ -886,7 +886,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 
 	// Verify it was updated
 	var peers2 map[string]protocol.AddressRecord
-	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers2)
+	require.NoError(t, json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers2))
 	record2 := peers2["dynamic-node"]
 	require.Equal(t, int64(2), record2.Sequence)
 
@@ -926,7 +926,7 @@ func TestAddPeerIgnoresOldSequence(t *testing.T) {
 	})
 
 	var peers map[string]protocol.AddressRecord
-	json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers)
+	require.NoError(t, json.Unmarshal([]byte(GetPeersSimulated(t, sponsor)), &peers))
 	record := peers["dynamic-node"]
 	require.Equal(t, int64(2), record.Sequence)
 	require.Contains(t, record.Addresses, "https://10.0.0.1:8443")
@@ -944,5 +944,5 @@ func TestAnnouncePresenceFallbackError(t *testing.T) {
 
 	err := srv.AnnouncePresence("https://unreachable:8443")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "error while trying to connect to cluster")
+	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
 }

@@ -24,6 +24,7 @@ type Server struct {
 	Config            protocol.NodeConfig
 	Compute           *compute.ComputeEngine
 	Storage           *storage.StorageEngine
+	handler           http.Handler
 	peers             map[string]protocol.AddressRecord
 	peerClient        p2p.PeerClient
 	httpServer        *http.Server
@@ -34,6 +35,9 @@ type Server struct {
 	inviteMu          sync.Mutex
 	pendingInvites    map[string]time.Time
 	unixListener      net.Listener
+	relayQueues       map[string]chan protocol.RelayRequest
+	relayWaiters      map[string]chan protocol.RelayResponse
+	relayMu           sync.RWMutex
 }
 
 type DownloadJob struct {
@@ -49,21 +53,32 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		downloadQueue:   make(chan DownloadJob, 100),
 		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
 		pendingInvites:  make(map[string]time.Time),
+		relayQueues:  make(map[string]chan protocol.RelayRequest),
+		relayWaiters: make(map[string]chan protocol.RelayResponse),
+
+	}
+
+	if updater, ok := s.peerClient.(interface {
+		UpdateSponsorAddress(addr string)
+	}); ok {
+		updater.UpdateSponsorAddress(cfg.BootstrapNode)
 	}
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
-		for _, peerAddress := range s.GetPeersCopy() {
+		for peerID, peerAddress := range s.GetPeersCopy() {
 			if rawSource == peerAddress {
 				s.downloadQueue <- DownloadJob{
 					File:   file,
-					Source: peerAddress,
+					Source: peerID,
 				}
 				return nil
 			}
 		}
 		return fmt.Errorf("peer of address %s not found", rawSource)
 	})
+
+	s.handler = s.MountHandlers()
 
 	for range cfg.Workers {
 		go s.downloadWorker(context.Background())
@@ -75,7 +90,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
-	mux := s.MountHandlers()
+	mux := s.handler
 	addr := fmt.Sprintf(":%s", strings.Split(s.Config.Address, ":")[2])
 
 	hs := &http.Server{
@@ -135,7 +150,7 @@ func (s *Server) listenUnixSocket() {
 }
 
 func (s *Server) handleUnixConnection(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	buf := make([]byte, 1)
 	_, err := c.Read(buf) // wait for any byte
 	if err != nil {
@@ -177,12 +192,13 @@ func (s *Server) LoadLocalServices() {
 
 	for name, svc := range services {
 		var handler compute.ServiceHandler
-		if svc.Type == "script" || svc.Type == "exec" {
+		switch svc.Type {
+		case "script", "exec":
 			handler = compute.BuildScriptHandler(svc.Exec)
-		} else if svc.Type == "grpc" {
+		case "grpc":
 			// dummy grpc handler builder if none, but let's assume BuildGRPCHandler exists
 			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
-		} else {
+		default:
 			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
 			continue
 		}
@@ -238,17 +254,23 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 
 	s.peers[peerID] = addressRecord
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
+
+	if updater, ok := s.peerClient.(interface {
+		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	}); ok {
+		updater.UpdatePeerRoute(peerID, addressRecord)
+	}
 }
 
 func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
-	for peerID, peerAddr := range s.GetPeersCopy() {
+	for peerID := range s.GetPeersCopy() {
 		payload := protocol.PeerNotification{
 			File:   fileInfo,
 			Source: s.Config.Address,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		err := s.peerClient.Notify(ctx, peerAddr, payload)
+		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
 			// it's assumed that, if the peer reconnects to the cluster, it automatically
 			// executes a sync.
@@ -266,18 +288,21 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	var wg sync.WaitGroup
 
 	peers := s.GetPeersCopy()
-	for _, peerAddr := range peers {
+	for peerID := range peers {
 		wg.Add(1)
-		go func(addr string) {
+		go func(peerID string) {
 			defer wg.Done()
-			bid, err := s.peerClient.FetchServiceBid(ctx, addr, query)
+			bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
+			if err != nil {
+				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
+			}
 			if err != nil || !bid.CanAccept {
 				return
 			}
 			mu.Lock()
 			bids = append(bids, bid)
 			mu.Unlock()
-		}(peerAddr)
+		}(peerID)
 	}
 
 	wg.Wait()
@@ -298,13 +323,13 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	return bestBid.NodeAddr, bestBid.Schema, nil
 }
 
-func (s *Server) DispatchTask(targetPeerAddr string, req protocol.TaskRequest) error {
+func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
 	s.Compute.RegisterOutgoingTask(req)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := s.peerClient.SubmitTask(ctx, targetPeerAddr, req)
+	err := s.peerClient.SubmitTask(ctx, targetPeerID, req)
 	if err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
 		return fmt.Errorf("failed to dispatch task to peer: %v", err)
@@ -325,9 +350,9 @@ func (s *Server) GetPeersCopy() map[string]string {
 }
 
 func (s *Server) ExecuteSync() error {
-	for peerID, peerAddress := range s.GetPeersCopy() {
+	for peerID := range s.GetPeersCopy() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		manifest, err := s.peerClient.FetchManifest(ctx, peerAddress)
+		manifest, err := s.peerClient.FetchManifest(ctx, peerID)
 		cancel()
 		if err != nil {
 			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
@@ -337,7 +362,7 @@ func (s *Server) ExecuteSync() error {
 		for _, file := range missingFiles {
 			s.downloadQueue <- DownloadJob{
 				File:   file,
-				Source: peerAddress,
+				Source: peerID,
 			}
 		}
 	}
@@ -353,7 +378,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
 	if err != nil {
 		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
-		return fmt.Errorf("error while trying to connect to cluster: %v", err)
+		return fmt.Errorf("there was an error trying to connect to the cluster: %v", err)
 	}
 	s.Config.Logger.Info("AnnounceResp received without errors", "resp", announceResp)
 	for id, addrRec := range announceResp {
@@ -406,4 +431,20 @@ func (s *Server) inviteSweeper(ctx context.Context) {
 			s.inviteMu.Unlock()
 		}
 	}
+}
+
+
+func (s *Server) GetPeerRecord(peerID string) (protocol.AddressRecord, bool) {
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+	record, exists := s.peers[peerID]
+	return record, exists
+}
+
+func (s *Server) GetPeersRecordCopy() map[string]protocol.AddressRecord {
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+	snapshot := make(map[string]protocol.AddressRecord, len(s.peers))
+	maps.Copy(snapshot, s.peers)
+	return snapshot
 }

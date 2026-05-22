@@ -1,5 +1,10 @@
 # Changelog - Proxyma P2P Dynamic Clustering Update
 
+## 21-05-2026
+### Relay y STUN
+* **Relay Fallback**: Los nodos detrás de NAT realizan long-polling (`/relay/poll`) autenticados mediante mTLS. Si la conexión directa falla, el emisor redirige un `RelayRequest` con un `ReqID` seguro al Sponsor (`/relay/forward`). El receptor procesa el mensaje localmente y responde por `/relay/reply`.
+* **STUN-like Detection**: Al anunciarse un nodo (`/peers/announce`), el servidor detecta su IP pública de origen (`r.RemoteAddr`), reconstruye la dirección percibida con el puerto del nodo y la propaga en el clúster para habilitar la conectividad directa.
+
 ## 20-05-2026
 ### Refactorizaciones (CLI & HTTP Handlers)
 * **CLI helpers**: Se eliminó la duplicación de código en la lectura de configuración de los comandos (`init`, `join`, `run`, `sync`, `invite`, `service`) extrayéndolo a `cmd/helpers.go`.

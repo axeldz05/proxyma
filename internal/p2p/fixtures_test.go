@@ -14,6 +14,6 @@ func newMockServer(t *testing.T, handler http.Handler) (string, *p2p.HTTPPeerCli
 	ts := httptest.NewTLSServer(handler)
 	t.Cleanup(ts.Close)
 
-	client := p2p.NewHTTPPeerClient(ts.Client())
+	client := p2p.NewHTTPPeerClient(ts.Client().Transport, "", nil)
 	return ts.URL, client
 }

@@ -49,12 +49,10 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		httpClient := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: clientTLS,
-			},
+		baseTransport := &http.Transport{
+			TLSClientConfig: clientTLS,
 		}
-		peerClient := p2p.NewHTTPPeerClient(httpClient)
+		peerClient := p2p.NewHTTPPeerClient(baseTransport, cfg.BootstrapNode, logger)
 
 		srv := server.New(cfg, peerClient)
 		srv.LoadLocalServices()
@@ -75,6 +73,8 @@ var runCmd = &cobra.Command{
 				err := srv.AnnouncePresence(cfg.BootstrapNode)
 				if err != nil {
 					logger.Warn("Failed to announce to bootstrap node", "error", err)
+				} else {
+					go srv.StartRelayPolling(context.Background(), cfg.BootstrapNode)
 				}
 			}()
 		}

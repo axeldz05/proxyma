@@ -18,6 +18,8 @@ type MockPeerClient struct {
 	OnSubmitTask          func(ctx context.Context, addr string, req protocol.TaskRequest) error
 	OnFetchServiceBid     func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
 	OnSendTaskResponse    func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	OnPollRelay           func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
+	OnReplyRelay          func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
 }
 
 func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {
@@ -89,4 +91,18 @@ func (m *MockPeerClient) SendTaskResponse(ctx context.Context, url string, resp 
 
 func (m *MockPeerClient) ExecuteService(ctx context.Context, addr string, svc string) (map[string]string, error) {
 	return nil, nil
+}
+
+func (m *MockPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
+	if m.OnPollRelay != nil {
+		return m.OnPollRelay(ctx, sponsorAddr, peerID)
+	}
+	return protocol.RelayRequest{}, nil
+}
+
+func (m *MockPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
+	if m.OnReplyRelay != nil {
+		return m.OnReplyRelay(ctx, sponsorAddr, resp)
+	}
+	return nil
 }

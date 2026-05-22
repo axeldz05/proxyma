@@ -71,7 +71,8 @@ func TestServiceAddCmd(t *testing.T) {
 		}
 		schemaBytes, _ := json.Marshal(schema)
 		schemaPath := filepath.Join(tempDir, "schema.json")
-		os.WriteFile(schemaPath, schemaBytes, 0644)
+		err = os.WriteFile(schemaPath, schemaBytes, 0644)
+		require.NoError(t, err)
 
 		rootCmd.SetArgs([]string{
 			"service", "add", "my-grpc",

@@ -25,7 +25,7 @@ var syncCmd = &cobra.Command{
 			fmt.Printf("❌ Daemon is unreachable. Is 'proxyma run' active? Error: %v\n", err)
 			os.Exit(1)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		_, err = conn.Write([]byte{1})
 		if err != nil {

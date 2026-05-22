@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -50,6 +49,9 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /peers/add", s.HandleAddPeer)
 	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
 	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
+	mux.HandleFunc("GET /relay/poll", s.HandleRelayPoll)
+	mux.HandleFunc("POST /relay/forward", s.HandleRelayForward)
+	mux.HandleFunc("POST /relay/reply", s.HandleRelayReply)
 	return s.mTLSGuard(mux)
 }
 
@@ -101,10 +103,7 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 
 	s.AddPeer(req.ID, req.Address)
 
-	peersSnapshot := make(map[string]protocol.AddressRecord)
-	s.peersMu.Lock()
-	maps.Copy(peersSnapshot, s.peers)
-	s.peersMu.Unlock()
+	peersSnapshot := s.GetPeersRecordCopy()
 	peersSnapshot[s.Config.ID] = protocol.AddressRecord{Addresses: []string{s.Config.Address}}
 
 	go func(newID string, newAddress protocol.AddressRecord, clusterPeers map[string]protocol.AddressRecord) {
@@ -212,7 +211,8 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
-	if err := json.NewEncoder(w).Encode(s.peers); err != nil {
+	peers := s.GetPeersRecordCopy()
+	if err := json.NewEncoder(w).Encode(peers); err != nil {
 		s.Config.Logger.Error("failed to encode getPeers response", "error", err)
 	}
 }
@@ -239,10 +239,11 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 	if s.clusterServices[req.NodeID] == nil {
 		s.clusterServices[req.NodeID] = make(map[string]protocol.ServiceSchema)
 	}
-	if req.Action == "add" || req.Action == "modify" {
+	switch req.Action {
+	case "add", "modify":
 		s.clusterServices[req.NodeID][req.Schema.Name] = req.Schema
 		s.Config.Logger.Info("Cluster service registered", "service", req.Schema.Name, "peer", req.NodeID)
-	} else if req.Action == "remove" {
+	case "remove":
 		delete(s.clusterServices[req.NodeID], req.Schema.Name)
 		s.Config.Logger.Info("Cluster service removed", "service", req.Schema.Name, "peer", req.NodeID)
 	}

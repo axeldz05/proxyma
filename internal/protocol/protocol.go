@@ -131,3 +131,22 @@ func LoadConfig(storagePath string) (NodeConfig, error) {
 	err = json.NewDecoder(file).Decode(&cfg)
 	return cfg, err
 }
+
+
+// RelayRequest encapsulates an HTTP request to be forwarded by the Sponsor
+type RelayRequest struct {
+	ReqID   string            `json:"req_id"`
+	Target  string            `json:"target"` // PeerID
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Headers map[string]string `json:"headers"`
+	Body    []byte            `json:"body"`
+}
+
+// RelayResponse encapsulates an HTTP response returned by the target node
+type RelayResponse struct {
+	ReqID      string            `json:"req_id"`
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+	Body       []byte            `json:"body"`
+}
