@@ -6,6 +6,10 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
+# Autodetectar UID y GID para el mapeo de usuarios en Docker
+export HOST_UID=${HOST_UID:-$(id -u)}
+export HOST_GID=${HOST_GID:-$(id -g)}
+
 # Verificar variables requeridas
 if [ -z "$E2E_PROJECT_NAME" ]; then
     echo -e "${RED}Error: E2E_PROJECT_NAME debe estar definido antes de cargar helpers.sh${NC}"
