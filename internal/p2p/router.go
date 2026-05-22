@@ -92,13 +92,19 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		
 		// Attempt direct connection with a short timeout to fail-fast
 		r.logDebug("Routing direct request", "url", clone.URL.String())
-		directCtx, directCancel := context.WithTimeout(clone.Context(), 500*time.Millisecond)
-		directReq := clone.Clone(directCtx)
+		dCtx, dCancel := context.WithCancel(clone.Context())
+		timer := time.AfterFunc(500*time.Millisecond, dCancel)
+		directReq := clone.Clone(dCtx)
 		resp, err := r.Base.RoundTrip(directReq)
-		directCancel()
 		if err == nil {
+			timer.Stop()
+			resp.Body = &cancelReadCloser{
+				ReadCloser: resp.Body,
+				cancel:     dCancel,
+			}
 			return resp, nil
 		}
+		dCancel()
 		lastErr = err
 	}
 
@@ -163,3 +169,16 @@ func generateSecureReqID() string {
 	}
 	return hex.EncodeToString(bytes)
 }
+
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
+
