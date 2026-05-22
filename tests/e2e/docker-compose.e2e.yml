@@ -1,0 +1,34 @@
+networks:
+  proxyma-net:
+    driver: bridge
+
+services:
+  node-1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - "${E2E_DATA_DIR}/node-1:/app/data"
+
+  node-2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - "${E2E_DATA_DIR}/node-2:/app/data"
+
+  node-3:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - "${E2E_DATA_DIR}/node-3:/app/data"
