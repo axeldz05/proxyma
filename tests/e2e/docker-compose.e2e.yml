@@ -35,3 +35,19 @@ services:
       - proxyma-net
     volumes:
       - "${E2E_DATA_DIR}/node-3:/app/data"
+
+  node-low-spec:
+    image: proxyma-e2e-node-2
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    user: "${HOST_UID}:${HOST_GID}"
+    networks:
+      - proxyma-net
+    volumes:
+      - "${E2E_DATA_DIR}/node-2:/app/data"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M

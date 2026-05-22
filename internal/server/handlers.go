@@ -52,6 +52,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("GET /relay/poll", s.HandleRelayPoll)
 	mux.HandleFunc("POST /relay/forward", s.HandleRelayForward)
 	mux.HandleFunc("POST /relay/reply", s.HandleRelayReply)
+	mux.HandleFunc("GET /telemetry", s.HandleTelemetry)
 	return s.mTLSGuard(mux)
 }
 
@@ -250,4 +251,18 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 	s.clusterServicesMu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
+	memLimit := utils.ReadMemoryLimit()
+	cpuLimit := utils.ReadCPULimit()
+
+	res := map[string]any{
+		"node_id":      s.Config.ID,
+		"cpu_limit":    cpuLimit,
+		"memory_limit": memLimit,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	utils.RespondJSON(w, http.StatusOK, res)
 }
