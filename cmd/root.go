@@ -9,10 +9,10 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "proxyma",
-	Short: "Proxyma es un motor de cómputo y almacenamiento distribuido P2P",
-	Long: `Un clúster P2P seguro y distribuido.
-Permite sincronizar archivos y ejecutar tareas de cómputo entre nodos cifrados con TLS mutuo.`,
-	// Run: func(cmd *cobra.Command, args []string) { } // Podrías poner algo aquí si quisieras
+	Short: "Proxyma is a distributed P2P compute and storage engine",
+	Long: `A secure and distributed P2P cluster.
+Allows synchronizing files and running compute tasks between nodes encrypted with mutual TLS.`,
+	// Run: func(cmd *cobra.Command, args []string) { } // You could put something here if you wanted to
 }
 
 func Execute() {

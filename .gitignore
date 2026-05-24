@@ -2,3 +2,5 @@
 .env
 .agents/*
 skills-lock.json
+tests/e2e/logs
+*log

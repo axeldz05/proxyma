@@ -131,9 +131,9 @@ func init() {
 	rootCmd.AddCommand(joinCmd)
 	defaultStorage := getDefaultStorage()
 
-	joinCmd.Flags().StringVar(&joinToken, "token", "", "El Smart Token provisto por el administrador (requerido)")
-	joinCmd.Flags().StringVar(&joinID, "id", "", "El ID único para este nuevo nodo (opcional, se auto-genera si está vacío)")
-	joinCmd.Flags().StringVar(&joinStorage, "storage", defaultStorage, "Ruta al directorio de almacenamiento")
+	joinCmd.Flags().StringVar(&joinToken, "token", "", "The Smart Token provided by the administrator (required)")
+	joinCmd.Flags().StringVar(&joinID, "id", "", "The unique ID for this new node (optional, auto-generated if empty)")
+	joinCmd.Flags().StringVar(&joinStorage, "storage", defaultStorage, "Path to the storage directory")
 
 	_ = joinCmd.MarkFlagRequired("token")
 }

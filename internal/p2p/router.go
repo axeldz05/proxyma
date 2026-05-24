@@ -96,12 +96,15 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		timer := time.AfterFunc(500*time.Millisecond, dCancel)
 		directReq := clone.Clone(dCtx)
 		resp, err := r.Base.RoundTrip(directReq)
-		if err == nil {
-			timer.Stop()
-			resp.Body = &cancelReadCloser{
-				ReadCloser: resp.Body,
-				cancel:     dCancel,
+		if !timer.Stop() {
+			dCancel()
+			if err == nil {
+				_ = resp.Body.Close()
+				err = context.DeadlineExceeded
 			}
+		}
+		if err == nil {
+			resp.Body = NewCancelReadCloser(resp.Body, dCancel)
 			return resp, nil
 		}
 		dCancel()
@@ -170,15 +173,25 @@ func generateSecureReqID() string {
 	return hex.EncodeToString(bytes)
 }
 
-type cancelReadCloser struct {
+// CancelReadCloser wraps an io.ReadCloser to call a cancel function when closed.
+type CancelReadCloser struct {
 	io.ReadCloser
-	cancel context.CancelFunc
+	Cancel context.CancelFunc
 }
 
-func (c *cancelReadCloser) Close() error {
+// Close closes the underlying ReadCloser and calls the Cancel function.
+func (c *CancelReadCloser) Close() error {
 	err := c.ReadCloser.Close()
-	c.cancel()
+	c.Cancel()
 	return err
+}
+
+// NewCancelReadCloser creates a new CancelReadCloser.
+func NewCancelReadCloser(body io.ReadCloser, cancel context.CancelFunc) io.ReadCloser {
+	return &CancelReadCloser{
+		ReadCloser: body,
+		Cancel:     cancel,
+	}
 }
 
 

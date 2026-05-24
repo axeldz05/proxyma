@@ -7,17 +7,17 @@ export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
 SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPTPATH/../lib/helpers.sh"
 
-echo -e "${GREEN}🚀 Iniciando caso de prueba: Partición de red...${NC}"
+echo -e "${GREEN}🚀 Starting test case: Network Partition...${NC}"
 
 cleanup_e2e
 trap cleanup_e2e EXIT
 
-# Crear directorios
+# Create directories
 mkdir -p "$E2E_DATA_DIR/node-1"
 mkdir -p "$E2E_DATA_DIR/node-2"
 mkdir -p "$E2E_DATA_DIR/node-3"
 
-# Inicializar y levantar clúster
+# Initialize and bring up cluster
 bootstrap_node node-1 8081
 bootstrap_node node-2 8082
 bootstrap_node node-3 8083
@@ -31,83 +31,83 @@ join_cluster node-3 node-1 8081
 $COMPOSE_CMD up -d node-2 node-3
 sleep 2
 
-# Registrar nombres de contenedores y red
+# Register container names and network
 NODE3_CONTAINER=$(docker compose -p $E2E_PROJECT_NAME -f $COMPOSE_FILE ps -q node-3)
 NETWORK_NAME="${E2E_PROJECT_NAME}_proxyma-net"
 
-# 1. Verificar sincronización en red normal
-echo "Escribiendo archivo inicial para verificar estado inicial..."
+# 1. Verify synchronization in normal network
+echo "Writing initial file to verify initial state..."
 echo "base_state" > "$E2E_DATA_DIR/node-1/base.txt"
 call_api node-1 POST 8081 upload -F "file=@/app/data/base.txt" > /dev/null
 
 exec_node node-2 ./proxyma sync > /dev/null
 exec_node node-3 ./proxyma sync > /dev/null
 
-# Confirmar estado base
+# Confirm base state
 MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
 if ! echo "$MANIFEST_N3" | grep -q "base.txt"; then
-    echo -e "${RED}❌ Error: Sincronización base fallida${NC}"
+    echo -e "${RED}❌ Error: Base synchronization failed${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ Estado base verificado en todos los nodos.${NC}"
+echo -e "${GREEN}✅ Base state verified on all nodes.${NC}"
 
-# 2. Provocar partición: Aislar nodo-3
+# 2. Cause partition: Isolate node-3
 echo "Disconnecting node-3 from network $NETWORK_NAME..."
 docker network disconnect "$NETWORK_NAME" "$NODE3_CONTAINER"
 
-# 3. Escrituras divergentes en la partición
-echo "Escribiendo archivo A en la partición conectada (node-1)..."
+# 3. Divergent writes in the partition
+echo "Writing file A in the connected partition (node-1)..."
 echo "data_partition_a" > "$E2E_DATA_DIR/node-1/partition_a.txt"
 call_api node-1 POST 8081 upload -F "file=@/app/data/partition_a.txt" > /dev/null
 
-echo "Escribiendo archivo B en el nodo aislado (node-3)..."
+echo "Writing file B in the isolated node (node-3)..."
 echo "data_partition_b" > "$E2E_DATA_DIR/node-3/partition_b.txt"
-# Nota: La llamada al api es local dentro del contenedor node-3, por lo que funciona aunque no tenga red externa
+# Note: The API call is local inside the node-3 container, so it works even without external network
 call_api node-3 POST 8083 upload -F "file=@/app/data/partition_b.txt" > /dev/null
 
-# 4. Sincronizar y verificar que NO se propaga la información
-echo "Tratando de sincronizar mientras existe la partición..."
+# 4. Sync and verify that information does NOT propagate
+echo "Attempting to sync while the partition exists..."
 exec_node node-2 ./proxyma sync > /dev/null || true
-# Nota: Esto puede fallar o pasar sin error pero sin actualizar node-3, es correcto.
+# Note: This may fail or pass without error but without updating node-3, which is correct.
 
-# Comprobar que node-1/2 no conocen partition_b.txt
+# Verify that node-1/2 do not know about partition_b.txt
 MANIFEST_N1=$(call_api node-1 GET 8081 manifest)
 if echo "$MANIFEST_N1" | grep -q "partition_b.txt"; then
-    echo -e "${RED}❌ Error: Fuga de datos a través de la partición (node-1 conoce partition_b.txt)${NC}"
+    echo -e "${RED}❌ Error: Data leak across the partition (node-1 knows partition_b.txt)${NC}"
     exit 1
 fi
 
-# Comprobar que node-3 no conoce partition_a.txt
+# Verify that node-3 does not know about partition_a.txt
 MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
 if echo "$MANIFEST_N3" | grep -q "partition_a.txt"; then
-    echo -e "${RED}❌ Error: Fuga de datos a través de la partición (node-3 conoce partition_a.txt)${NC}"
+    echo -e "${RED}❌ Error: Data leak across the partition (node-3 knows partition_a.txt)${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ Nodos aislados correctamente. No hay transferencia de metadatos.${NC}"
+echo -e "${GREEN}✅ Nodes isolated correctly. No metadata transfer.${NC}"
 
-# 5. Sanar partición: Conectar nodo-3
+# 5. Heal partition: Connect node-3
 echo "Reconnecting node-3 to network $NETWORK_NAME..."
 docker network connect "$NETWORK_NAME" "$NODE3_CONTAINER"
 sleep 2
 
-# 6. Sincronizar clúster sanado
-echo "Disparando sincronización tras reconexión..."
+# 6. Sync healed cluster
+echo "Triggering synchronization after reconnection..."
 exec_node node-3 ./proxyma sync > /dev/null
 exec_node node-1 ./proxyma sync > /dev/null
 
-# 7. Verificar convergencia
-echo "🔍 Verificando convergencia de metadatos en node-1..."
+# 7. Verify convergence
+echo "🔍 Verifying metadata convergence on node-1..."
 if ! wait_for_condition 10 2 "partition_a.txt" call_api node-1 GET 8081 manifest || \
    ! wait_for_condition 10 2 "partition_b.txt" call_api node-1 GET 8081 manifest; then
-    echo -e "${RED}❌ Error: El clúster no recuperó consistencia tras sanar la partición.${NC}"
+    echo -e "${RED}❌ Error: The cluster did not recover consistency after healing the partition.${NC}"
     exit 1
 fi
 
-# Verificar en node-3
+# Verify on node-3
 MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
 if ! echo "$MANIFEST_N3" | grep -q "partition_a.txt" || ! echo "$MANIFEST_N3" | grep -q "partition_b.txt"; then
-    echo -e "${RED}❌ Error: El nodo 3 reconectado no recibió los metadatos globales.${NC}"
+    echo -e "${RED}❌ Error: The reconnected node 3 did not receive the global metadata.${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}🎉 Caso 2 (Partición de red) completado exitosamente!${NC}"
+echo -e "${GREEN}🎉 Case 2 (Network Partition) completed successfully!${NC}"

@@ -7,7 +7,7 @@ export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
 SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPTPATH/../lib/helpers.sh"
 
-echo -e "${GREEN}🚀 Iniciando caso de prueba: Límites de Recursos cgroups...${NC}"
+echo -e "${GREEN}🚀 Starting test case: Resource Limits cgroups...${NC}"
 
 cleanup_on_exit() {
     local exit_code=$?
@@ -19,50 +19,50 @@ cleanup_on_exit() {
 }
 trap cleanup_on_exit EXIT
 
-# Limpieza inicial
+# Initial cleanup
 cleanup_e2e
 
-# Crear directorios
+# Create directories
 mkdir -p "$E2E_DATA_DIR/node-1"
 mkdir -p "$E2E_DATA_DIR/node-2" # node-low-spec uses node-2 data volume mapping
 
-# Inicializar y levantar Sponsor
+# Initialize and bring up Sponsor
 bootstrap_node node-1 8081
 $COMPOSE_CMD up -d node-1
 sleep 2
 
-# Inicializar y unir node-low-spec
+# Initialize and join node-low-spec
 bootstrap_node node-low-spec 8082
 join_cluster node-low-spec node-1 8081
 
-# Levantar node-low-spec
+# Bring up node-low-spec
 $COMPOSE_CMD up -d node-low-spec
 sleep 2
 
-# Consultar endpoint de telemetría en node-low-spec
-echo "🔍 Consultando endpoint de telemetría..."
+# Query telemetry endpoint on node-low-spec
+echo "🔍 Querying telemetry endpoint..."
 TELEMETRY=$(call_api node-low-spec GET 8082 telemetry)
-echo "Telemetría recibida: $TELEMETRY"
+echo "Telemetry received: $TELEMETRY"
 
-# Verificar que reporta límites de cgroups reales
-# Esperamos cpu_limit = 0.5 y memory_limit = 536870912 (512MB)
+# Verify that it reports real cgroups limits
+# We expect cpu_limit = 0.5 and memory_limit = 536870912 (512MB)
 CPU_LIMIT=$(echo "$TELEMETRY" | grep -o '"cpu_limit":[^,}]*' | cut -d':' -f2)
 MEM_LIMIT=$(echo "$TELEMETRY" | grep -o '"memory_limit":[^,}]*' | cut -d':' -f2)
 
-echo "CPU Limit obtenido: $CPU_LIMIT"
-echo "Memory Limit obtenido: $MEM_LIMIT"
+echo "CPU Limit obtained: $CPU_LIMIT"
+echo "Memory Limit obtained: $MEM_LIMIT"
 
-# Verificar CPU limit (debe ser 0.5)
+# Verify CPU limit (must be 0.5)
 if [ "$CPU_LIMIT" != "0.5" ] && [ "$CPU_LIMIT" != "0.50" ]; then
-    echo -e "${RED}❌ Error: Límite de CPU incorrecto. Esperado 0.5, obtenido $CPU_LIMIT${NC}"
+    echo -e "${RED}❌ Error: Incorrect CPU limit. Expected 0.5, obtained $CPU_LIMIT${NC}"
     exit 1
 fi
 
-# Verificar Memory limit (debe ser 536870912)
+# Verify Memory limit (must be 536870912)
 if [ "$MEM_LIMIT" != "536870912" ]; then
-    echo -e "${RED}❌ Error: Límite de Memoria incorrecto. Esperado 536870912, obtenido $MEM_LIMIT${NC}"
+    echo -e "${RED}❌ Error: Incorrect Memory limit. Expected 536870912, obtained $MEM_LIMIT${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Límites de cgroups reportados correctamente por telemetría (CPU: 0.5, RAM: 512MB).${NC}"
-echo -e "${GREEN}🎉 Caso 5 (cgroups limits) completado exitosamente!${NC}"
+echo -e "${GREEN}✅ cgroups limits reported correctly by telemetry (CPU: 0.5, RAM: 512MB).${NC}"
+echo -e "${GREEN}🎉 Case 5 (cgroups limits) completed successfully!${NC}"

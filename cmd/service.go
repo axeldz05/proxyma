@@ -30,11 +30,11 @@ var (
 
 var serviceCmd = &cobra.Command{
 	Use:   "service",
-	Short: "Manages personalized services of local node",
+	Short: "Manages custom services of the local node",
 }
 
 var addServiceCmd = &cobra.Command{
-	Use:   "add [nombre_servicio_o_archivo.json]",
+	Use:   "add [service_name_or_file.json]",
 	Short: "Add a new service to the local node",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,7 +82,7 @@ var addServiceCmd = &cobra.Command{
 			if schemaFile != "" {
 				data, err := os.ReadFile(schemaFile)
 				if err != nil {
-					return fmt.Errorf("❌ Couldn't read the squeme file: %v", err)
+					return fmt.Errorf("❌ Couldn't read the schema file: %v", err)
 				}
 				if err := json.Unmarshal(data, &schema); err != nil {
 					return fmt.Errorf("❌ Invalid file format: %v", err)
@@ -136,8 +136,8 @@ var addServiceCmd = &cobra.Command{
 }
 
 var removeServiceCmd = &cobra.Command{
-	// (El comando remove queda casi idéntico al que armamos antes,
-	// pero usando `serviceStorage` y validando LoadConfig)
+	// (The remove command remains almost identical to the one we built before,
+	// but using serviceStorage and validating LoadConfig)
 }
 
 func init() {
@@ -153,8 +153,8 @@ func init() {
 	addServiceCmd.Flags().StringVar(&serviceType, "type", "exec", "Service type (exec, grpc)")
 	addServiceCmd.Flags().StringVar(&serviceExec, "exec", "", "Command to execute (e.g: 'python3 main.py')")
 	addServiceCmd.Flags().StringVar(&serviceDesc, "desc", "", "Short description of the service")
-	addServiceCmd.Flags().StringVar(&serviceParams, "param", "", "Añade parámetros en formato 'nombre: tipo, nombre2: tipo' (ej: --param 'img:string, fast:bool')")
-	addServiceCmd.Flags().StringVar(&serviceNoReq, "no-required", "", "Lista de parámetros opcionales separados por coma (ej: --no-required 'fast')")
+	addServiceCmd.Flags().StringVar(&serviceParams, "param", "", "Adds parameters in the format 'name:type, name2:type' (e.g.: --param 'img:string, fast:bool')")
+	addServiceCmd.Flags().StringVar(&serviceNoReq, "no-required", "", "List of optional parameters separated by comma (e.g.: --no-required 'fast')")
 	// Optional flag for the case of importing .json
-	addServiceCmd.Flags().StringVar(&schemaFile, "schema-file", "", "Ruta a un archivo JSON con el ServiceSchema completo")
+	addServiceCmd.Flags().StringVar(&schemaFile, "schema-file", "", "Path to a JSON file containing the complete ServiceSchema")
 }
