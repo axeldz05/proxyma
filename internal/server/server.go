@@ -387,6 +387,9 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		}
 	}
 	s.Config.Logger.Info("Successfully synced topology from sponsor", "peers_count", len(announceResp))
+	go func() {
+		_ = s.ExecuteSync()
+	}()
 	return nil
 }
 
