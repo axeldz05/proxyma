@@ -1,7 +1,7 @@
 package main
 
-import "proxyma/cmd"
+import "proxyma/cmd/proxyma"
 
 func main() {
-	cmd.Execute()
+	proxyma.Execute()
 }
