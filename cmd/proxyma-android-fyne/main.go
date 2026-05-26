@@ -47,9 +47,6 @@ func main() {
 	w := a.NewWindow("Proxyma Android")
 	w.Resize(fyne.NewSize(450, 700))
 
-	appStorage = filepath.Join(a.Storage().RootURI().Path(), "proxyma_data")
-	_ = os.MkdirAll(appStorage, 0755)
-
 	statusLabel := widget.NewLabel("Status: Offline")
 	nodeIDLabel := widget.NewLabel("Node ID: -")
 	nodeAddrLabel := widget.NewLabel("Address: -")
@@ -404,8 +401,13 @@ func main() {
 
 	w.SetContent(tabs)
 
-	startNode()
-	refreshUI()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		appStorage = filepath.Join(a.Storage().RootURI().Path(), "proxyma_data")
+		_ = os.MkdirAll(appStorage, 0755)
+		startNode()
+		fyne.Do(refreshUI)
+	}()
 
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
