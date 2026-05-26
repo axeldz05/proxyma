@@ -43,7 +43,7 @@ var (
 )
 
 func main() {
-	a := app.New()
+	a := app.NewWithID("com.proxyma.android")
 	w := a.NewWindow("Proxyma Android")
 	w.Resize(fyne.NewSize(450, 700))
 
@@ -90,7 +90,9 @@ func main() {
 			nid := nodeIDEntry.Text
 			port := portEntry.Text
 			if token == "" {
-				dialog.ShowError(errors.New("Smart Token is required"), w)
+				fyne.Do(func() {
+					dialog.ShowError(errors.New("Smart Token is required"), w)
+				})
 				return
 			}
 			if nid == "" {
@@ -105,13 +107,17 @@ func main() {
 
 			payload, secret, err := p2p.ParseSmartToken(token)
 			if err != nil {
-				dialog.ShowError(err, w)
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
 				return
 			}
 
 			csrPEM, privKeyPEM, err := p2p.GenerateNodeCSR(nid)
 			if err != nil {
-				dialog.ShowError(err, w)
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
 				return
 			}
 
@@ -148,19 +154,25 @@ func main() {
 
 			resp, err := client.Do(req)
 			if err != nil {
-				dialog.ShowError(err, w)
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
 				return
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				dialog.ShowError(fmt.Errorf("cluster rejected join: status %d", resp.StatusCode), w)
+				fyne.Do(func() {
+					dialog.ShowError(fmt.Errorf("cluster rejected join: status %d", resp.StatusCode), w)
+				})
 				return
 			}
 
 			var joinResp protocol.JoinResponse
 			if err := json.NewDecoder(resp.Body).Decode(&joinResp); err != nil {
-				dialog.ShowError(err, w)
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
 				return
 			}
 
@@ -185,10 +197,11 @@ func main() {
 			}
 			_ = protocol.SaveConfig(cfg)
 
-			dialog.ShowInformation("Success", "Joined cluster successfully", w)
-			
-			startNode()
-			refreshUI()
+			fyne.Do(func() {
+				dialog.ShowInformation("Success", "Joined cluster successfully", w)
+				startNode()
+				refreshUI()
+			})
 		}()
 	})
 
@@ -231,7 +244,7 @@ func main() {
 		}
 		go func() {
 			_ = s.ExecuteSync()
-			refreshUI()
+			fyne.Do(refreshUI)
 		}()
 	})
 
@@ -292,15 +305,17 @@ func main() {
 				}
 			}
 			
-			servicesListContainer.Objects = nil
-			for name := range names {
-				svcName := name
-				btn := widget.NewButton(svcName, func() {
-					loadServiceDetails(svcName, w, serviceDetailContainer)
-				})
-				servicesListContainer.Add(btn)
-			}
-			servicesListContainer.Refresh()
+			fyne.Do(func() {
+				servicesListContainer.Objects = nil
+				for name := range names {
+					svcName := name
+					btn := widget.NewButton(svcName, func() {
+						loadServiceDetails(svcName, w, serviceDetailContainer)
+					})
+					servicesListContainer.Add(btn)
+				}
+				servicesListContainer.Refresh()
+			})
 		}()
 	})
 
@@ -357,15 +372,10 @@ func main() {
 
 			lbl := widget.NewLabel(fmt.Sprintf("%s (v%d, %s, %s)", fileEntry.Name, fileEntry.Version, byteCountSI(fileEntry.Size), statusText))
 
-			var subBtn *widget.Button
-			isSub := false
-			s.Storage.GetVFSSnapshot() // trigger read check logic if needed
-			
-			subBtn = widget.NewButton("Subscribe", func() {
+			subBtn := widget.NewButton("Subscribe", func() {
 				s.Storage.SetSubscription(fileEntry.Name, true)
 				refreshUI()
 			})
-			_ = isSub
 			
 			exportBtn := widget.NewButton("Export", func() {
 				if !hasLocal {
@@ -400,7 +410,7 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
 		for range ticker.C {
-			refreshUI()
+			fyne.Do(refreshUI)
 		}
 	}()
 
@@ -475,170 +485,182 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 	go func() {
 		addr, schema, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
 		if err != nil {
-			dialog.ShowError(err, w)
+			fyne.Do(func() {
+				dialog.ShowError(err, w)
+			})
 			return
 		}
 
-		dest.Objects = nil
-		dest.Add(widget.NewLabel("Service: " + schema.Name))
-		dest.Add(widget.NewLabel("Description: " + schema.Description))
-		dest.Add(widget.NewLabel("Provider Address: " + addr))
-
 		inputs := make(map[string]any)
 
-		for pName, pRules := range schema.Parameters {
-			paramName := pName
-			rules := pRules
-			dest.Add(widget.NewLabel(paramName + " (" + rules.Type + ", Required: " + strconv.FormatBool(rules.Required) + ")"))
+		fyne.Do(func() {
+			dest.Objects = nil
+			dest.Add(widget.NewLabel("Service: " + schema.Name))
+			dest.Add(widget.NewLabel("Description: " + schema.Description))
+			dest.Add(widget.NewLabel("Provider Address: " + addr))
 
-			if rules.Type == "bool" {
-				chk := widget.NewCheck("", func(val bool) {
-					inputs[paramName] = val
-				})
-				dest.Add(chk)
-			} else if rules.Type == "int" {
-				entry := widget.NewEntry()
-				entry.OnChanged = func(val string) {
-					v, _ := strconv.Atoi(val)
-					inputs[paramName] = v
-				}
-				dest.Add(entry)
-			} else if rules.Type == "float" {
-				entry := widget.NewEntry()
-				entry.OnChanged = func(val string) {
-					v, _ := strconv.ParseFloat(val, 64)
-					inputs[paramName] = v
-				}
-				dest.Add(entry)
-			} else {
-				if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
-					btnContainer := container.NewVBox()
-					valLabel := widget.NewLabel("No image selected")
-					
-					chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
-						dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
-							if take {
-								tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
-								err := capturePhoto(tempPath)
-								if err != nil {
-									dialog.ShowError(err, w)
-									return
-								}
-								dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
-									if proceed {
-										f, err := os.Open(tempPath)
-										if err != nil {
-											dialog.ShowError(err, w)
+			for pName, pRules := range schema.Parameters {
+				paramName := pName
+				rules := pRules
+				dest.Add(widget.NewLabel(paramName + " (" + rules.Type + ", Required: " + strconv.FormatBool(rules.Required) + ")"))
+
+				if rules.Type == "bool" {
+					chk := widget.NewCheck("", func(val bool) {
+						inputs[paramName] = val
+					})
+					dest.Add(chk)
+				} else if rules.Type == "int" {
+					entry := widget.NewEntry()
+					entry.OnChanged = func(val string) {
+						v, _ := strconv.Atoi(val)
+						inputs[paramName] = v
+					}
+					dest.Add(entry)
+				} else if rules.Type == "float" {
+					entry := widget.NewEntry()
+					entry.OnChanged = func(val string) {
+						v, _ := strconv.ParseFloat(val, 64)
+						inputs[paramName] = v
+					}
+					dest.Add(entry)
+				} else {
+					if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
+						btnContainer := container.NewVBox()
+						valLabel := widget.NewLabel("No image selected")
+						
+						chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
+							dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
+								if take {
+									tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
+									err := capturePhoto(tempPath)
+									if err != nil {
+										dialog.ShowError(err, w)
+										return
+									}
+									dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
+										if proceed {
+											f, err := os.Open(tempPath)
+											if err != nil {
+												dialog.ShowError(err, w)
+												return
+											}
+											defer f.Close()
+											vfsName := filepath.Base(tempPath)
+											err = s.Storage.SaveLocalFile(vfsName, f)
+											if err != nil {
+												dialog.ShowError(err, w)
+												return
+											}
+											inputs[paramName] = vfsName
+											valLabel.SetText(vfsName)
+										}
+									}, w)
+								} else {
+									dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+										if err != nil || reader == nil {
 											return
 										}
-										defer f.Close()
-										vfsName := filepath.Base(tempPath)
-										err = s.Storage.SaveLocalFile(vfsName, f)
+										defer reader.Close()
+										vfsName := reader.URI().Name()
+										err = s.Storage.SaveLocalFile(vfsName, reader)
 										if err != nil {
 											dialog.ShowError(err, w)
 											return
 										}
 										inputs[paramName] = vfsName
 										valLabel.SetText(vfsName)
-									}
-								}, w)
-							} else {
-								dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-									if err != nil || reader == nil {
-										return
-									}
-									defer reader.Close()
-									vfsName := reader.URI().Name()
-									err = s.Storage.SaveLocalFile(vfsName, reader)
-									if err != nil {
-										dialog.ShowError(err, w)
-										return
-									}
-									inputs[paramName] = vfsName
-									valLabel.SetText(vfsName)
-								}, w)
-							}
-						}, w)
-					})
-					btnContainer.Add(chooseBtn)
-					btnContainer.Add(valLabel)
-					dest.Add(btnContainer)
-				} else {
-					entry := widget.NewEntry()
-					entry.OnChanged = func(val string) {
-						inputs[paramName] = val
+									}, w)
+								}
+							}, w)
+						})
+						btnContainer.Add(chooseBtn)
+						btnContainer.Add(valLabel)
+						dest.Add(btnContainer)
+					} else {
+						entry := widget.NewEntry()
+						entry.OnChanged = func(val string) {
+							inputs[paramName] = val
+						}
+						dest.Add(entry)
 					}
-					dest.Add(entry)
 				}
 			}
-		}
 
-		runBtn := widget.NewButton("Run Service", func() {
-			go func() {
-				taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
-				
-				var targetPeerID string
-				for pid, paddr := range s.GetPeersCopy() {
-					if paddr == addr {
-						targetPeerID = pid
-						break
-					}
-				}
-				if targetPeerID == "" {
-					targetPeerID = addr
-				}
-
-				payloadMap := make(map[string]any)
-				for k, v := range inputs {
-					payloadMap[k] = v
-				}
-
-				req := protocol.TaskRequest{
-					TaskID:  taskID,
-					Service: schema.Name,
-					ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
-					Payload: payloadMap,
-				}
-
-				err = s.DispatchTask(targetPeerID, req)
-				if err != nil {
-					dialog.ShowError(err, w)
-					return
-				}
-
-				progress := dialog.NewProgress("Running Service", "Executing compute task...", w)
-				progress.Show()
-
-				var resp protocol.ServiceTaskResponse
-				completed := false
-				for i := 0; i < 30; i++ {
-					time.Sleep(1 * time.Second)
-					r, ok := s.Compute.GetTaskResponse(taskID)
-					if ok {
-						if r.Status == "completed" || r.Status == "failed" {
-							resp = r
-							completed = true
+			runBtn := widget.NewButton("Run Service", func() {
+				go func() {
+					taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
+					
+					var targetPeerID string
+					for pid, paddr := range s.GetPeersCopy() {
+						if paddr == addr {
+							targetPeerID = pid
 							break
 						}
 					}
-				}
-				progress.Hide()
+					if targetPeerID == "" {
+						targetPeerID = addr
+					}
 
-				if !completed {
-					dialog.ShowError(errors.New("Task execution timed out"), w)
-					return
-				}
+					payloadMap := make(map[string]any)
+					for k, v := range inputs {
+						payloadMap[k] = v
+					}
 
-				if resp.Status == "failed" {
-					dialog.ShowError(errors.New(resp.Error), w)
-				} else {
-					outBytes, _ := json.MarshalIndent(resp.Outputs, "", "  ")
-					dialog.ShowInformation("Execution Complete", string(outBytes), w)
-				}
-			}()
+					req := protocol.TaskRequest{
+						TaskID:  taskID,
+						Service: schema.Name,
+						ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
+						Payload: payloadMap,
+					}
+
+					err = s.DispatchTask(targetPeerID, req)
+					if err != nil {
+						fyne.Do(func() {
+							dialog.ShowError(err, w)
+						})
+						return
+					}
+
+					var progress *dialog.ProgressDialog
+					fyne.Do(func() {
+						progress = dialog.NewProgress("Running Service", "Executing compute task...", w)
+						progress.Show()
+					})
+
+					var resp protocol.ServiceTaskResponse
+					completed := false
+					for i := 0; i < 30; i++ {
+						time.Sleep(1 * time.Second)
+						r, ok := s.Compute.GetTaskResponse(taskID)
+						if ok {
+							if r.Status == "completed" || r.Status == "failed" {
+								resp = r
+								completed = true
+								break
+							}
+						}
+					}
+					
+					fyne.Do(func() {
+						if progress != nil {
+							progress.Hide()
+						}
+						if !completed {
+							dialog.ShowError(errors.New("Task execution timed out"), w)
+							return
+						}
+						if resp.Status == "failed" {
+							dialog.ShowError(errors.New(resp.Error), w)
+						} else {
+							outBytes, _ := json.MarshalIndent(resp.Outputs, "", "  ")
+							dialog.ShowInformation("Execution Complete", string(outBytes), w)
+						}
+					})
+				}()
+			})
+			dest.Add(runBtn)
+			dest.Refresh()
 		})
-		dest.Add(runBtn)
-		dest.Refresh()
 	}()
 }
 
