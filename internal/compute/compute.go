@@ -59,6 +59,10 @@ func (c *ComputeEngine) GetService(serviceName string) (protocol.ServiceSchema, 
 	return c.registry.Get(serviceName)
 }
 
+func (c *ComputeEngine) ListServices() []string {
+	return c.registry.ListAll()
+}
+
 func (c *ComputeEngine) RegisterNewService(schema protocol.ServiceSchema, handler ServiceHandler) error {
 	if err := c.registry.Register(schema, handler); err != nil {
 		c.logger.Error("[Compute Engine] - Couldn't register new service", "error", err)

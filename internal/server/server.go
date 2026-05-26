@@ -436,6 +436,16 @@ func (s *Server) inviteSweeper(ctx context.Context) {
 	}
 }
 
+func (s *Server) AddPendingInvite(secret string, expiration time.Time) {
+	s.inviteMu.Lock()
+	defer s.inviteMu.Unlock()
+	s.pendingInvites[secret] = expiration
+}
+
+func (s *Server) DiscoverServices(ctx context.Context, peerID string) ([]string, error) {
+	return s.peerClient.DiscoverServices(ctx, peerID)
+}
+
 
 func (s *Server) GetPeerRecord(peerID string) (protocol.AddressRecord, bool) {
 	s.peersMu.RLock()

@@ -43,6 +43,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /services/submit", s.Compute.HandleServiceSubmit)
 	mux.HandleFunc("POST /services/callback", s.Compute.HandleServiceCallback)
 	mux.HandleFunc("POST /services/notify", s.HandleServiceNotify)
+	mux.HandleFunc("GET /services", s.HandleGetServices)
 
 	mux.HandleFunc("GET /peers", s.GetPeers)
 	mux.HandleFunc("POST /peers/announce", s.HandleAnnounce)
@@ -265,4 +266,8 @@ func (s *Server) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	utils.RespondJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
+	utils.RespondJSON(w, http.StatusOK, s.Compute.ListServices())
 }
