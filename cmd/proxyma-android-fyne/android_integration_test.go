@@ -55,7 +55,7 @@ func TestAndroidConfigLoad(t *testing.T) {
 
 	// 5. Start the app on the emulator
 	t.Log("Starting the app on the emulator...")
-	cmdStart := exec.Command("adb", "shell", "am", "start", "-n", "com.proxyma.android/org.fyne.fyne.app.MainActivity")
+	cmdStart := exec.Command("adb", "shell", "am", "start", "-n", "com.proxyma.android/org.golang.app.GoNativeActivity")
 	out, err = cmdStart.CombinedOutput()
 	require.NoError(t, err, "Failed to start app: %s", string(out))
 
