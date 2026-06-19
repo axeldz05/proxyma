@@ -44,33 +44,28 @@ func TestAndroidConfigLoad(t *testing.T) {
 	// 4. Clear logcat to have fresh logs
 	_ = exec.Command("adb", "logcat", "-c").Run()
 
+	// Dump logs automatically on failure
+	t.Cleanup(func() {
+		if t.Failed() {
+			cmdLogs := exec.Command("adb", "logcat", "-d")
+			logOut, _ := cmdLogs.CombinedOutput()
+			t.Logf("Logcat output during failure:\n%s", string(logOut))
+		}
+	})
+
 	// 5. Start the app on the emulator
 	t.Log("Starting the app on the emulator...")
 	cmdStart := exec.Command("adb", "shell", "am", "start", "-n", "com.proxyma.android/org.fyne.fyne.app.MainActivity")
 	out, err = cmdStart.CombinedOutput()
 	require.NoError(t, err, "Failed to start app: %s", string(out))
 
-	// 6. Wait for config load/creation (it sleeps 2 seconds in main.go)
+	// 6. Wait for config load/creation (it sleeps 2 seconds in main.go) using dynamic polling
 	t.Log("Waiting for app to initialize and write config...")
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		err1 := exec.Command("adb", "shell", "ls", "/data/data/com.proxyma.android/files/proxyma_data/config.json").Run()
+		err2 := exec.Command("adb", "shell", "ls", "/data/user/0/com.proxyma.android/files/proxyma_data/config.json").Run()
+		return err1 == nil || err2 == nil
+	}, 6*time.Second, 200*time.Millisecond, "config.json was not created/loaded on the device!")
 
-	// 7. Verify config.json is created under the application storage
-	t.Log("Checking if config.json exists on the device...")
-	// We check both /data/data and /data/user/0 paths as they map to the same internal storage
-	cmdCheckFile1 := exec.Command("adb", "shell", "ls", "/data/data/com.proxyma.android/files/proxyma_data/config.json")
-	fileOut1, errFile1 := cmdCheckFile1.CombinedOutput()
-
-	cmdCheckFile2 := exec.Command("adb", "shell", "ls", "/data/user/0/com.proxyma.android/files/proxyma_data/config.json")
-	fileOut2, errFile2 := cmdCheckFile2.CombinedOutput()
-
-	// Collect logs for debugging if we fail
-	cmdLogs := exec.Command("adb", "logcat", "-d")
-	logOut, _ := cmdLogs.CombinedOutput()
-	t.Logf("Logcat output during run:\n%s", string(logOut))
-
-	// We require at least one of the paths to succeed in locating config.json
-	if errFile1 != nil && errFile2 != nil {
-		t.Fatalf("config.json was not created/loaded on the device!\nPath 1 Output: %s\nPath 2 Output: %s", string(fileOut1), string(fileOut2))
-	}
 	t.Log("Integration test passed: config.json exists and is readable.")
 }
