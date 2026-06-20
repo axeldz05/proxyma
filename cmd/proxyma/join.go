@@ -14,6 +14,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -62,7 +63,10 @@ var joinCmd = &cobra.Command{
 				},
 			},
 		}
-		client := &http.Client{Transport: tr}
+		client := &http.Client{
+			Transport: tr,
+			Timeout:   3 * time.Second,
+		}
 
 		reqBody := protocol.JoinRequest{
 			Secret:  secret,
@@ -102,6 +106,9 @@ var joinCmd = &cobra.Command{
 
 		if resp == nil {
 			fmt.Printf("❌ There was an error trying to connect to the cluster: %v\n", lastErr)
+			fmt.Println("\n💡 Tip: If devices are on the same Wi-Fi network:")
+			fmt.Println("1. Ensure the hosting PC's firewall allows incoming traffic on port 8080.")
+			fmt.Println("2. Ensure AP/Client Isolation is disabled on the router.")
 			os.Exit(1)
 		}
 		defer func() { _ = resp.Body.Close() }()

@@ -32,29 +32,35 @@ func TestAndroidConfigLoad(t *testing.T) {
 	}
 	t.Log("APK built successfully.")
 
-	adbCmd := func(args ...string) *exec.Cmd {
-		serial := os.Getenv("ANDROID_SERIAL")
-		if serial == "" {
-			cmdDevs := exec.Command("adb", "devices")
-			outDevs, errDevs := cmdDevs.Output()
-			if errDevs == nil {
-				lines := strings.Split(string(outDevs), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if line == "" || strings.HasPrefix(line, "List of") {
-						continue
-					}
-					parts := strings.Fields(line)
-					if len(parts) >= 2 && parts[1] == "device" {
-						serial = parts[0]
-						break
-					}
+	serial := os.Getenv("ANDROID_SERIAL")
+	if serial == "" {
+		cmdDevs := exec.Command("adb", "devices")
+		outDevs, errDevs := cmdDevs.Output()
+		if errDevs == nil {
+			lines := strings.Split(string(outDevs), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "List of") {
+					continue
+				}
+				parts := strings.Fields(line)
+				if len(parts) >= 2 && parts[1] == "device" {
+					serial = parts[0]
+					break
 				}
 			}
-			if serial == "" {
-				serial = "emulator-5554"
-			}
 		}
+		if serial == "" {
+			serial = "emulator-5554"
+		}
+	}
+
+	t.Logf("Target Android Device Serial: %s", serial)
+	if !strings.HasPrefix(serial, "emulator-") {
+		t.Log("⚠️ WARNING: Target device is a physical phone. If Google Play Protect blocks the install with 'Unsafe app blocked', please click 'Install anyway' on the phone screen to continue.")
+	}
+
+	adbCmd := func(args ...string) *exec.Cmd {
 		allArgs := append([]string{"-s", serial}, args...)
 		return exec.Command("adb", allArgs...)
 	}

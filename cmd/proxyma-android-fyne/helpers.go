@@ -141,7 +141,10 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 					},
 				},
 			}
-			client := &http.Client{Transport: tr}
+			client := &http.Client{
+				Transport: tr,
+				Timeout:   3 * time.Second,
+			}
 
 			localIP := getLocalIP()
 			localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
@@ -191,7 +194,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 
 			if resp == nil {
 				detailedErrorMsg := fmt.Sprintf(
-					"Failed to join cluster.\n\nAll attempted addresses failed:\n%s\n\nSecret Prefix: %s...\nCA Hash: %s",
+					"Failed to join cluster.\n\nAll attempted addresses failed:\n%s\n\nSecret Prefix: %s...\nCA Hash: %s\n\n💡 Tip: If devices are on the same Wi-Fi network:\n1. Ensure the hosting PC's firewall allows incoming traffic on port 8080.\n2. Ensure AP/Client Isolation is disabled on the router.",
 					strings.Join(errs, "\n"),
 					truncateString(secret, 8),
 					truncateString(payload.CAHash, 12),
