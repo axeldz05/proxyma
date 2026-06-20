@@ -2,7 +2,7 @@
 
 ## 20-06-2026
 ### Refactorización del Servidor (Granularidad Continua)
-* **Subcomponentes del Servidor**: Se dividió el struct monolítico `Server` en cuatro administradores independientes y seguros para subprocesos: `PeerRegistry` (contactos y servicios), `InviteManager` (tokens de emparejamiento), `BandwidthTracker` (telemetría de red) y `RelayManager` (colas y canales de relay). Se mantuvieron métodos delegadores en `Server` para preservar la compatibilidad con el resto del código y los tests.
+* **Subcomponentes del Servidor**: Se dividió el struct monolítico `Server` en cuatro administradores independientes: `PeerRegistry` (contactos y servicios), `InviteManager` (tokens de emparejamiento), `BandwidthTracker` (telemetría de red) y `RelayManager` (colas y canales de relay). Se mantuvieron métodos delegadores en `Server` para preservar la compatibilidad con el resto del código y los tests.
 
 ### Compresión Semántica y Deduplicación (UI & Core)
 * **CountingReadCloser**: Centralizado en `internal/utils` para eliminar la duplicidad en el rastreo de progreso de lectura.
@@ -12,7 +12,7 @@
 * **Cálculo de Ancho de Banda**: Simplificado en `bandwidth.go` abstrayendo los bucles de podado e históricos en `pruneHistory` y `sumCategory`.
 
 ### Limpieza de Código Muerto
-* **Eliminación de funciones redundantes**: Se borraron funciones genéricas y métodos sin uso (`Map`, `FindFileAndDo`, `ExistsFileRelativeToBase`) bajo `internal/storage/physical` para reducir el costo de mantenimiento.
+* **Eliminación de funciones redundantes**: Se borraron funciones genéricas y métodos sin uso (`Map`, `FindFileAndDo`, `ExistsFileRelativeToBase`) bajo `internal/storage/physical`.
 
 ## 21-05-2026
 ### Relay y STUN
