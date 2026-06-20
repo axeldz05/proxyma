@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,25 @@ func TestAndroidConfigLoad(t *testing.T) {
 	adbCmd := func(args ...string) *exec.Cmd {
 		serial := os.Getenv("ANDROID_SERIAL")
 		if serial == "" {
-			serial = "emulator-5554"
+			cmdDevs := exec.Command("adb", "devices")
+			outDevs, errDevs := cmdDevs.Output()
+			if errDevs == nil {
+				lines := strings.Split(string(outDevs), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" || strings.HasPrefix(line, "List of") {
+						continue
+					}
+					parts := strings.Fields(line)
+					if len(parts) >= 2 && parts[1] == "device" {
+						serial = parts[0]
+						break
+					}
+				}
+			}
+			if serial == "" {
+				serial = "emulator-5554"
+			}
 		}
 		allArgs := append([]string{"-s", serial}, args...)
 		return exec.Command("adb", allArgs...)
@@ -71,9 +90,8 @@ func TestAndroidConfigLoad(t *testing.T) {
 	// 6. Wait for config load/creation (it sleeps 2 seconds in main.go) using dynamic polling
 	t.Log("Waiting for app to initialize and write config...")
 	require.Eventually(t, func() bool {
-		err1 := adbCmd("shell", "ls", "/data/data/com.proxyma.android/files/proxyma_data/config.json").Run()
-		err2 := adbCmd("shell", "ls", "/data/user/0/com.proxyma.android/files/proxyma_data/config.json").Run()
-		return err1 == nil || err2 == nil
+		err1 := adbCmd("shell", "run-as", "com.proxyma.android", "ls", "files/proxyma_data/config.json").Run()
+		return err1 == nil
 	}, 6*time.Second, 200*time.Millisecond, "config.json was not created/loaded on the device!")
 
 	t.Log("Integration test passed: config.json exists and is readable.")

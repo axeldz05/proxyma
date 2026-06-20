@@ -2,9 +2,11 @@ package main
 
 import (
 	"crypto/tls"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +28,51 @@ var (
 	appLogger  *slog.Logger
 )
 
+type LogRecord struct {
+	Timestamp time.Time
+	Level     string // "INFO", "WARN", "ERROR", "DEBUG"
+	Message   string
+}
+
+var (
+	logBuffer   []LogRecord
+	logBufferMu sync.Mutex
+	logUIUpdate func()
+)
+
+type LogWriter struct {
+	Stdout io.Writer
+}
+
+func (w *LogWriter) Write(p []byte) (n int, err error) {
+	n, err = w.Stdout.Write(p)
+	line := string(p)
+	level := "INFO"
+	if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=error") {
+		level = "ERROR"
+	} else if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=warn") {
+		level = "WARN"
+	} else if strings.Contains(line, "level=DEBUG") || strings.Contains(line, "level=debug") {
+		level = "DEBUG"
+	}
+
+	logBufferMu.Lock()
+	logBuffer = append(logBuffer, LogRecord{
+		Timestamp: time.Now(),
+		Level:     level,
+		Message:   strings.TrimSpace(line),
+	})
+	if len(logBuffer) > 500 {
+		logBuffer = logBuffer[len(logBuffer)-500:]
+	}
+	logBufferMu.Unlock()
+
+	if logUIUpdate != nil {
+		logUIUpdate()
+	}
+	return n, err
+}
+
 func main() {
 	a := app.NewWithID("com.proxyma.android")
 	w := a.NewWindow("Proxyma Android")
@@ -40,7 +87,16 @@ func main() {
 		vfsFilesContainer:      container.NewVBox(),
 		servicesListContainer:  container.NewVBox(),
 		serviceDetailContainer: container.NewVBox(),
+		showInfo:               true,
+		showWarn:               true,
+		showError:              true,
+		logsContainer:          container.NewVBox(),
 	}
+
+	logUIUpdate = func() {
+		fyne.Do(ui.refreshLogs)
+	}
+
 	tokenEntry := widget.NewEntry()
 	nodeIDEntry := widget.NewEntry()
 	portEntry := widget.NewEntry()
@@ -51,7 +107,7 @@ func main() {
 	inviteTokenEntry := widget.NewEntry()
 	inviteTokenEntry.SetPlaceHolder("Generated smart token will appear here")
 	generateInviteBtn := widget.NewButton("Generate Invite Token", generateInviteToken(w, inviteTokenEntry))
-	joinBtn := widget.NewButton("Join Cluster", joinCluster(tokenEntry.Text, w, nodeIDEntry.Text, portEntry.Text, ui.Refresh))
+	joinBtn := widget.NewButton("Join Cluster", joinCluster(tokenEntry, w, nodeIDEntry, portEntry, ui.Refresh))
 
 	statusCard := widget.NewCard("Node Status", "", container.NewVBox(
 		ui.statusLabel,
@@ -100,18 +156,42 @@ func main() {
 	)
 	tabServices.SetOffset(0.4)
 
+	infoCheck := widget.NewCheck("Info", func(val bool) {
+		ui.showInfo = val
+		ui.refreshLogs()
+	})
+	infoCheck.SetChecked(true)
+
+	warnCheck := widget.NewCheck("Warning", func(val bool) {
+		ui.showWarn = val
+		ui.refreshLogs()
+	})
+	warnCheck.SetChecked(true)
+
+	errorCheck := widget.NewCheck("Error", func(val bool) {
+		ui.showError = val
+		ui.refreshLogs()
+	})
+	errorCheck.SetChecked(true)
+
+	logToggles := container.NewHBox(infoCheck, warnCheck, errorCheck)
+	scrollLogs := container.NewScroll(ui.logsContainer)
+	tabLogs := container.NewBorder(logToggles, nil, nil, nil, scrollLogs)
+
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Status", tabStatus),
 		container.NewTabItem("Pairing", tabPairing),
 		container.NewTabItem("VFS", tabVFS),
 		container.NewTabItem("Services", tabServices),
+		container.NewTabItem("Logs", tabLogs),
 	)
 
 	w.SetContent(tabs)
 
 	go func() {
 		time.Sleep(2000 * time.Millisecond)
-		appLogger = protocol.NewLogger(os.Stdout, false)
+		writer := &LogWriter{Stdout: os.Stdout}
+		appLogger = protocol.NewLogger(writer, true)
 		prefPath := a.Preferences().StringWithFallback("app_storage_path", "")
 		if prefPath != "" {
 			appStorage = prefPath
@@ -158,4 +238,3 @@ func main() {
 	w.ShowAndRun()
 	stopNode()
 }
-

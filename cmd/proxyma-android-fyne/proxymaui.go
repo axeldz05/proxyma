@@ -26,6 +26,10 @@ type ProxymaUI struct {
 	vfsFilesContainer      *fyne.Container
 	servicesListContainer  *fyne.Container
 	serviceDetailContainer *fyne.Container
+	showInfo               bool
+	showWarn               bool
+	showError              bool
+	logsContainer          *fyne.Container
 }
 
 func (ui *ProxymaUI) SyncVFS(w fyne.Window) func() {
@@ -266,4 +270,39 @@ func (ui *ProxymaUI) Refresh() {
 		}
 		ui.servicesListContainer.Refresh()
 	}
+}
+
+func (ui *ProxymaUI) refreshLogs() {
+	if ui.logsContainer == nil {
+		return
+	}
+	ui.logsContainer.Objects = []fyne.CanvasObject{}
+
+	logBufferMu.Lock()
+	records := make([]LogRecord, len(logBuffer))
+	copy(records, logBuffer)
+	logBufferMu.Unlock()
+
+	for i := len(records) - 1; i >= 0; i-- {
+		rec := records[i]
+		if rec.Level == "INFO" && !ui.showInfo {
+			continue
+		}
+		if rec.Level == "WARN" && !ui.showWarn {
+			continue
+		}
+		if rec.Level == "ERROR" && !ui.showError {
+			continue
+		}
+
+		prefix := "ℹ️ "
+		if rec.Level == "ERROR" {
+			prefix = "❌ "
+		} else if rec.Level == "WARN" {
+			prefix = "⚠️ "
+		}
+
+		ui.logsContainer.Add(widget.NewLabel(prefix + rec.Message))
+	}
+	ui.logsContainer.Refresh()
 }
