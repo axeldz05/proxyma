@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
@@ -38,6 +39,13 @@ type Server struct {
 	relayQueues       map[string]chan protocol.RelayRequest
 	relayWaiters      map[string]chan protocol.RelayResponse
 	relayMu           sync.RWMutex
+	activePeers       map[string]bool
+	activePeersMu     sync.RWMutex
+	totalSent         int64
+	totalReceived     int64
+	sentHistory       []TransferRecord
+	receivedHistory   []TransferRecord
+	bandwidthMu       sync.RWMutex
 }
 
 type DownloadJob struct {
@@ -46,6 +54,9 @@ type DownloadJob struct {
 }
 
 func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
+	if cfg.Logger == nil {
+		panic("server.New: cfg.Logger must not be nil — use protocol.NewLogger to create it")
+	}
 	s := &Server{
 		Config:          cfg,
 		peers:           make(map[string]protocol.AddressRecord),
@@ -55,7 +66,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		pendingInvites:  make(map[string]time.Time),
 		relayQueues:  make(map[string]chan protocol.RelayRequest),
 		relayWaiters: make(map[string]chan protocol.RelayResponse),
-
+		activePeers:  make(map[string]bool),
 	}
 
 	if updater, ok := s.peerClient.(interface {
@@ -90,7 +101,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
-	mux := s.handler
+	mux := s.wrapWithBandwidthCounting(s.handler)
 	addr := fmt.Sprintf(":%s", strings.Split(s.Config.Address, ":")[2])
 
 	hs := &http.Server{
@@ -108,6 +119,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.Config.Logger.Info("Initiating shutdown...")
+	s.announceOffline(ctx)
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			s.Config.Logger.Error("HTTP server shutdown failed", "error", err)
@@ -211,6 +223,50 @@ func (s *Server) LoadLocalServices() {
 	}
 }
 
+func (s *Server) SetPeerOnline(peerID string, online bool) {
+	s.activePeersMu.Lock()
+	defer s.activePeersMu.Unlock()
+	s.activePeers[peerID] = online
+}
+
+func (s *Server) IsPeerOnline(peerID string) bool {
+	s.activePeersMu.RLock()
+	defer s.activePeersMu.RUnlock()
+	return s.activePeers[peerID]
+}
+
+func (s *Server) RemovePeer(peerID string) {
+	s.peersMu.Lock()
+	delete(s.peers, peerID)
+	s.peersMu.Unlock()
+
+	s.activePeersMu.Lock()
+	delete(s.activePeers, peerID)
+	s.activePeersMu.Unlock()
+
+	s.clusterServicesMu.Lock()
+	delete(s.clusterServices, peerID)
+	s.clusterServicesMu.Unlock()
+
+	s.Config.Logger.Info("peerID removed from peers", "peerID", peerID)
+}
+
+func (s *Server) announceLeave(ctx context.Context) {
+	peers := s.GetPeersCopy()
+	payload := map[string]string{"id": s.Config.ID}
+	for peerID := range peers {
+		_ = s.peerClient.Leave(ctx, peerID, payload)
+	}
+}
+
+func (s *Server) announceOffline(ctx context.Context) {
+	peers := s.GetPeersCopy()
+	payload := map[string]string{"id": s.Config.ID}
+	for peerID := range peers {
+		_ = s.peerClient.Offline(ctx, peerID, payload)
+	}
+}
+
 func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
 	s.clusterServicesMu.RLock()
 	defer s.clusterServicesMu.RUnlock()
@@ -253,6 +309,7 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	}
 
 	s.peers[peerID] = addressRecord
+	s.SetPeerOnline(peerID, true)
 	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
 
 	if updater, ok := s.peerClient.(interface {
@@ -275,6 +332,9 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 			// it's assumed that, if the peer reconnects to the cluster, it automatically
 			// executes a sync.
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
+			s.SetPeerOnline(peerID, false)
+		} else {
+			s.SetPeerOnline(peerID, true)
 		}
 	}
 }
@@ -295,6 +355,9 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 			bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
 			if err != nil {
 				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
+				s.SetPeerOnline(peerID, false)
+			} else {
+				s.SetPeerOnline(peerID, true)
 			}
 			if err != nil || !bid.CanAccept {
 				return
@@ -332,8 +395,10 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 	err := s.peerClient.SubmitTask(ctx, targetPeerID, req)
 	if err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
+		s.SetPeerOnline(targetPeerID, false)
 		return fmt.Errorf("failed to dispatch task to peer: %v", err)
 	}
+	s.SetPeerOnline(targetPeerID, true)
 	return nil
 }
 
@@ -356,8 +421,10 @@ func (s *Server) ExecuteSync() error {
 		cancel()
 		if err != nil {
 			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
+			s.SetPeerOnline(peerID, false)
 			continue
 		}
+		s.SetPeerOnline(peerID, true)
 		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
 		for _, file := range missingFiles {
 			s.downloadQueue <- DownloadJob{
@@ -460,4 +527,176 @@ func (s *Server) GetPeersRecordCopy() map[string]protocol.AddressRecord {
 	snapshot := make(map[string]protocol.AddressRecord, len(s.peers))
 	maps.Copy(snapshot, s.peers)
 	return snapshot
+}
+
+type TransferRecord struct {
+	Timestamp time.Time
+	Bytes     int64
+	Category  string
+}
+
+func (s *Server) RecordBytesSent(n int64, path string) {
+	s.bandwidthMu.Lock()
+	defer s.bandwidthMu.Unlock()
+	s.totalSent += n
+	s.sentHistory = append(s.sentHistory, TransferRecord{
+		Timestamp: time.Now(),
+		Bytes:     n,
+		Category:  categorizePath(path),
+	})
+}
+
+func (s *Server) RecordBytesReceived(n int64, path string) {
+	s.bandwidthMu.Lock()
+	defer s.bandwidthMu.Unlock()
+	s.totalReceived += n
+	s.receivedHistory = append(s.receivedHistory, TransferRecord{
+		Timestamp: time.Now(),
+		Bytes:     n,
+		Category:  categorizePath(path),
+	})
+}
+
+func categorizePath(path string) string {
+	if strings.HasPrefix(path, "/download/") {
+		cleanPath := path
+		if idx := strings.Index(path, "?"); idx != -1 {
+			cleanPath = path[:idx]
+		}
+		parts := strings.Split(cleanPath, "/")
+		if len(parts) >= 3 {
+			hash := parts[2]
+			return "vfs:" + hash
+		}
+		return "vfs:download"
+	}
+	if strings.HasPrefix(path, "/upload") {
+		return "vfs:upload"
+	}
+	if strings.HasPrefix(path, "/services/") {
+		cleanPath := strings.TrimPrefix(path, "/services/")
+		if idx := strings.Index(cleanPath, "?"); idx != -1 {
+			queryParams := cleanPath[idx+1:]
+			basePath := cleanPath[:idx]
+			for _, param := range strings.Split(queryParams, "&") {
+				parts := strings.SplitN(param, "=", 2)
+				if len(parts) == 2 && (parts[0] == "service" || parts[0] == "name") {
+					return "service:" + parts[1]
+				}
+			}
+			return "service:" + basePath
+		}
+		return "service:" + cleanPath
+	}
+	return "other"
+}
+
+func (s *Server) GetCurrentBandwidth() (float64, float64) {
+	s.bandwidthMu.Lock()
+	defer s.bandwidthMu.Unlock()
+
+	now := time.Now()
+	threshold := now.Add(-5 * time.Second)
+
+	var sentLast5s int64
+	var i int
+	for i = len(s.sentHistory) - 1; i >= 0; i-- {
+		rec := s.sentHistory[i]
+		if rec.Timestamp.Before(threshold) {
+			break
+		}
+		sentLast5s += rec.Bytes
+	}
+	if i > 0 {
+		s.sentHistory = s.sentHistory[i:]
+	}
+
+	var recvLast5s int64
+	for i = len(s.receivedHistory) - 1; i >= 0; i-- {
+		rec := s.receivedHistory[i]
+		if rec.Timestamp.Before(threshold) {
+			break
+		}
+		recvLast5s += rec.Bytes
+	}
+	if i > 0 {
+		s.receivedHistory = s.receivedHistory[i:]
+	}
+
+	return float64(sentLast5s) / 5.0, float64(recvLast5s) / 5.0
+}
+
+func (s *Server) GetCategoryBandwidth(category string) (float64, float64) {
+	s.bandwidthMu.RLock()
+	defer s.bandwidthMu.RUnlock()
+
+	threshold := time.Now().Add(-5 * time.Second)
+	var sent int64
+	for _, rec := range s.sentHistory {
+		if rec.Timestamp.After(threshold) && rec.Category == category {
+			sent += rec.Bytes
+		}
+	}
+	var recv int64
+	for _, rec := range s.receivedHistory {
+		if rec.Timestamp.After(threshold) && rec.Category == category {
+			recv += rec.Bytes
+		}
+	}
+	return float64(sent) / 5.0, float64(recv) / 5.0
+}
+
+func (s *Server) GetTotalBandwidth() (int64, int64) {
+	s.bandwidthMu.RLock()
+	defer s.bandwidthMu.RUnlock()
+	return s.totalSent, s.totalReceived
+}
+
+type countingResponseWriter struct {
+	http.ResponseWriter
+	bytesWritten int64
+	onWrite      func(int)
+}
+
+func (w *countingResponseWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.bytesWritten += int64(n)
+	if w.onWrite != nil && n > 0 {
+		w.onWrite(n)
+	}
+	return n, err
+}
+
+func (s *Server) wrapWithBandwidthCounting(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = &countingReadCloser{
+				ReadCloser: r.Body,
+				onRead: func(n int) {
+					s.RecordBytesReceived(int64(n), r.URL.RequestURI())
+				},
+			}
+		}
+
+		cw := &countingResponseWriter{
+			ResponseWriter: w,
+			onWrite: func(n int) {
+				s.RecordBytesSent(int64(n), r.URL.RequestURI())
+			},
+		}
+		next.ServeHTTP(cw, r)
+	})
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	onRead func(int)
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if c.onRead != nil && n > 0 {
+		c.onRead(n)
+	}
+	return n, err
 }

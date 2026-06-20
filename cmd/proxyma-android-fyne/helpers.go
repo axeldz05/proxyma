@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -140,6 +140,7 @@ func joinCluster(token string, w fyne.Window, nid string, port string, refreshUI
 			}
 
 			certsDir := filepath.Join(appStorage, "certs")
+			_ = os.RemoveAll(certsDir)
 			_ = os.MkdirAll(certsDir, 0755)
 
 			caPath := filepath.Join(certsDir, "ca.crt")
@@ -168,6 +169,20 @@ func joinCluster(token string, w fyne.Window, nid string, port string, refreshUI
 				dialog.ShowInformation("Success", "Joined cluster successfully", w)
 				startNode()
 				refreshUI()
+				go func() {
+					srvMutex.Lock()
+					s := srv
+					srvMutex.Unlock()
+					if s != nil {
+						_ = s.ExecuteSync()
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						defer cancel()
+						for peerID := range s.GetPeersCopy() {
+							_, _ = s.DiscoverServices(ctx, peerID)
+						}
+						fyne.Do(refreshUI)
+					}
+				}()
 			})
 		}()
 	}
@@ -180,6 +195,7 @@ func startNode() error {
 	if err != nil {
 		return err
 	}
+	cfg.Logger = appLogger
 
 	certsDir := filepath.Dir(cfg.CAPath)
 	nodeCertFile := filepath.Join(certsDir, fmt.Sprintf("%s.crt", cfg.ID))
@@ -192,7 +208,8 @@ func startNode() error {
 
 	srvTLS = stls
 	baseTransport := &http.Transport{TLSClientConfig: ctls}
-	peerClient := p2p.NewHTTPPeerClient(baseTransport, cfg.BootstrapNode, slog.Default())
+	wrappedTransport := &bandwidthRoundTripper{base: baseTransport}
+	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, appLogger)
 
 	srv = server.New(cfg, peerClient)
 	srv.LoadLocalServices()
@@ -250,15 +267,57 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 		inputs := make(map[string]any)
 
 		fyne.Do(func() {
-			dest.Objects = nil
+			dest.Objects = []fyne.CanvasObject{}
 			dest.Add(widget.NewLabel("Service: " + schema.Name))
 			dest.Add(widget.NewLabel("Description: " + schema.Description))
 			dest.Add(widget.NewLabel("Provider Address: " + addr))
 
-			for pName, pRules := range schema.Parameters {
-				paramName := pName
-				rules := pRules
+			var reqPermissions []string
+			hasImageParam := false
+			hasFileParam := false
+
+			for pName := range schema.Parameters {
+				lowerName := strings.ToLower(pName)
+				if strings.Contains(lowerName, "image") || strings.Contains(lowerName, "img") || strings.Contains(lowerName, "photo") {
+					hasImageParam = true
+				}
+				if strings.Contains(lowerName, "file") || strings.Contains(lowerName, "path") {
+					hasFileParam = true
+				}
+			}
+
+			if hasImageParam {
+				reqPermissions = append(reqPermissions, "Camera (to take photo for upload)")
+				reqPermissions = append(reqPermissions, "Gallery / Storage (to select photo)")
+			} else if hasFileParam {
+				reqPermissions = append(reqPermissions, "Storage (to read/write local files)")
+			}
+
+			if len(reqPermissions) > 0 {
+				dest.Add(widget.NewLabel("Required Permissions:"))
+				for _, perm := range reqPermissions {
+					dest.Add(widget.NewLabel(" - " + perm))
+				}
+			} else {
+				dest.Add(widget.NewLabel("Required Permissions: None"))
+			}
+
+			for paramName, rules := range schema.Parameters {
 				dest.Add(widget.NewLabel(paramName + " (" + rules.Type + ", Required: " + strconv.FormatBool(rules.Required) + ")"))
+
+				descLabel := ""
+				if rules.Type == "bool" {
+					descLabel = fmt.Sprintf("Description: Toggle to enable or disable the %s option.", paramName)
+				} else if rules.Type == "int" || rules.Type == "float" {
+					descLabel = fmt.Sprintf("Description: Enter a numerical value for %s.", paramName)
+				} else {
+					if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
+						descLabel = fmt.Sprintf("Description: Provide an image file path or capture a photo for %s.", paramName)
+					} else {
+						descLabel = fmt.Sprintf("Description: Provide a text value for %s.", paramName)
+					}
+				}
+				dest.Add(widget.NewLabel(descLabel))
 
 				if rules.Type == "bool" {
 					chk := widget.NewCheck("", func(val bool) {
@@ -513,4 +572,164 @@ func loadConfigOrDie(storagePath string, w fyne.Window) protocol.NodeConfig {
 		return protocol.NodeConfig{}
 	}
 	return cfg
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	if err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+func copyDir(src string, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(dst, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			err = copyDir(srcPath, dstPath)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = copyFile(srcPath, dstPath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func changeVFSStorageLocation(a fyne.App, w fyne.Window, refreshUI func()) func() {
+	return func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil || uri == nil {
+				return
+			}
+			newPath := uri.Path()
+			if newPath == "" {
+				return
+			}
+
+			newStorage := filepath.Join(newPath, "proxyma_data")
+
+			go func() {
+				stopNode()
+
+				if _, err := os.Stat(appStorage); err == nil {
+					err = copyDir(appStorage, newStorage)
+					if err != nil {
+						fyne.Do(func() {
+							dialog.ShowError(fmt.Errorf("failed to copy data: %v", err), w)
+						})
+						_ = startNode()
+						fyne.Do(refreshUI)
+						return
+					}
+				}
+
+				oldStorage := appStorage
+				appStorage = newStorage
+
+				a.Preferences().SetString("app_storage_path", appStorage)
+
+				err = startNode()
+				if err != nil {
+					fyne.Do(func() {
+						dialog.ShowError(fmt.Errorf("failed to start node on new storage: %v", err), w)
+					})
+					appStorage = oldStorage
+					a.Preferences().SetString("app_storage_path", appStorage)
+					_ = startNode()
+				} else {
+					fyne.Do(func() {
+						dialog.ShowInformation("Storage Relocated", fmt.Sprintf("Storage moved to %s. Node restarted.", appStorage), w)
+					})
+				}
+				fyne.Do(refreshUI)
+			}()
+		}, w)
+	}
+}
+
+type bandwidthRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (b *bandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		req.Body = &clientCountingReadCloser{
+			ReadCloser: req.Body,
+			onRead: func(n int) {
+				srvMutex.Lock()
+				s := srv
+				srvMutex.Unlock()
+				if s != nil {
+					s.RecordBytesSent(int64(n), req.URL.RequestURI())
+				}
+			},
+		}
+	}
+
+	resp, err := b.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Body != nil {
+		resp.Body = &clientCountingReadCloser{
+			ReadCloser: resp.Body,
+			onRead: func(n int) {
+				srvMutex.Lock()
+				s := srv
+				srvMutex.Unlock()
+				if s != nil {
+					s.RecordBytesReceived(int64(n), req.URL.RequestURI())
+				}
+			},
+		}
+	}
+	return resp, nil
+}
+
+type clientCountingReadCloser struct {
+	io.ReadCloser
+	onRead func(int)
+}
+
+func (c *clientCountingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if c.onRead != nil && n > 0 {
+		c.onRead(n)
+	}
+	return n, err
 }

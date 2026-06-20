@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -22,18 +23,23 @@ var (
 	srvTLS     *tls.Config
 	srvMutex   sync.Mutex
 	appStorage string
+	appLogger  *slog.Logger
 )
 
 func main() {
 	a := app.NewWithID("com.proxyma.android")
 	w := a.NewWindow("Proxyma Android")
 	ui := &ProxymaUI{
-		window:            w,
-		statusLabel:       widget.NewLabel("Status: Offline"),
-		nodeIDLabel:       widget.NewLabel("Node ID: -"),
-		nodeAddrLabel:     widget.NewLabel("Address: -"),
-		peersContainer:    container.NewVBox(),
-		vfsFilesContainer: container.NewVBox(),
+		window:                 w,
+		statusLabel:            widget.NewLabel("Status: Offline"),
+		nodeIDLabel:            widget.NewLabel("Node ID: -"),
+		nodeAddrLabel:          widget.NewLabel("Address: -"),
+		uploadSpeedLabel:       widget.NewLabel("Upload Speed: 0 B/s (Total: 0 B)"),
+		downloadSpeedLabel:     widget.NewLabel("Download Speed: 0 B/s (Total: 0 B)"),
+		peersContainer:         container.NewVBox(),
+		vfsFilesContainer:      container.NewVBox(),
+		servicesListContainer:  container.NewVBox(),
+		serviceDetailContainer: container.NewVBox(),
 	}
 	tokenEntry := widget.NewEntry()
 	nodeIDEntry := widget.NewEntry()
@@ -51,6 +57,8 @@ func main() {
 		ui.statusLabel,
 		ui.nodeIDLabel,
 		ui.nodeAddrLabel,
+		ui.uploadSpeedLabel,
+		ui.downloadSpeedLabel,
 	))
 
 	inviteCard := widget.NewCard("Invite Peer", "", container.NewVBox(
@@ -74,25 +82,21 @@ func main() {
 		joinBtn,
 	)
 
-	vfsFilesContainer := container.NewVBox()
 	syncBtn := widget.NewButton("Sync VFS", ui.SyncVFS(w))
-
 	uploadBtn := widget.NewButton("Upload File", ui.UploadFile(w))
+	relocateBtn := widget.NewButton("Change Storage Path", changeVFSStorageLocation(a, w, ui.Refresh))
 
 	tabVFS := container.NewBorder(
-		container.NewHBox(syncBtn, uploadBtn),
+		container.NewHBox(syncBtn, uploadBtn, relocateBtn),
 		nil, nil, nil,
-		container.NewScroll(vfsFilesContainer),
+		container.NewScroll(ui.vfsFilesContainer),
 	)
-
-	servicesListContainer := container.NewVBox()
-	serviceDetailContainer := container.NewVBox()
 
 	discoverServicesBtn := widget.NewButton("Discover Services", ui.DiscoverServices(w))
 
 	tabServices := container.NewHSplit(
-		container.NewBorder(discoverServicesBtn, nil, nil, nil, container.NewScroll(servicesListContainer)),
-		container.NewScroll(serviceDetailContainer),
+		container.NewBorder(discoverServicesBtn, nil, nil, nil, container.NewScroll(ui.servicesListContainer)),
+		container.NewScroll(ui.serviceDetailContainer),
 	)
 	tabServices.SetOffset(0.4)
 
@@ -107,15 +111,25 @@ func main() {
 
 	go func() {
 		time.Sleep(2000 * time.Millisecond)
-		dir := os.Getenv("FILESDIR")
-		if dir == "" {
-			if root := a.Storage().RootURI(); root != nil && root.Scheme() == "file" {
-				dir = root.Path()
-			} else {
-				dir = "./data"
+		appLogger = protocol.NewLogger(os.Stdout, false)
+		prefPath := a.Preferences().StringWithFallback("app_storage_path", "")
+		if prefPath != "" {
+			appStorage = prefPath
+		} else {
+			dir := os.Getenv("FILESDIR")
+			if dir == "" {
+				s := a.Storage()
+				if s != nil {
+					if root := s.RootURI(); root != nil && root.Scheme() == "file" {
+						dir = root.Path()
+					}
+				}
+				if dir == "" {
+					dir = "./data"
+				}
 			}
+			appStorage = filepath.Join(dir, "proxyma_data")
 		}
-		appStorage = filepath.Join(dir, "proxyma_data")
 		_, err := protocol.LoadConfig(appStorage)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -126,6 +140,11 @@ func main() {
 				})
 				return
 			}
+		}
+		if err := startNode(); err != nil {
+			fyne.Do(func() {
+				dialog.ShowError(err, w)
+			})
 		}
 		fyne.Do(ui.Refresh)
 	}()

@@ -3,7 +3,6 @@ package testutil
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"log/slog"
 	"proxyma/internal/protocol"
 	"strings"
 	"testing"
@@ -20,14 +19,13 @@ func (w TestLogWriter) Write(p []byte) (n int, err error) {
 
 func DefaultConfig(t *testing.T, id string) protocol.NodeConfig {
 	writer := TestLogWriter{T: t}
-	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
-	handler := slog.NewTextHandler(writer, opts)
+	logger := protocol.NewLogger(writer, true).With("node", id)
 
 	return protocol.NodeConfig{
 		ID:          id,
 		StoragePath: t.TempDir(),
 		Workers:     2,
-		Logger:      slog.New(handler).With("node", id),
+		Logger:      logger,
 	}
 }
 

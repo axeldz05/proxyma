@@ -20,6 +20,8 @@ type MockPeerClient struct {
 	OnSendTaskResponse    func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
 	OnPollRelay           func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
 	OnReplyRelay          func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
+	OnLeave               func(ctx context.Context, peerID string, leaveReq map[string]string) error
+	OnOffline             func(ctx context.Context, peerID string, offlineReq map[string]string) error
 }
 
 func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {
@@ -103,6 +105,20 @@ func (m *MockPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peer
 func (m *MockPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
 	if m.OnReplyRelay != nil {
 		return m.OnReplyRelay(ctx, sponsorAddr, resp)
+	}
+	return nil
+}
+
+func (m *MockPeerClient) Leave(ctx context.Context, peerID string, leaveReq map[string]string) error {
+	if m.OnLeave != nil {
+		return m.OnLeave(ctx, peerID, leaveReq)
+	}
+	return nil
+}
+
+func (m *MockPeerClient) Offline(ctx context.Context, peerID string, offlineReq map[string]string) error {
+	if m.OnOffline != nil {
+		return m.OnOffline(ctx, peerID, offlineReq)
 	}
 	return nil
 }

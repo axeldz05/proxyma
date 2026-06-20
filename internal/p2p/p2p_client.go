@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"proxyma/internal/protocol"
+	"strings"
 )
 
 type PeerClient interface {
@@ -24,6 +25,8 @@ type PeerClient interface {
 	FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error)
 	PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
 	ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
+	Leave(ctx context.Context, peerID string, leaveReq map[string]string) error
+	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
 }
 
 type HTTPPeerClient struct {
@@ -93,11 +96,17 @@ func (c *HTTPPeerClient) ExecuteService(ctx context.Context, peerID string, serv
 }
 
 func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerID string, req protocol.TaskRequest) error {
-	return doVoid(ctx, c, "POST", peerID, "services/submit", req, http.StatusAccepted)
+	return doVoid(ctx, c, "POST", peerID, "services/submit?service="+req.Service, req, http.StatusAccepted)
 }
 
-func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error {
-	return doVoid(ctx, c, "POST", url, "", resp, 0)
+func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, urlStr string, resp protocol.ServiceTaskResponse) error {
+	importString := ""
+	if strings.Contains(urlStr, "?") {
+		importString = "&"
+	} else {
+		importString = "?"
+	}
+	return doVoid(ctx, c, "POST", urlStr+importString+"service="+resp.Service, "", resp, 0)
 }
 
 func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
@@ -118,4 +127,12 @@ func (c *HTTPPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peer
 
 func (c *HTTPPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
 	return doVoid(ctx, c, "POST", sponsorAddr, "relay/reply", resp, http.StatusOK)
+}
+
+func (c *HTTPPeerClient) Leave(ctx context.Context, peerID string, leaveReq map[string]string) error {
+	return doVoid(ctx, c, "POST", peerID, "peers/leave", leaveReq, http.StatusOK)
+}
+
+func (c *HTTPPeerClient) Offline(ctx context.Context, peerID string, offlineReq map[string]string) error {
+	return doVoid(ctx, c, "POST", peerID, "peers/offline", offlineReq, http.StatusOK)
 }

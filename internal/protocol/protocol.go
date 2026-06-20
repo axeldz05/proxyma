@@ -2,10 +2,21 @@ package protocol
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 )
+
+// NewLogger creates the centralized logger for the Proxyma node.
+// All entry points (CLI, Android, tests) must use this as the single initializer.
+func NewLogger(w io.Writer, debug bool) *slog.Logger {
+	var opts slog.HandlerOptions
+	if debug {
+		opts.Level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &opts))
+}
 
 type TaskRequest struct {
 	TaskID  string         `json:"task_id"`

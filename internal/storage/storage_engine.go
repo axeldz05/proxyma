@@ -82,7 +82,7 @@ func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 	}
 }
 
-func (se *StorageEngine) isSubscribed(fileName string) bool {
+func (se *StorageEngine) IsSubscribed(fileName string) bool {
 	var subscribed bool
 	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("subscriptions"))
@@ -106,7 +106,7 @@ func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.Inde
 	var missingFiles []protocol.IndexEntry
 	for logicalName, remoteFileInfo := range manifest {
 		updated := se.vfs.Upsert(remoteFileInfo)
-		if !remoteFileInfo.Deleted && se.isSubscribed(logicalName) {
+		if !remoteFileInfo.Deleted && se.IsSubscribed(logicalName) {
 			hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
 			if err != nil {
 				se.logger.Error("Something happened while using HasPhysicalBlob", "error", err)
@@ -139,6 +139,16 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 		}
 		go se.notifyFunc(fileMeta)
 	}
+	return nil
+}
+
+func (se *StorageEngine) DeleteLocalCache(fileName string) error {
+	entry, exists := se.vfs.Get(fileName)
+	if !exists {
+		return fmt.Errorf("file %s not found", fileName)
+	}
+	se.SetSubscription(fileName, false)
+	_ = se.physical.DeleteBlob(entry.Hash)
 	return nil
 }
 

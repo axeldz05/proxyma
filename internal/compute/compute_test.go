@@ -2,7 +2,6 @@ package compute_test
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
@@ -30,7 +29,7 @@ func TestCannotRegisterDuplicateServices(t *testing.T) {
 }
 
 func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
 	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node")
 	defer engine.Close()
@@ -137,7 +136,7 @@ func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 }
 
 func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
 
 	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node-grpc")

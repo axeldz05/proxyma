@@ -37,8 +37,7 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		}
 	})
 
-	handler := slog.NewTextHandler(testutil.TestLogWriter{T: t}, &slog.HandlerOptions{Level: slog.LevelDebug})
-	testSlog := slog.New(handler).With("node", "Test17-mTLS")
+	testSlog := protocol.NewLogger(testutil.TestLogWriter{T: t}, true).With("node", "Test17-mTLS")
 	secureServer := httptest.NewUnstartedServer(handlerFunc)
 	secureServer.TLS = serverTLS
 

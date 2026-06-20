@@ -25,6 +25,12 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 			return
 		}
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			peerID := r.TLS.PeerCertificates[0].Subject.CommonName
+			if peerID != "" {
+				s.SetPeerOnline(peerID, true)
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -48,6 +54,8 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("GET /peers", s.GetPeers)
 	mux.HandleFunc("POST /peers/announce", s.HandleAnnounce)
 	mux.HandleFunc("POST /peers/add", s.HandleAddPeer)
+	mux.HandleFunc("POST /peers/leave", s.HandleLeavePeer)
+	mux.HandleFunc("POST /peers/offline", s.HandleOfflinePeer)
 	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
 	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
 	mux.HandleFunc("GET /relay/poll", s.HandleRelayPoll)
@@ -228,6 +236,36 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	s.AddPeer(req.ID, req.Address)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
+}
+
+type LeaveRequest struct {
+	ID string `json:"id"`
+}
+
+func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
+	req, err := utils.DecodeJSON[LeaveRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	s.RemovePeer(req.ID)
+	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
+}
+
+type OfflineRequest struct {
+	ID string `json:"id"`
+}
+
+func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
+	req, err := utils.DecodeJSON[OfflineRequest](r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	s.SetPeerOnline(req.ID, false)
+	s.Config.Logger.Info("Peer went offline", "peer_id", req.ID)
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer marked as offline"})
 }
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {

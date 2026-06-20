@@ -45,7 +45,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	updated := se.vfs.Upsert(notification.File)
-	if updated && !notification.File.Deleted && se.isSubscribed(notification.File.Name) {
+	if updated && !notification.File.Deleted && se.IsSubscribed(notification.File.Name) {
 		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
 
 		if !hasBlob {

@@ -3,12 +3,12 @@ package proxyma
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 	"syscall"
 	"time"
@@ -25,13 +25,7 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Starts the Proxyma node using the local configuration",
 	Run: func(cmd *cobra.Command, args []string) {
-		var opts slog.HandlerOptions
-		if runDebugMode {
-			opts = slog.HandlerOptions{
-				Level: slog.LevelDebug,
-			}
-		}
-		logger := slog.New(slog.NewTextHandler(os.Stdout, &opts))
+		logger := protocol.NewLogger(os.Stdout, runDebugMode)
 		cfg := loadConfigOrDie(runStorage)
 		cfg.Logger = logger
 		logger.Info("Starting Proxyma node", "id", cfg.ID, "address", cfg.Address)

@@ -31,23 +31,32 @@ func TestAndroidConfigLoad(t *testing.T) {
 	}
 	t.Log("APK built successfully.")
 
+	adbCmd := func(args ...string) *exec.Cmd {
+		serial := os.Getenv("ANDROID_SERIAL")
+		if serial == "" {
+			serial = "emulator-5554"
+		}
+		allArgs := append([]string{"-s", serial}, args...)
+		return exec.Command("adb", allArgs...)
+	}
+
 	// 2. Clear old app data/uninstall from the emulator
 	t.Log("Uninstalling previous version of the app from emulator...")
-	_ = exec.Command("adb", "uninstall", "com.proxyma.android").Run()
+	_ = adbCmd("uninstall", "com.proxyma.android").Run()
 
 	// 3. Install the APK
 	t.Log("Installing APK to emulator...")
-	cmdInstall := exec.Command("adb", "install", "-r", "Proxyma_Node.apk")
+	cmdInstall := adbCmd("install", "-r", "Proxyma_Node.apk")
 	out, err := cmdInstall.CombinedOutput()
 	require.NoError(t, err, "Failed to install APK: %s", string(out))
 
 	// 4. Clear logcat to have fresh logs
-	_ = exec.Command("adb", "logcat", "-c").Run()
+	_ = adbCmd("logcat", "-c").Run()
 
 	// Dump logs automatically on failure
 	t.Cleanup(func() {
 		if t.Failed() {
-			cmdLogs := exec.Command("adb", "logcat", "-d")
+			cmdLogs := adbCmd("logcat", "-d")
 			logOut, _ := cmdLogs.CombinedOutput()
 			t.Logf("Logcat output during failure:\n%s", string(logOut))
 		}
@@ -55,15 +64,15 @@ func TestAndroidConfigLoad(t *testing.T) {
 
 	// 5. Start the app on the emulator
 	t.Log("Starting the app on the emulator...")
-	cmdStart := exec.Command("adb", "shell", "am", "start", "-n", "com.proxyma.android/org.golang.app.GoNativeActivity")
+	cmdStart := adbCmd("shell", "am", "start", "-n", "com.proxyma.android/org.golang.app.GoNativeActivity")
 	out, err = cmdStart.CombinedOutput()
 	require.NoError(t, err, "Failed to start app: %s", string(out))
 
 	// 6. Wait for config load/creation (it sleeps 2 seconds in main.go) using dynamic polling
 	t.Log("Waiting for app to initialize and write config...")
 	require.Eventually(t, func() bool {
-		err1 := exec.Command("adb", "shell", "ls", "/data/data/com.proxyma.android/files/proxyma_data/config.json").Run()
-		err2 := exec.Command("adb", "shell", "ls", "/data/user/0/com.proxyma.android/files/proxyma_data/config.json").Run()
+		err1 := adbCmd("shell", "ls", "/data/data/com.proxyma.android/files/proxyma_data/config.json").Run()
+		err2 := adbCmd("shell", "ls", "/data/user/0/com.proxyma.android/files/proxyma_data/config.json").Run()
 		return err1 == nil || err2 == nil
 	}, 6*time.Second, 200*time.Millisecond, "config.json was not created/loaded on the device!")
 

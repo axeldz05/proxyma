@@ -946,3 +946,39 @@ func TestAnnouncePresenceFallbackError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
 }
+
+func TestOfflineNotificationAndSelfHealing(t *testing.T) {
+	t.Parallel()
+	mockClient := &testutil.MockPeerClient{
+		OnOffline: func(ctx context.Context, peerID string, req map[string]string) error {
+			return nil
+		},
+	}
+	srv1 := NewServer(t, testutil.DefaultConfig(t, "node1"), mockClient)
+	srv2 := NewServer(t, testutil.DefaultConfig(t, "node2"), nil)
+
+	srv1.AddPeer(srv2.Config.ID, protocol.AddressRecord{Addresses: []string{srv2.Config.Address}})
+	srv1.SetPeerOnline(srv2.Config.ID, true)
+	require.True(t, srv1.IsPeerOnline(srv2.Config.ID))
+
+	offlineReq := struct {
+		ID string `json:"id"`
+	}{ID: srv2.Config.ID}
+	body, _ := json.Marshal(offlineReq)
+	req, err := http.NewRequest("POST", srv1.Config.Address+"/peers/offline", bytes.NewBuffer(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv1.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.False(t, srv1.IsPeerOnline(srv2.Config.ID), "Node2 should be marked offline")
+	
+	peersRecord := srv1.GetPeersCopy()
+	_, exists := peersRecord[srv2.Config.ID]
+	require.True(t, exists, "Node2 should not be deleted from the peer registry")
+
+	srv1.AddPeer(srv2.Config.ID, protocol.AddressRecord{Addresses: []string{srv2.Config.Address}})
+	require.True(t, srv1.IsPeerOnline(srv2.Config.ID), "Node2 should be marked online after reconnecting / sending announce")
+}
