@@ -55,8 +55,13 @@ func joinCluster(token string, w fyne.Window, nid string, port string, refreshUI
 	return func() {
 		go func() {
 			cfg := loadConfigOrDie(appStorage, w)
+			token = strings.TrimSpace(token)
+			token = strings.Trim(token, "\"'")
 			if token == "" {
-				dialog.ShowError(errors.New("Smart Token is required"), w)
+				fyne.Do(func() {
+					dialog.ShowError(errors.New("Smart Token is required"), w)
+				})
+				return
 			}
 			if nid == "" {
 				hostname, err := os.Hostname()
@@ -111,30 +116,46 @@ func joinCluster(token string, w fyne.Window, nid string, port string, refreshUI
 			}
 			bodyBytes, _ := json.Marshal(reqBody)
 
-			urlStr := fmt.Sprintf("%s/cluster/join", payload.Address)
-			req, _ := http.NewRequest(http.MethodPost, urlStr, bytes.NewReader(bodyBytes))
-			req.Header.Set("Content-Type", "application/json")
+			var resp *http.Response
+			var lastErr error
+			var successfulAddr string
 
-			resp, err := client.Do(req)
-			if err != nil {
+			for _, addr := range payload.Addresses {
+				urlStr := fmt.Sprintf("%s/cluster/join", addr)
+				req, reqErr := http.NewRequest(http.MethodPost, urlStr, bytes.NewReader(bodyBytes))
+				if reqErr != nil {
+					lastErr = reqErr
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+
+				r, doErr := client.Do(req)
+				if doErr != nil {
+					lastErr = doErr
+					continue
+				}
+				if r.StatusCode != http.StatusOK {
+					_ = r.Body.Close()
+					lastErr = fmt.Errorf("status %d", r.StatusCode)
+					continue
+				}
+				resp = r
+				successfulAddr = addr
+				break
+			}
+
+			if resp == nil {
 				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("cluster rejected join: status %d", resp.StatusCode), w)
+					dialog.ShowError(fmt.Errorf("could not connect to any cluster address: %v", lastErr), w)
 				})
 				return
 			}
 			defer resp.Body.Close()
 
-			if resp.StatusCode != http.StatusOK {
-				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("cluster rejected join: status %d", resp.StatusCode), w)
-				})
-				return
-			}
-
 			var joinResp protocol.JoinResponse
 			if err := json.NewDecoder(resp.Body).Decode(&joinResp); err != nil {
 				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("cluster rejected join: status %d", resp.StatusCode), w)
+					dialog.ShowError(fmt.Errorf("failed to decode response: %v", err), w)
 				})
 				return
 			}
@@ -157,7 +178,7 @@ func joinCluster(token string, w fyne.Window, nid string, port string, refreshUI
 				StoragePath:   appStorage,
 				Workers:       cfg.Workers,
 				CAPath:        caPath,
-				BootstrapNode: strings.Replace(payload.Address, "0.0.0.0", "node-1", 1),
+				BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
 			}
 			err = protocol.SaveConfig(newCfg)
 			if err != nil {

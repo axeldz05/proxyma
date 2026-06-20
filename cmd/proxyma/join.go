@@ -40,7 +40,7 @@ var joinCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("📡 Connecting to the cluster in %s...\n", payload.Address)
+		fmt.Printf("📡 Connecting to the cluster...\n")
 
 		csrPEM, privKeyPEM, err := p2p.GenerateNodeCSR(joinID)
 		if err != nil {
@@ -72,21 +72,39 @@ var joinCmd = &cobra.Command{
 		}
 		bodyBytes, _ := json.Marshal(reqBody)
 
-		url := fmt.Sprintf("%s/cluster/join", payload.Address)
-		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
-		req.Header.Set("Content-Type", "application/json")
+		var resp *http.Response
+		var lastErr error
+		var successfulAddr string
 
-		resp, err := client.Do(req)
-		if err != nil {
-			fmt.Printf("❌ There was an error trying to connect to the cluster: %v\n", err)
+		for _, addr := range payload.Addresses {
+			url := fmt.Sprintf("%s/cluster/join", addr)
+			req, reqErr := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
+			if reqErr != nil {
+				lastErr = reqErr
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			r, doErr := client.Do(req)
+			if doErr != nil {
+				lastErr = doErr
+				continue
+			}
+			if r.StatusCode != http.StatusOK {
+				_ = r.Body.Close()
+				lastErr = fmt.Errorf("status %d", r.StatusCode)
+				continue
+			}
+			resp = r
+			successfulAddr = addr
+			break
+		}
+
+		if resp == nil {
+			fmt.Printf("❌ There was an error trying to connect to the cluster: %v\n", lastErr)
 			os.Exit(1)
 		}
 		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("❌ The cluster rejected the union (Status %d). Is the token expired?\n", resp.StatusCode)
-			os.Exit(1)
-		}
 
 		var joinResp protocol.JoinResponse
 		if err := json.NewDecoder(resp.Body).Decode(&joinResp); err != nil {
@@ -112,7 +130,7 @@ var joinCmd = &cobra.Command{
 		newCfg.ID = joinID
 		newCfg.StoragePath = joinStorage
 		newCfg.CAPath = caPath
-		bootstrapAddr := strings.Replace(payload.Address, "0.0.0.0", "node-1", 1)
+		bootstrapAddr := strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1)
 		newCfg.BootstrapNode = bootstrapAddr
 		err = protocol.SaveConfig(newCfg)
 		if err != nil {

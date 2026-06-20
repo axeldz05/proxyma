@@ -420,9 +420,8 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
 	require.NoError(t, err)
 
-	parts := strings.Split(inviteResp.Token, ".")
-	require.Len(t, parts, 2, "SmartToken format should be: https://InvitePayload:secret")
-	secret := parts[1]
+	_, secret, err := p2p.ParseSmartToken(inviteResp.Token)
+	require.NoError(t, err)
 	nakedClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -578,9 +577,8 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
 	require.NoError(t, err)
 
-	parts := strings.Split(inviteResp.Token, ".")
-	require.Len(t, parts, 2)
-	secret := parts[1]
+	_, secret, err := p2p.ParseSmartToken(inviteResp.Token)
+	require.NoError(t, err)
 
 	// Force the invite to expire
 	sv.ExpireInvite(secret)
