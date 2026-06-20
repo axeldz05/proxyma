@@ -61,14 +61,34 @@ func truncateString(s string, l int) string {
 func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry, portEntry *widget.Entry, refreshUI func()) func() {
 	return func() {
 		go func() {
+			logDebug := func(msg string, err error) {
+				if appLogger != nil {
+					if err != nil {
+						appLogger.Error(msg, "error", err)
+					} else {
+						appLogger.Info(msg)
+					}
+				} else {
+					if err != nil {
+						fmt.Printf("time=%s level=ERROR msg=%q error=%q\n", time.Now().Format(time.RFC3339), msg, err.Error())
+					} else {
+						fmt.Printf("time=%s level=INFO msg=%q\n", time.Now().Format(time.RFC3339), msg)
+					}
+				}
+			}
+
+			logDebug("Join Cluster button pressed, loading configuration...", nil)
 			cfg := loadConfigOrDie(appStorage, w)
 			token := tokenEntry.Text
 			nid := nidEntry.Text
 			port := portEntry.Text
 
+			logDebug(fmt.Sprintf("Input values captured: token_len=%d, node_id=%q, port=%q", len(token), nid, port), nil)
+
 			token = strings.TrimSpace(token)
 			token = strings.Trim(token, "\"'")
 			if token == "" {
+				logDebug("Join failed: Smart Token is empty", nil)
 				fyne.Do(func() {
 					dialog.ShowError(errors.New("Smart Token is required"), w)
 				})
@@ -82,23 +102,30 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 				b := make([]byte, 2)
 				_, _ = rand.Read(b)
 				nid = fmt.Sprintf("%s-%s", hostname, hex.EncodeToString(b))
+				logDebug(fmt.Sprintf("Auto-generated NodeID: %q", nid), nil)
 			}
 
+			logDebug("Parsing Smart Token...", nil)
 			payload, secret, err := p2p.ParseSmartToken(token)
 			if err != nil {
+				logDebug("Failed to parse Smart Token", err)
 				fyne.Do(func() {
 					dialog.ShowError(fmt.Errorf("Failed parsing Smart Token:\nToken prefix: %s...\nError: %w", truncateString(token, 20), err), w)
 				})
 				return
 			}
+			logDebug(fmt.Sprintf("Smart Token parsed successfully. CA Hash: %s, Number of addresses: %d", truncateString(payload.CAHash, 12), len(payload.Addresses)), nil)
 
+			logDebug(fmt.Sprintf("Generating Node CSR for NodeID %q...", nid), nil)
 			csrPEM, privKeyPEM, err := p2p.GenerateNodeCSR(nid)
 			if err != nil {
+				logDebug("Failed to generate Node CSR", err)
 				fyne.Do(func() {
 					dialog.ShowError(fmt.Errorf("Error generating Node CSR (NodeID: %q):\n%w", nid, err), w)
 				})
 				return
 			}
+			logDebug("Node CSR generated successfully.", nil)
 
 			tr := &http.Transport{
 				TLSClientConfig: &tls.Config{
@@ -118,6 +145,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 
 			localIP := getLocalIP()
 			localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
+			logDebug(fmt.Sprintf("Local pairing address calculated: %s", localAddr), nil)
 
 			reqBody := protocol.JoinRequest{
 				Secret:  secret,
@@ -131,10 +159,13 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			var errs []string
 			var successfulAddr string
 
+			logDebug("Starting cluster join loops over packed addresses...", nil)
 			for _, addr := range payload.Addresses {
 				urlStr := fmt.Sprintf("%s/cluster/join", addr)
+				logDebug(fmt.Sprintf("Attempting connection to address: %s", urlStr), nil)
 				req, reqErr := http.NewRequest(http.MethodPost, urlStr, bytes.NewReader(bodyBytes))
 				if reqErr != nil {
+					logDebug(fmt.Sprintf("Request creation failed for %s", addr), reqErr)
 					errs = append(errs, fmt.Sprintf("- [%s]: Request creation failed: %v", addr, reqErr))
 					continue
 				}
@@ -142,16 +173,19 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 
 				r, doErr := client.Do(req)
 				if doErr != nil {
+					logDebug(fmt.Sprintf("Connection/TLS error to %s", addr), doErr)
 					errs = append(errs, fmt.Sprintf("- [%s]: Connection/TLS error: %v", addr, doErr))
 					continue
 				}
 				if r.StatusCode != http.StatusOK {
 					_ = r.Body.Close()
+					logDebug(fmt.Sprintf("Cluster rejected join for %s with status %d", addr, r.StatusCode), nil)
 					errs = append(errs, fmt.Sprintf("- [%s]: Cluster rejected join: Status %d", addr, r.StatusCode))
 					continue
 				}
 				resp = r
 				successfulAddr = addr
+				logDebug(fmt.Sprintf("Connection successful to %s", addr), nil)
 				break
 			}
 
@@ -162,6 +196,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 					truncateString(secret, 8),
 					truncateString(payload.CAHash, 12),
 				)
+				logDebug("All join attempts failed", errors.New(detailedErrorMsg))
 				fyne.Do(func() {
 					dialog.ShowError(errors.New(detailedErrorMsg), w)
 				})
@@ -169,15 +204,19 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			}
 			defer resp.Body.Close()
 
+			logDebug("Decoding cluster JoinResponse...", nil)
 			var joinResp protocol.JoinResponse
 			if err := json.NewDecoder(resp.Body).Decode(&joinResp); err != nil {
+				logDebug("Failed decoding cluster response", err)
 				fyne.Do(func() {
 					dialog.ShowError(fmt.Errorf("Failed decoding cluster response from %s:\n%w", successfulAddr, err), w)
 				})
 				return
 			}
+			logDebug("JoinResponse decoded successfully.", nil)
 
 			certsDir := filepath.Join(appStorage, "certs")
+			logDebug(fmt.Sprintf("Purging certs folder: %s", certsDir), nil)
 			_ = os.RemoveAll(certsDir)
 			_ = os.MkdirAll(certsDir, 0755)
 
@@ -185,15 +224,18 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", nid))
 			keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", nid))
 
+			logDebug("Saving certificates to disk...", nil)
 			err1 := os.WriteFile(caPath, []byte(joinResp.CACert), 0644)
 			err2 := os.WriteFile(certPath, []byte(joinResp.Certificate), 0644)
 			err3 := os.WriteFile(keyPath, privKeyPEM, 0600)
 			if err1 != nil || err2 != nil || err3 != nil {
+				logDebug("Failed writing certificate files to disk", fmt.Errorf("ca: %v, cert: %v, key: %v", err1, err2, err3))
 				fyne.Do(func() {
 					dialog.ShowError(fmt.Errorf("Failed writing cert files to directory %s:\nca.crt: %v\ncert: %v\nkey: %v", certsDir, err1, err2, err3), w)
 				})
 				return
 			}
+			logDebug("Certificates saved to disk successfully.", nil)
 
 			newCfg := protocol.NodeConfig{
 				ID:            nid,
@@ -203,13 +245,16 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 				CAPath:        caPath,
 				BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
 			}
+			logDebug(fmt.Sprintf("Saving node config to %s...", appStorage), nil)
 			err = protocol.SaveConfig(newCfg)
 			if err != nil {
+				logDebug("Failed to save node config", err)
 				fyne.Do(func() {
 					dialog.ShowError(fmt.Errorf("Failed saving config to %s:\n%w", appStorage, err), w)
 				})
 				return
 			}
+			logDebug("Node config saved successfully.", nil)
 			fyne.Do(func() {
 				dialog.ShowInformation("Success", "Joined cluster successfully", w)
 				startNode()
