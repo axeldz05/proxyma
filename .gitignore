@@ -4,3 +4,5 @@
 skills-lock.json
 tests/e2e/logs
 *log
+*.keystore
+*.apk
