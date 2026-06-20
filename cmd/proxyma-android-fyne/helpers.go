@@ -53,13 +53,6 @@ func generateInviteToken(w fyne.Window, inviteTokenEntry *widget.Entry) func() {
 	}
 }
 
-func truncateString(s string, l int) string {
-	if len(s) <= l {
-		return s
-	}
-	return s[:l]
-}
-
 func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry, portEntry *widget.Entry, refreshUI func()) func() {
 	return func() {
 		go func() {

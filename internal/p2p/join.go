@@ -173,7 +173,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 		logFn("All join attempts failed", errJoin)
 		return "", "", nil, "", errJoin
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	logFn("Decoding cluster JoinResponse...", nil)
 	var joinResp protocol.JoinResponse

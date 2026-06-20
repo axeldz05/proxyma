@@ -240,14 +240,6 @@ func (s *Server) RemovePeer(peerID string) {
 	s.Peers.RemovePeer(peerID)
 }
 
-func (s *Server) announceLeave(ctx context.Context) {
-	peers := s.GetPeersCopy()
-	payload := map[string]string{"id": s.Config.ID}
-	for peerID := range peers {
-		_ = s.peerClient.Leave(ctx, peerID, payload)
-	}
-}
-
 func (s *Server) announceOffline(ctx context.Context) {
 	peers := s.GetPeersCopy()
 	payload := map[string]string{"id": s.Config.ID}
