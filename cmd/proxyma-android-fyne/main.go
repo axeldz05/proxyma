@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ var (
 	srvMutex   sync.Mutex
 	appStorage string
 	appLogger  *slog.Logger
+	appCtx     context.Context
 )
 
 type LogRecord struct {
@@ -188,8 +190,15 @@ func main() {
 
 	w.SetContent(tabs)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	appCtx = ctx
+
 	go func() {
-		time.Sleep(2000 * time.Millisecond)
+		select {
+		case <-time.After(2000 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
 		writer := &LogWriter{Stdout: os.Stdout}
 		appLogger = protocol.NewLogger(writer, true)
 		prefPath := a.Preferences().StringWithFallback("app_storage_path", "")
@@ -215,26 +224,60 @@ func main() {
 			if os.IsNotExist(err) {
 				createInitialConfig(w, portEntry.Text)
 			} else {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				fyne.Do(func() {
 					dialog.ShowError(err, w)
 				})
 				return
 			}
 		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		if err := startNode(); err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			fyne.Do(func() {
 				dialog.ShowError(err, w)
 			})
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 		fyne.Do(ui.Refresh)
 	}()
 
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
-		for range ticker.C {
-			fyne.Do(ui.Refresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fyne.Do(ui.Refresh)
+			}
 		}
 	}()
+
+	w.SetCloseIntercept(func() {
+		cancel()
+		stopNode()
+		w.Close()
+	})
+
 	w.ShowAndRun()
+	cancel()
 	stopNode()
 }

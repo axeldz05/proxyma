@@ -9,30 +9,71 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"time"
+
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"strings"
-	"time"
 )
 
-func (s *Server) getOrCreateQueue(peerID string) (chan protocol.RelayRequest, error) {
-	if peerID != s.Config.ID {
-		s.peersMu.RLock()
-		_, exists := s.peers[peerID]
-		s.peersMu.RUnlock()
-		if !exists {
+// RelayManager manages the relay communication queues and response waiters for tunneling HTTP requests.
+type RelayManager struct {
+	server  *Server
+	queues  map[string]chan protocol.RelayRequest
+	waiters map[string]chan protocol.RelayResponse
+	mu      sync.RWMutex
+}
+
+// NewRelayManager creates a new RelayManager.
+func NewRelayManager(server *Server) *RelayManager {
+	return &RelayManager{
+		server:  server,
+		queues:  make(map[string]chan protocol.RelayRequest),
+		waiters: make(map[string]chan protocol.RelayResponse),
+	}
+}
+
+// GetOrCreateQueue returns or initializes the request queue for a peer.
+func (rm *RelayManager) GetOrCreateQueue(peerID string) (chan protocol.RelayRequest, error) {
+	if peerID != rm.server.Config.ID {
+		if _, exists := rm.server.Peers.GetPeerRecord(peerID); !exists {
 			return nil, fmt.Errorf("unknown peer ID: %s", peerID)
 		}
 	}
 
-	s.relayMu.Lock()
-	defer s.relayMu.Unlock()
-	queue, exists := s.relayQueues[peerID]
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	queue, exists := rm.queues[peerID]
 	if !exists {
 		queue = make(chan protocol.RelayRequest, 10)
-		s.relayQueues[peerID] = queue
+		rm.queues[peerID] = queue
 	}
 	return queue, nil
+}
+
+// RegisterWaiter creates and registers a response waiter channel for a request ID.
+func (rm *RelayManager) RegisterWaiter(reqID string) chan protocol.RelayResponse {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	waiter := make(chan protocol.RelayResponse, 1)
+	rm.waiters[reqID] = waiter
+	return waiter
+}
+
+// RemoveWaiter unregisters a response waiter channel.
+func (rm *RelayManager) RemoveWaiter(reqID string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	delete(rm.waiters, reqID)
+}
+
+// GetWaiter retrieves a registered response waiter channel.
+func (rm *RelayManager) GetWaiter(reqID string) (chan protocol.RelayResponse, bool) {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	waiter, exists := rm.waiters[reqID]
+	return waiter, exists
 }
 
 func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +91,7 @@ func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	queue, err := s.getOrCreateQueue(peerID)
+	queue, err := s.Relays.GetOrCreateQueue(peerID)
 	if err != nil {
 		utils.RespondError(w, http.StatusNotFound, err.Error())
 		return
@@ -81,14 +122,24 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queue, err := s.getOrCreateQueue(req.Target)
+	// Security validation: if no valid peer certificates are supplied via mTLS,
+	// only allow forwarding to the cluster joining endpoint.
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		if req.Path != "/cluster/join" {
+			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not /cluster/join", "path", req.Path, "ip", r.RemoteAddr)
+			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")
+			return
+		}
+	}
+
+	queue, err := s.Relays.GetOrCreateQueue(req.Target)
 	if err != nil {
 		utils.RespondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	waiter := s.registerRelayWaiter(req.ReqID)
-	defer s.removeRelayWaiter(req.ReqID)
+	waiter := s.Relays.RegisterWaiter(req.ReqID)
+	defer s.Relays.RemoveWaiter(req.ReqID)
 
 	// Send to queue (non-blocking if full)
 	select {
@@ -117,7 +168,7 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waiter, exists := s.getRelayWaiter(resp.ReqID)
+	waiter, exists := s.Relays.GetWaiter(resp.ReqID)
 	if !exists {
 		utils.RespondError(w, http.StatusNotFound, "ReqID not found or expired")
 		return
@@ -207,25 +258,4 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 	if err != nil {
 		s.Config.Logger.Error("Failed to reply to relay", "err", err, "reqID", relayReq.ReqID)
 	}
-}
-
-func (s *Server) registerRelayWaiter(reqID string) chan protocol.RelayResponse {
-	s.relayMu.Lock()
-	defer s.relayMu.Unlock()
-	waiter := make(chan protocol.RelayResponse, 1)
-	s.relayWaiters[reqID] = waiter
-	return waiter
-}
-
-func (s *Server) removeRelayWaiter(reqID string) {
-	s.relayMu.Lock()
-	defer s.relayMu.Unlock()
-	delete(s.relayWaiters, reqID)
-}
-
-func (s *Server) getRelayWaiter(reqID string) (chan protocol.RelayResponse, bool) {
-	s.relayMu.RLock()
-	defer s.relayMu.RUnlock()
-	waiter, exists := s.relayWaiters[reqID]
-	return waiter, exists
 }

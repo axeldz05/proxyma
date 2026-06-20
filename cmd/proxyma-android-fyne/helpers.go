@@ -1,12 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +16,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
+	"proxyma/internal/utils"
 	"runtime"
 	"strconv"
 	"strings"
@@ -31,22 +28,27 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+func getRunningServer() *server.Server {
+	srvMutex.Lock()
+	defer srvMutex.Unlock()
+	return srv
+}
+
 func generateInviteToken(w fyne.Window, inviteTokenEntry *widget.Entry) func() {
 	return func() {
-		srvMutex.Lock()
-		defer srvMutex.Unlock()
-		if srv == nil {
+		s := getRunningServer()
+		if s == nil {
 			dialog.ShowError(errors.New("Node is not running"), w)
 			return
 		}
-		smartToken, secretHex, err := p2p.GenerateSmartToken(srv.Config.Address, srv.Config.CAPath)
+		smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
 		if err != nil {
 			dialog.ShowError(err, w)
 			return
 		}
 		expiration := time.Now().Add(15 * time.Minute)
-		srv.Config.Logger.Info("Token generated in UI", "expires", expiration)
-		srv.AddPendingInvite(secretHex, expiration)
+		s.Config.Logger.Info("Token generated in UI", "expires", expiration)
+		s.AddPendingInvite(secretHex, expiration)
 		inviteTokenEntry.SetText(smartToken)
 	}
 }
@@ -105,118 +107,20 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 				logDebug(fmt.Sprintf("Auto-generated NodeID: %q", nid), nil)
 			}
 
-			logDebug("Parsing Smart Token...", nil)
-			payload, secret, err := p2p.ParseSmartToken(token)
-			if err != nil {
-				logDebug("Failed to parse Smart Token", err)
-				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("Failed parsing Smart Token:\nToken prefix: %s...\nError: %w", truncateString(token, 20), err), w)
-				})
-				return
-			}
-			logDebug(fmt.Sprintf("Smart Token parsed successfully. CA Hash: %s, Number of addresses: %d", truncateString(payload.CAHash, 12), len(payload.Addresses)), nil)
-
-			logDebug(fmt.Sprintf("Generating Node CSR for NodeID %q...", nid), nil)
-			csrPEM, privKeyPEM, err := p2p.GenerateNodeCSR(nid)
-			if err != nil {
-				logDebug("Failed to generate Node CSR", err)
-				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("Error generating Node CSR (NodeID: %q):\n%w", nid, err), w)
-				})
-				return
-			}
-			logDebug("Node CSR generated successfully.", nil)
-
-			tr := &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-						for _, rawCert := range rawCerts {
-							hash := sha256.Sum256(rawCert)
-							if hex.EncodeToString(hash[:]) == payload.CAHash {
-								return nil
-							}
-						}
-						return errors.New("security alert: identity mismatch")
-					},
-				},
-			}
-			client := &http.Client{
-				Transport: tr,
-				Timeout:   3 * time.Second,
-			}
-
 			localIP := getLocalIP()
 			localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
 			logDebug(fmt.Sprintf("Local pairing address calculated: %s", localAddr), nil)
 
-			reqBody := protocol.JoinRequest{
-				Secret:  secret,
-				CSR:     string(csrPEM),
-				ID:      nid,
-				Address: localAddr,
-			}
-			bodyBytes, _ := json.Marshal(reqBody)
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
 
-			var resp *http.Response
-			var errs []string
-			var successfulAddr string
-
-			logDebug("Starting cluster join loops over packed addresses...", nil)
-			for _, addr := range payload.Addresses {
-				urlStr := fmt.Sprintf("%s/cluster/join", addr)
-				logDebug(fmt.Sprintf("Attempting connection to address: %s", urlStr), nil)
-				req, reqErr := http.NewRequest(http.MethodPost, urlStr, bytes.NewReader(bodyBytes))
-				if reqErr != nil {
-					logDebug(fmt.Sprintf("Request creation failed for %s", addr), reqErr)
-					errs = append(errs, fmt.Sprintf("- [%s]: Request creation failed: %v", addr, reqErr))
-					continue
-				}
-				req.Header.Set("Content-Type", "application/json")
-
-				r, doErr := client.Do(req)
-				if doErr != nil {
-					logDebug(fmt.Sprintf("Connection/TLS error to %s", addr), doErr)
-					errs = append(errs, fmt.Sprintf("- [%s]: Connection/TLS error: %v", addr, doErr))
-					continue
-				}
-				if r.StatusCode != http.StatusOK {
-					_ = r.Body.Close()
-					logDebug(fmt.Sprintf("Cluster rejected join for %s with status %d", addr, r.StatusCode), nil)
-					errs = append(errs, fmt.Sprintf("- [%s]: Cluster rejected join: Status %d", addr, r.StatusCode))
-					continue
-				}
-				resp = r
-				successfulAddr = addr
-				logDebug(fmt.Sprintf("Connection successful to %s", addr), nil)
-				break
-			}
-
-			if resp == nil {
-				detailedErrorMsg := fmt.Sprintf(
-					"Failed to join cluster.\n\nAll attempted addresses failed:\n%s\n\nSecret Prefix: %s...\nCA Hash: %s\n\n💡 Tip: If devices are on the same Wi-Fi network:\n1. Ensure the hosting PC's firewall allows incoming traffic on port 8080.\n2. Ensure AP/Client Isolation is disabled on the router.",
-					strings.Join(errs, "\n"),
-					truncateString(secret, 8),
-					truncateString(payload.CAHash, 12),
-				)
-				logDebug("All join attempts failed", errors.New(detailedErrorMsg))
+			caCert, cert, privKeyPEM, successfulAddr, err := p2p.JoinCluster(ctx, token, nid, localAddr, logDebug)
+			if err != nil {
 				fyne.Do(func() {
-					dialog.ShowError(errors.New(detailedErrorMsg), w)
+					dialog.ShowError(err, w)
 				})
 				return
 			}
-			defer resp.Body.Close()
-
-			logDebug("Decoding cluster JoinResponse...", nil)
-			var joinResp protocol.JoinResponse
-			if err := json.NewDecoder(resp.Body).Decode(&joinResp); err != nil {
-				logDebug("Failed decoding cluster response", err)
-				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("Failed decoding cluster response from %s:\n%w", successfulAddr, err), w)
-				})
-				return
-			}
-			logDebug("JoinResponse decoded successfully.", nil)
 
 			certsDir := filepath.Join(appStorage, "certs")
 			logDebug(fmt.Sprintf("Purging certs folder: %s", certsDir), nil)
@@ -228,8 +132,8 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", nid))
 
 			logDebug("Saving certificates to disk...", nil)
-			err1 := os.WriteFile(caPath, []byte(joinResp.CACert), 0644)
-			err2 := os.WriteFile(certPath, []byte(joinResp.Certificate), 0644)
+			err1 := os.WriteFile(caPath, []byte(caCert), 0644)
+			err2 := os.WriteFile(certPath, []byte(cert), 0644)
 			err3 := os.WriteFile(keyPath, privKeyPEM, 0600)
 			if err1 != nil || err2 != nil || err3 != nil {
 				logDebug("Failed writing certificate files to disk", fmt.Errorf("ca: %v, cert: %v, key: %v", err1, err2, err3))
@@ -263,9 +167,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 				startNode()
 				refreshUI()
 				go func() {
-					srvMutex.Lock()
-					s := srv
-					srvMutex.Unlock()
+					s := getRunningServer()
 					if s != nil {
 						_ = s.ExecuteSync()
 						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -322,7 +224,7 @@ func startNode() error {
 			if err != nil {
 				return err
 			}
-			go srv.StartRelayPolling(context.Background(), cfg.BootstrapNode)
+			go srv.StartRelayPolling(appCtx, cfg.BootstrapNode)
 			return nil
 		}()
 	}
@@ -336,14 +238,14 @@ func stopNode() {
 	if srv == nil {
 		return
 	}
-	_ = srv.Shutdown(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 	srv = nil
 }
 
 func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getRunningServer()
 	if s == nil {
 		return
 	}
@@ -396,101 +298,8 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 			}
 
 			for paramName, rules := range schema.Parameters {
-				dest.Add(widget.NewLabel(paramName + " (" + rules.Type + ", Required: " + strconv.FormatBool(rules.Required) + ")"))
-
-				descLabel := ""
-				if rules.Type == "bool" {
-					descLabel = fmt.Sprintf("Description: Toggle to enable or disable the %s option.", paramName)
-				} else if rules.Type == "int" || rules.Type == "float" {
-					descLabel = fmt.Sprintf("Description: Enter a numerical value for %s.", paramName)
-				} else {
-					if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
-						descLabel = fmt.Sprintf("Description: Provide an image file path or capture a photo for %s.", paramName)
-					} else {
-						descLabel = fmt.Sprintf("Description: Provide a text value for %s.", paramName)
-					}
-				}
-				dest.Add(widget.NewLabel(descLabel))
-
-				if rules.Type == "bool" {
-					chk := widget.NewCheck("", func(val bool) {
-						inputs[paramName] = val
-					})
-					dest.Add(chk)
-				} else if rules.Type == "int" {
-					entry := widget.NewEntry()
-					entry.OnChanged = func(val string) {
-						v, _ := strconv.Atoi(val)
-						inputs[paramName] = v
-					}
-					dest.Add(entry)
-				} else if rules.Type == "float" {
-					entry := widget.NewEntry()
-					entry.OnChanged = func(val string) {
-						v, _ := strconv.ParseFloat(val, 64)
-						inputs[paramName] = v
-					}
-					dest.Add(entry)
-				} else {
-					if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
-						btnContainer := container.NewVBox()
-						valLabel := widget.NewLabel("No image selected")
-
-						chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
-							dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
-								if take {
-									tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
-									err := capturePhoto(tempPath)
-									if err != nil {
-										dialog.ShowError(err, w)
-										return
-									}
-									dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
-										if proceed {
-											f, err := os.Open(tempPath)
-											if err != nil {
-												dialog.ShowError(err, w)
-												return
-											}
-											defer f.Close()
-											vfsName := filepath.Base(tempPath)
-											err = s.Storage.SaveLocalFile(vfsName, f)
-											if err != nil {
-												dialog.ShowError(err, w)
-												return
-											}
-											inputs[paramName] = vfsName
-											valLabel.SetText(vfsName)
-										}
-									}, w)
-								} else {
-									dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-										if err != nil || reader == nil {
-											return
-										}
-										defer reader.Close()
-										vfsName := reader.URI().Name()
-										err = s.Storage.SaveLocalFile(vfsName, reader)
-										if err != nil {
-											dialog.ShowError(err, w)
-											return
-										}
-										inputs[paramName] = vfsName
-										valLabel.SetText(vfsName)
-									}, w)
-								}
-							}, w)
-						})
-						btnContainer.Add(chooseBtn)
-						btnContainer.Add(valLabel)
-						dest.Add(btnContainer)
-					} else {
-						entry := widget.NewEntry()
-						entry.OnChanged = func(val string) {
-							inputs[paramName] = val
-						}
-						dest.Add(entry)
-					}
+				for _, obj := range buildParameterWidget(paramName, rules, inputs, w, s) {
+					dest.Add(obj)
 				}
 			}
 
@@ -570,6 +379,107 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 			dest.Refresh()
 		})
 	}()
+}
+
+func buildParameterWidget(paramName string, rules protocol.ServiceParameter, inputs map[string]any, w fyne.Window, s *server.Server) []fyne.CanvasObject {
+	var objects []fyne.CanvasObject
+	objects = append(objects, widget.NewLabel(paramName+" ("+rules.Type+", Required: "+strconv.FormatBool(rules.Required)+")"))
+
+	descLabel := ""
+	if rules.Type == "bool" {
+		descLabel = fmt.Sprintf("Description: Toggle to enable or disable the %s option.", paramName)
+	} else if rules.Type == "int" || rules.Type == "float" {
+		descLabel = fmt.Sprintf("Description: Enter a numerical value for %s.", paramName)
+	} else {
+		if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
+			descLabel = fmt.Sprintf("Description: Provide an image file path or capture a photo for %s.", paramName)
+		} else {
+			descLabel = fmt.Sprintf("Description: Provide a text value for %s.", paramName)
+		}
+	}
+	objects = append(objects, widget.NewLabel(descLabel))
+
+	if rules.Type == "bool" {
+		chk := widget.NewCheck("", func(val bool) {
+			inputs[paramName] = val
+		})
+		objects = append(objects, chk)
+	} else if rules.Type == "int" {
+		entry := widget.NewEntry()
+		entry.OnChanged = func(val string) {
+			v, _ := strconv.Atoi(val)
+			inputs[paramName] = v
+		}
+		objects = append(objects, entry)
+	} else if rules.Type == "float" {
+		entry := widget.NewEntry()
+		entry.OnChanged = func(val string) {
+			v, _ := strconv.ParseFloat(val, 64)
+			inputs[paramName] = v
+		}
+		objects = append(objects, entry)
+	} else {
+		if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
+			btnContainer := container.NewVBox()
+			valLabel := widget.NewLabel("No image selected")
+
+			chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
+				dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
+					if take {
+						tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
+						err := capturePhoto(tempPath)
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
+							if proceed {
+								f, err := os.Open(tempPath)
+								if err != nil {
+									dialog.ShowError(err, w)
+									return
+								}
+								defer f.Close()
+								vfsName := filepath.Base(tempPath)
+								err = s.Storage.SaveLocalFile(vfsName, f)
+								if err != nil {
+									dialog.ShowError(err, w)
+									return
+								}
+								inputs[paramName] = vfsName
+								valLabel.SetText(vfsName)
+							}
+						}, w)
+					} else {
+						dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+							if err != nil || reader == nil {
+								return
+							}
+							defer reader.Close()
+							vfsName := reader.URI().Name()
+							err = s.Storage.SaveLocalFile(vfsName, reader)
+							if err != nil {
+								dialog.ShowError(err, w)
+								return
+							}
+							inputs[paramName] = vfsName
+							valLabel.SetText(vfsName)
+						}, w)
+					}
+				}, w)
+			})
+			btnContainer.Add(chooseBtn)
+			btnContainer.Add(valLabel)
+			objects = append(objects, btnContainer)
+		} else {
+			entry := widget.NewEntry()
+			entry.OnChanged = func(val string) {
+				inputs[paramName] = val
+			}
+			objects = append(objects, entry)
+		}
+	}
+	return objects
 }
 
 func capturePhoto(tempPath string) error {
@@ -780,13 +690,10 @@ type bandwidthRoundTripper struct {
 
 func (b *bandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
-		req.Body = &clientCountingReadCloser{
+		req.Body = &utils.CountingReadCloser{
 			ReadCloser: req.Body,
-			onRead: func(n int) {
-				srvMutex.Lock()
-				s := srv
-				srvMutex.Unlock()
-				if s != nil {
+			OnRead: func(n int) {
+				if s := getRunningServer(); s != nil {
 					s.RecordBytesSent(int64(n), req.URL.RequestURI())
 				}
 			},
@@ -799,30 +706,14 @@ func (b *bandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	}
 
 	if resp.Body != nil {
-		resp.Body = &clientCountingReadCloser{
+		resp.Body = &utils.CountingReadCloser{
 			ReadCloser: resp.Body,
-			onRead: func(n int) {
-				srvMutex.Lock()
-				s := srv
-				srvMutex.Unlock()
-				if s != nil {
+			OnRead: func(n int) {
+				if s := getRunningServer(); s != nil {
 					s.RecordBytesReceived(int64(n), req.URL.RequestURI())
 				}
 			},
 		}
 	}
 	return resp, nil
-}
-
-type clientCountingReadCloser struct {
-	io.ReadCloser
-	onRead func(int)
-}
-
-func (c *clientCountingReadCloser) Read(p []byte) (int, error) {
-	n, err := c.ReadCloser.Read(p)
-	if c.onRead != nil && n > 0 {
-		c.onRead(n)
-	}
-	return n, err
 }

@@ -20,6 +20,8 @@ type InvitePayload struct {
 	Address   string   `json:"address"`
 	CAHash    string   `json:"ca_hash"`
 	Addresses []string `json:"addresses,omitempty"`
+	SponsorID string   `json:"sponsor_id,omitempty"`
+	RelayAddr string   `json:"relay_addr,omitempty"`
 }
 
 func getLocalIPs() ([]net.IP, error) {
@@ -39,7 +41,7 @@ func getLocalIPs() ([]net.IP, error) {
 	return ips, nil
 }
 
-func GenerateSmartToken(hostAddress string, caCertPath string) (smartToken string, secret string, err error) {
+func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {
 	caBytes, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return "", "", fmt.Errorf("could not read CA cert: %w", err)
@@ -110,10 +112,11 @@ func GenerateSmartToken(hostAddress string, caCertPath string) (smartToken strin
 	// 2 bytes: Port
 	// 1 byte: Num addresses/entries
 	// For each entry:
-	//   1 byte: Entry Type (1 = IPv4, 2 = IPv6, 3 = Hostname)
+	//   1 byte: Entry Type (1 = IPv4, 2 = IPv6, 3 = Hostname, 4 = Relay Info)
 	//   If IPv4: 4 bytes
 	//   If IPv6: 16 bytes
 	//   If Hostname: 1 byte length + N bytes
+	//   If Relay Info: 1 byte SponsorID len + N bytes SponsorID + 1 byte RelayAddr len + M bytes RelayAddr
 	var buf bytes.Buffer
 	buf.WriteByte(2) // Version 2
 	buf.Write(hash[:])
@@ -124,8 +127,12 @@ func GenerateSmartToken(hostAddress string, caCertPath string) (smartToken strin
 	buf.Write(portBytes)
 
 	isHostname := (host != "" && net.ParseIP(host) == nil && host != "localhost")
+	hasRelay := (sponsorID != "" && relayAddr != "")
 	numEntries := len(ips)
 	if isHostname {
+		numEntries++
+	}
+	if hasRelay {
 		numEntries++
 	}
 	buf.WriteByte(byte(numEntries))
@@ -138,6 +145,23 @@ func GenerateSmartToken(hostAddress string, caCertPath string) (smartToken strin
 		}
 		buf.WriteByte(byte(len(hostBytes)))
 		buf.Write(hostBytes)
+	}
+
+	if hasRelay {
+		buf.WriteByte(4) // Relay Info type
+		sidBytes := []byte(sponsorID)
+		if len(sidBytes) > 255 {
+			sidBytes = sidBytes[:255]
+		}
+		buf.WriteByte(byte(len(sidBytes)))
+		buf.Write(sidBytes)
+
+		raddrBytes := []byte(relayAddr)
+		if len(raddrBytes) > 255 {
+			raddrBytes = raddrBytes[:255]
+		}
+		buf.WriteByte(byte(len(raddrBytes)))
+		buf.Write(raddrBytes)
 	}
 
 	for _, ip := range ips {
@@ -212,6 +236,28 @@ func ParseSmartToken(smartToken string) (payload InvitePayload, secret string, e
 				host := string(data[idx : idx+hostLen])
 				idx += hostLen
 				payload.Addresses = append(payload.Addresses, fmt.Sprintf("https://%s:%d", host, port))
+			case 4: // Relay Information
+				if idx >= len(data) {
+					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay sid len out of bounds")
+				}
+				sidLen := int(data[idx])
+				idx++
+				if idx+sidLen > len(data) {
+					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay sid out of bounds")
+				}
+				payload.SponsorID = string(data[idx : idx+sidLen])
+				idx += sidLen
+
+				if idx >= len(data) {
+					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay addr len out of bounds")
+				}
+				raddrLen := int(data[idx])
+				idx++
+				if idx+raddrLen > len(data) {
+					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay addr out of bounds")
+				}
+				payload.RelayAddr = string(data[idx : idx+raddrLen])
+				idx += raddrLen
 			default:
 				return InvitePayload{}, "", fmt.Errorf("malformed binary token: unknown entry type %d", entryType)
 			}

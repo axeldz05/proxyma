@@ -5,9 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -16,36 +14,28 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
+	"proxyma/internal/utils"
 	"strings"
 	"sync"
 	"time"
 )
 
 type Server struct {
-	Config            protocol.NodeConfig
-	Compute           *compute.ComputeEngine
-	Storage           *storage.StorageEngine
-	handler           http.Handler
-	peers             map[string]protocol.AddressRecord
-	peerClient        p2p.PeerClient
-	httpServer        *http.Server
-	downloadQueue     chan DownloadJob
-	peersMu           sync.RWMutex
-	clusterServices   map[string]map[string]protocol.ServiceSchema
-	clusterServicesMu sync.RWMutex
-	inviteMu          sync.Mutex
-	pendingInvites    map[string]time.Time
-	unixListener      net.Listener
-	relayQueues       map[string]chan protocol.RelayRequest
-	relayWaiters      map[string]chan protocol.RelayResponse
-	relayMu           sync.RWMutex
-	activePeers       map[string]bool
-	activePeersMu     sync.RWMutex
-	totalSent         int64
-	totalReceived     int64
-	sentHistory       []TransferRecord
-	receivedHistory   []TransferRecord
-	bandwidthMu       sync.RWMutex
+	Config        protocol.NodeConfig
+	Compute       *compute.ComputeEngine
+	Storage       *storage.StorageEngine
+	peerClient    p2p.PeerClient
+	
+	Peers         *PeerRegistry
+	Invites       *InviteManager
+	Bandwidth     *BandwidthTracker
+	Relays        *RelayManager
+
+	handler       http.Handler
+	httpServer    *http.Server
+	downloadQueue chan DownloadJob
+	unixListener  net.Listener
+	done          chan struct{}
 }
 
 type DownloadJob struct {
@@ -58,16 +48,16 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		panic("server.New: cfg.Logger must not be nil — use protocol.NewLogger to create it")
 	}
 	s := &Server{
-		Config:          cfg,
-		peers:           make(map[string]protocol.AddressRecord),
-		peerClient:      peerClient,
-		downloadQueue:   make(chan DownloadJob, 100),
-		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
-		pendingInvites:  make(map[string]time.Time),
-		relayQueues:  make(map[string]chan protocol.RelayRequest),
-		relayWaiters: make(map[string]chan protocol.RelayResponse),
-		activePeers:  make(map[string]bool),
+		Config:        cfg,
+		peerClient:    peerClient,
+		downloadQueue: make(chan DownloadJob, 100),
+		done:          make(chan struct{}),
 	}
+	
+	s.Peers = NewPeerRegistry(cfg.Logger, cfg.ID)
+	s.Invites = NewInviteManager(cfg.Logger)
+	s.Bandwidth = NewBandwidthTracker()
+	s.Relays = NewRelayManager(s)
 
 	if updater, ok := s.peerClient.(interface {
 		UpdateSponsorAddress(addr string)
@@ -92,9 +82,22 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	s.handler = s.MountHandlers()
 
 	for range cfg.Workers {
-		go s.downloadWorker(context.Background())
+		go s.downloadWorker()
 	}
-	go s.inviteSweeper(context.Background())
+	
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-ticker.C:
+				s.Invites.Sweep()
+			}
+		}
+	}()
+	
 	return s
 }
 
@@ -119,6 +122,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.Config.Logger.Info("Initiating shutdown...")
+	close(s.done)
 	s.announceOffline(ctx)
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
@@ -208,7 +212,6 @@ func (s *Server) LoadLocalServices() {
 		case "script", "exec":
 			handler = compute.BuildScriptHandler(svc.Exec)
 		case "grpc":
-			// dummy grpc handler builder if none, but let's assume BuildGRPCHandler exists
 			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
 		default:
 			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
@@ -223,32 +226,18 @@ func (s *Server) LoadLocalServices() {
 	}
 }
 
+// Delegated methods for backward compatibility & Continuous Granularity.
+
 func (s *Server) SetPeerOnline(peerID string, online bool) {
-	s.activePeersMu.Lock()
-	defer s.activePeersMu.Unlock()
-	s.activePeers[peerID] = online
+	s.Peers.SetPeerOnline(peerID, online)
 }
 
 func (s *Server) IsPeerOnline(peerID string) bool {
-	s.activePeersMu.RLock()
-	defer s.activePeersMu.RUnlock()
-	return s.activePeers[peerID]
+	return s.Peers.IsPeerOnline(peerID)
 }
 
 func (s *Server) RemovePeer(peerID string) {
-	s.peersMu.Lock()
-	delete(s.peers, peerID)
-	s.peersMu.Unlock()
-
-	s.activePeersMu.Lock()
-	delete(s.activePeers, peerID)
-	s.activePeersMu.Unlock()
-
-	s.clusterServicesMu.Lock()
-	delete(s.clusterServices, peerID)
-	s.clusterServicesMu.Unlock()
-
-	s.Config.Logger.Info("peerID removed from peers", "peerID", peerID)
+	s.Peers.RemovePeer(peerID)
 }
 
 func (s *Server) announceLeave(ctx context.Context) {
@@ -268,13 +257,7 @@ func (s *Server) announceOffline(ctx context.Context) {
 }
 
 func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
-	s.clusterServicesMu.RLock()
-	defer s.clusterServicesMu.RUnlock()
-	services := make(map[string]protocol.ServiceSchema)
-	if peerServices, ok := s.clusterServices[peerID]; ok {
-		maps.Copy(services, peerServices)
-	}
-	return services
+	return s.Peers.GetClusterServices(peerID)
 }
 
 func (s *Server) SetAddress(addr string) {
@@ -283,39 +266,12 @@ func (s *Server) SetAddress(addr string) {
 }
 
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
-	s.peersMu.Lock()
-	defer s.peersMu.Unlock()
-
-	existing, exists := s.peers[peerID]
-	if exists {
-		if addressRecord.Sequence < existing.Sequence {
-			s.Config.Logger.Debug("Ignoring older peer address record", "peerID", peerID, "currentSeq", existing.Sequence, "newSeq", addressRecord.Sequence)
-			return
+	if s.Peers.AddPeer(peerID, addressRecord) {
+		if updater, ok := s.peerClient.(interface {
+			UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+		}); ok {
+			updater.UpdatePeerRoute(peerID, addressRecord)
 		}
-		if addressRecord.Sequence == existing.Sequence {
-			addrSet := make(map[string]bool)
-			for _, a := range existing.Addresses {
-				addrSet[a] = true
-			}
-			for _, a := range addressRecord.Addresses {
-				addrSet[a] = true
-			}
-			var newAddrs []string
-			for a := range addrSet {
-				newAddrs = append(newAddrs, a)
-			}
-			addressRecord.Addresses = newAddrs
-		}
-	}
-
-	s.peers[peerID] = addressRecord
-	s.SetPeerOnline(peerID, true)
-	s.Config.Logger.Info("peerID added to peers", "peerID", peerID, "node", s.Config.ID)
-
-	if updater, ok := s.peerClient.(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute(peerID, addressRecord)
 	}
 }
 
@@ -329,8 +285,6 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		defer cancel()
 		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
-			// it's assumed that, if the peer reconnects to the cluster, it automatically
-			// executes a sync.
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
 			s.SetPeerOnline(peerID, false)
 		} else {
@@ -403,15 +357,7 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 }
 
 func (s *Server) GetPeersCopy() map[string]string {
-	s.peersMu.RLock()
-	defer s.peersMu.RUnlock()
-	peers := make(map[string]string, len(s.peers))
-	for k, v := range s.peers {
-		if len(v.Addresses) > 0 {
-			peers[k] = v.Addresses[0] // Return primary address for backward compatibility right now
-		}
-	}
-	return peers
+	return s.Peers.GetPeersCopy()
 }
 
 func (s *Server) ExecuteSync() error {
@@ -460,196 +406,70 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	return nil
 }
 
-func (s *Server) downloadWorker(ctx context.Context) {
-	for job := range s.downloadQueue {
-		if job.File.Deleted {
-			s.Storage.ProcessRemoteDeletion(job.File)
-			continue
-		}
-		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		body, err := s.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
-		if err != nil {
-			cancel()
-			s.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
-			continue
-		}
-		err = s.Storage.StoreRemoteBlob(job.File, body)
-		_ = body.Close()
-		cancel()
-		if err != nil {
-			s.Config.Logger.Error("Failed to apply remote blob", "error", err)
-		}
-	}
-}
-
-func (s *Server) inviteSweeper(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+func (s *Server) downloadWorker() {
 	for {
 		select {
-		case <-ctx.Done():
+		case <-s.done:
 			return
-		case <-ticker.C:
-			now := time.Now()
-			s.inviteMu.Lock()
-			for secret, expiration := range s.pendingInvites {
-				if now.After(expiration) {
-					delete(s.pendingInvites, secret)
-					s.Config.Logger.Debug("Expired invite removed from memory")
-				}
+		case job, ok := <-s.downloadQueue:
+			if !ok {
+				return
 			}
-			s.inviteMu.Unlock()
+			if job.File.Deleted {
+				s.Storage.ProcessRemoteDeletion(job.File)
+				continue
+			}
+			ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			body, err := s.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
+			if err != nil {
+				cancel()
+				s.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
+				continue
+			}
+			err = s.Storage.StoreRemoteBlob(job.File, body)
+			_ = body.Close()
+			cancel()
+			if err != nil {
+				s.Config.Logger.Error("Failed to apply remote blob", "error", err)
+			}
 		}
 	}
 }
 
 func (s *Server) AddPendingInvite(secret string, expiration time.Time) {
-	s.inviteMu.Lock()
-	defer s.inviteMu.Unlock()
-	s.pendingInvites[secret] = expiration
+	s.Invites.Add(secret, expiration)
 }
 
 func (s *Server) DiscoverServices(ctx context.Context, peerID string) ([]string, error) {
 	return s.peerClient.DiscoverServices(ctx, peerID)
 }
 
-
 func (s *Server) GetPeerRecord(peerID string) (protocol.AddressRecord, bool) {
-	s.peersMu.RLock()
-	defer s.peersMu.RUnlock()
-	record, exists := s.peers[peerID]
-	return record, exists
+	return s.Peers.GetPeerRecord(peerID)
 }
 
 func (s *Server) GetPeersRecordCopy() map[string]protocol.AddressRecord {
-	s.peersMu.RLock()
-	defer s.peersMu.RUnlock()
-	snapshot := make(map[string]protocol.AddressRecord, len(s.peers))
-	maps.Copy(snapshot, s.peers)
-	return snapshot
-}
-
-type TransferRecord struct {
-	Timestamp time.Time
-	Bytes     int64
-	Category  string
+	return s.Peers.GetPeersRecordCopy()
 }
 
 func (s *Server) RecordBytesSent(n int64, path string) {
-	s.bandwidthMu.Lock()
-	defer s.bandwidthMu.Unlock()
-	s.totalSent += n
-	s.sentHistory = append(s.sentHistory, TransferRecord{
-		Timestamp: time.Now(),
-		Bytes:     n,
-		Category:  categorizePath(path),
-	})
+	s.Bandwidth.RecordBytesSent(n, path)
 }
 
 func (s *Server) RecordBytesReceived(n int64, path string) {
-	s.bandwidthMu.Lock()
-	defer s.bandwidthMu.Unlock()
-	s.totalReceived += n
-	s.receivedHistory = append(s.receivedHistory, TransferRecord{
-		Timestamp: time.Now(),
-		Bytes:     n,
-		Category:  categorizePath(path),
-	})
-}
-
-func categorizePath(path string) string {
-	if strings.HasPrefix(path, "/download/") {
-		cleanPath := path
-		if idx := strings.Index(path, "?"); idx != -1 {
-			cleanPath = path[:idx]
-		}
-		parts := strings.Split(cleanPath, "/")
-		if len(parts) >= 3 {
-			hash := parts[2]
-			return "vfs:" + hash
-		}
-		return "vfs:download"
-	}
-	if strings.HasPrefix(path, "/upload") {
-		return "vfs:upload"
-	}
-	if strings.HasPrefix(path, "/services/") {
-		cleanPath := strings.TrimPrefix(path, "/services/")
-		if idx := strings.Index(cleanPath, "?"); idx != -1 {
-			queryParams := cleanPath[idx+1:]
-			basePath := cleanPath[:idx]
-			for _, param := range strings.Split(queryParams, "&") {
-				parts := strings.SplitN(param, "=", 2)
-				if len(parts) == 2 && (parts[0] == "service" || parts[0] == "name") {
-					return "service:" + parts[1]
-				}
-			}
-			return "service:" + basePath
-		}
-		return "service:" + cleanPath
-	}
-	return "other"
+	s.Bandwidth.RecordBytesReceived(n, path)
 }
 
 func (s *Server) GetCurrentBandwidth() (float64, float64) {
-	s.bandwidthMu.Lock()
-	defer s.bandwidthMu.Unlock()
-
-	now := time.Now()
-	threshold := now.Add(-5 * time.Second)
-
-	var sentLast5s int64
-	var i int
-	for i = len(s.sentHistory) - 1; i >= 0; i-- {
-		rec := s.sentHistory[i]
-		if rec.Timestamp.Before(threshold) {
-			break
-		}
-		sentLast5s += rec.Bytes
-	}
-	if i > 0 {
-		s.sentHistory = s.sentHistory[i:]
-	}
-
-	var recvLast5s int64
-	for i = len(s.receivedHistory) - 1; i >= 0; i-- {
-		rec := s.receivedHistory[i]
-		if rec.Timestamp.Before(threshold) {
-			break
-		}
-		recvLast5s += rec.Bytes
-	}
-	if i > 0 {
-		s.receivedHistory = s.receivedHistory[i:]
-	}
-
-	return float64(sentLast5s) / 5.0, float64(recvLast5s) / 5.0
+	return s.Bandwidth.GetCurrentBandwidth()
 }
 
 func (s *Server) GetCategoryBandwidth(category string) (float64, float64) {
-	s.bandwidthMu.RLock()
-	defer s.bandwidthMu.RUnlock()
-
-	threshold := time.Now().Add(-5 * time.Second)
-	var sent int64
-	for _, rec := range s.sentHistory {
-		if rec.Timestamp.After(threshold) && rec.Category == category {
-			sent += rec.Bytes
-		}
-	}
-	var recv int64
-	for _, rec := range s.receivedHistory {
-		if rec.Timestamp.After(threshold) && rec.Category == category {
-			recv += rec.Bytes
-		}
-	}
-	return float64(sent) / 5.0, float64(recv) / 5.0
+	return s.Bandwidth.GetCategoryBandwidth(category)
 }
 
 func (s *Server) GetTotalBandwidth() (int64, int64) {
-	s.bandwidthMu.RLock()
-	defer s.bandwidthMu.RUnlock()
-	return s.totalSent, s.totalReceived
+	return s.Bandwidth.GetTotalBandwidth()
 }
 
 type countingResponseWriter struct {
@@ -670,9 +490,9 @@ func (w *countingResponseWriter) Write(b []byte) (int, error) {
 func (s *Server) wrapWithBandwidthCounting(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = &countingReadCloser{
+			r.Body = &utils.CountingReadCloser{
 				ReadCloser: r.Body,
-				onRead: func(n int) {
+				OnRead: func(n int) {
 					s.RecordBytesReceived(int64(n), r.URL.RequestURI())
 				},
 			}
@@ -686,17 +506,4 @@ func (s *Server) wrapWithBandwidthCounting(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(cw, r)
 	})
-}
-
-type countingReadCloser struct {
-	io.ReadCloser
-	onRead func(int)
-}
-
-func (c *countingReadCloser) Read(p []byte) (int, error) {
-	n, err := c.ReadCloser.Read(p)
-	if c.onRead != nil && n > 0 {
-		c.onRead(n)
-	}
-	return n, err
 }

@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"path/filepath"
 	"runtime/debug"
 	"time"
+
+	"proxyma/internal/server"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -34,9 +38,7 @@ type ProxymaUI struct {
 
 func (ui *ProxymaUI) SyncVFS(w fyne.Window) func() {
 	return func() {
-		srvMutex.Lock()
-		s := srv
-		srvMutex.Unlock()
+		s := getRunningServer()
 		if s == nil {
 			dialog.ShowError(errors.New("Node is not running"), w)
 			return
@@ -55,9 +57,7 @@ func (ui *ProxymaUI) SyncVFS(w fyne.Window) func() {
 }
 func (ui *ProxymaUI) UploadFile(w fyne.Window) func() {
 	return func() {
-		srvMutex.Lock()
-		s := srv
-		srvMutex.Unlock()
+		s := getRunningServer()
 		if s == nil {
 			dialog.ShowError(errors.New("Node is not running"), w)
 			return
@@ -100,13 +100,8 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 				subText = "Unsubscribe"
 			}
 
-			sentSpeed, recvSpeed := srv.GetCategoryBandwidth("vfs:" + fileEntry.Hash)
-			speedInfo := ""
-			if sentSpeed > 0 || recvSpeed > 0 {
-				speedInfo = fmt.Sprintf(" [Up: %.1f KB/s, Down: %.1f KB/s]", sentSpeed/1024.0, recvSpeed/1024.0)
-			}
-
-			lbl := widget.NewLabel(fmt.Sprintf("%s (v%d, %s, %s)%s", fileEntry.Name, fileEntry.Version, byteCountSI(fileEntry.Size), statusText, speedInfo))
+			suffix := formatBandwidthSuffix("vfs:"+fileEntry.Hash, srv)
+			lbl := widget.NewLabel(fmt.Sprintf("%s (v%d, %s, %s)%s", fileEntry.Name, fileEntry.Version, byteCountSI(fileEntry.Size), statusText, suffix))
 			subBtn := widget.NewButton(subText, func() {
 				srv.Storage.SetSubscription(fileEntry.Name, !isSubscribed)
 				if !isSubscribed {
@@ -118,23 +113,33 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 				ui.Refresh()
 			})
 
-			exportBtn := widget.NewButton("Export", func() {
+			openBtn := widget.NewButton("Open", func() {
 				if !hasLocal {
 					dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
 					return
 				}
-				dialog.ShowFileSave(func(writer fyne.URIWriteCloser, err error) {
-					if err != nil || writer == nil {
-						return
-					}
-					defer writer.Close()
-					err = srv.Storage.ReadPhysicalBlob(fileEntry.Hash, writer)
-					if err != nil {
-						dialog.ShowError(err, w)
-					} else {
-						dialog.ShowInformation("Exported", "File exported successfully", w)
-					}
-				}, w)
+				blobPath := srv.Storage.GetLocalBlobPath(fileEntry.Hash)
+				u, err := url.Parse("file://" + filepath.Clean(blobPath))
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				_ = fyne.CurrentApp().OpenURL(u)
+			})
+
+			openLocBtn := widget.NewButton("Open Location", func() {
+				if !hasLocal {
+					dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
+					return
+				}
+				blobPath := srv.Storage.GetLocalBlobPath(fileEntry.Hash)
+				dirPath := filepath.Dir(blobPath)
+				u, err := url.Parse("file://" + filepath.Clean(dirPath))
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				_ = fyne.CurrentApp().OpenURL(u)
 			})
 
 			deleteBtn := widget.NewButton("Delete Local", func() {
@@ -146,7 +151,7 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 				}
 			})
 
-			row := container.NewHBox(lbl, subBtn, exportBtn, deleteBtn)
+			row := container.NewHBox(lbl, subBtn, openBtn, openLocBtn, deleteBtn)
 			ui.vfsFilesContainer.Add(row)
 		}
 		ui.vfsFilesContainer.Refresh()
@@ -155,9 +160,7 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 
 func (ui *ProxymaUI) DiscoverServices(w fyne.Window) func() {
 	return func() {
-		srvMutex.Lock()
-		s := srv
-		srvMutex.Unlock()
+		s := getRunningServer()
 		if s == nil {
 			dialog.ShowError(errors.New("Node is not running"), w)
 			return
@@ -182,11 +185,7 @@ func (ui *ProxymaUI) DiscoverServices(w fyne.Window) func() {
 				ui.servicesListContainer.Objects = []fyne.CanvasObject{}
 				for name := range names {
 					svcName := name
-					sentSpeed, recvSpeed := s.GetCategoryBandwidth("service:" + svcName)
-					labelStr := svcName
-					if sentSpeed > 0 || recvSpeed > 0 {
-						labelStr = fmt.Sprintf("%s [Up: %.1f KB/s, Down: %.1f KB/s]", svcName, sentSpeed/1024.0, recvSpeed/1024.0)
-					}
+					labelStr := svcName + formatBandwidthSuffix("service:"+svcName, s)
 					btn := widget.NewButton(labelStr, func() {
 						loadServiceDetails(svcName, w, ui.serviceDetailContainer)
 					})
@@ -258,11 +257,7 @@ func (ui *ProxymaUI) Refresh() {
 
 		for name := range names {
 			svcName := name
-			sentSpeed, recvSpeed := srv.GetCategoryBandwidth("service:" + svcName)
-			labelStr := svcName
-			if sentSpeed > 0 || recvSpeed > 0 {
-				labelStr = fmt.Sprintf("%s [Up: %.1f KB/s, Down: %.1f KB/s]", svcName, sentSpeed/1024.0, recvSpeed/1024.0)
-			}
+			labelStr := svcName + formatBandwidthSuffix("service:"+svcName, srv)
 			btn := widget.NewButton(labelStr, func() {
 				loadServiceDetails(svcName, ui.window, ui.serviceDetailContainer)
 			})
@@ -305,4 +300,12 @@ func (ui *ProxymaUI) refreshLogs() {
 		ui.logsContainer.Add(widget.NewLabel(prefix + rec.Message))
 	}
 	ui.logsContainer.Refresh()
+}
+
+func formatBandwidthSuffix(category string, s *server.Server) string {
+	sentSpeed, recvSpeed := s.GetCategoryBandwidth(category)
+	if sentSpeed > 0 || recvSpeed > 0 {
+		return fmt.Sprintf(" [Up: %.1f KB/s, Down: %.1f KB/s]", sentSpeed/1024.0, recvSpeed/1024.0)
+	}
+	return ""
 }

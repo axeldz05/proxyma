@@ -33,7 +33,7 @@ func TestSmartTokenV2(t *testing.T) {
 
 	// 1. Generate token with an IPv4 address
 	hostIPv4 := "192.168.1.100:8080"
-	token, secret, err := p2p.GenerateSmartToken(hostIPv4, caCertPath)
+	token, secret, err := p2p.GenerateSmartToken(hostIPv4, caCertPath, "my-sponsor-node", "https://relay.proxyma.net:8080")
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	require.Len(t, secret, 64)
@@ -47,6 +47,8 @@ func TestSmartTokenV2(t *testing.T) {
 	require.Equal(t, secret, parsedSecret)
 	require.Equal(t, expectedHashHex, payload.CAHash)
 	require.NotEmpty(t, payload.Addresses)
+	require.Equal(t, "my-sponsor-node", payload.SponsorID)
+	require.Equal(t, "https://relay.proxyma.net:8080", payload.RelayAddr)
 	
 	// The first IP should match the host
 	require.Contains(t, payload.Addresses[0], "192.168.1.100")
@@ -56,6 +58,8 @@ func TestSmartTokenV2(t *testing.T) {
 	payloadTrimmed, _, err := p2p.ParseSmartToken("  \"" + token + "\"  ")
 	require.NoError(t, err)
 	require.Equal(t, payload.Addresses, payloadTrimmed.Addresses)
+	require.Equal(t, payload.SponsorID, payloadTrimmed.SponsorID)
+	require.Equal(t, payload.RelayAddr, payloadTrimmed.RelayAddr)
 }
 
 func TestSmartTokenBackwardsCompatibility(t *testing.T) {
@@ -95,7 +99,7 @@ func TestParseHostAddressHandling(t *testing.T) {
 	require.NoError(t, os.WriteFile(caCertPath, pemData, 0644))
 
 	// Hostname instead of IP
-	token, _, err := p2p.GenerateSmartToken("https://my-awesome-cluster.net:9090", caCertPath)
+	token, _, err := p2p.GenerateSmartToken("https://my-awesome-cluster.net:9090", caCertPath, "", "")
 	require.NoError(t, err)
 
 	payload, _, err := p2p.ParseSmartToken(token)

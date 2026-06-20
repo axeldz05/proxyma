@@ -215,3 +215,7 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 
 	return nil
 }
+
+func (se *StorageEngine) GetLocalBlobPath(hash string) string {
+	return se.physical.GetBlobPath(hash)
+}

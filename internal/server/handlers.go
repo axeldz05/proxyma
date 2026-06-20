@@ -16,7 +16,7 @@ import (
 
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/cluster/join" {
+		if r.URL.Path == "/cluster/join" || r.URL.Path == "/relay/forward" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -140,13 +140,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.inviteMu.Lock()
-	expiration, exists := s.pendingInvites[req.Secret]
-	if exists {
-		// Valid or not, after one use it should be deleted from memory
-		delete(s.pendingInvites, req.Secret)
-	}
-	s.inviteMu.Unlock()
+	expiration, exists := s.Invites.CheckAndConsume(req.Secret)
 
 	if !exists {
 		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
@@ -202,7 +196,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	if req.ValidForMinutes <= 0 {
 		req.ValidForMinutes = 15
 	}
-	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath)
+	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
 	if err != nil {
 		s.Config.Logger.Error("Failed to generate smart token", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error")
@@ -210,9 +204,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiration := time.Now().Add(time.Duration(req.ValidForMinutes) * time.Minute)
-	s.inviteMu.Lock()
-	s.pendingInvites[secretHex] = expiration
-	s.inviteMu.Unlock()
+	s.Invites.Add(secretHex, expiration)
 
 	utils.RespondJSON(w, http.StatusCreated, InviteResponse{
 		Token:   smartToken,
@@ -275,19 +267,7 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.clusterServicesMu.Lock()
-	if s.clusterServices[req.NodeID] == nil {
-		s.clusterServices[req.NodeID] = make(map[string]protocol.ServiceSchema)
-	}
-	switch req.Action {
-	case "add", "modify":
-		s.clusterServices[req.NodeID][req.Schema.Name] = req.Schema
-		s.Config.Logger.Info("Cluster service registered", "service", req.Schema.Name, "peer", req.NodeID)
-	case "remove":
-		delete(s.clusterServices[req.NodeID], req.Schema.Name)
-		s.Config.Logger.Info("Cluster service removed", "service", req.Schema.Name, "peer", req.NodeID)
-	}
-	s.clusterServicesMu.Unlock()
+	s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
 
 	w.WriteHeader(http.StatusOK)
 }

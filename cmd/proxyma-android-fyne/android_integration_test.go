@@ -32,32 +32,75 @@ func TestAndroidConfigLoad(t *testing.T) {
 	}
 	t.Log("APK built successfully.")
 
-	serial := os.Getenv("ANDROID_SERIAL")
-	if serial == "" {
-		cmdDevs := exec.Command("adb", "devices")
-		outDevs, errDevs := cmdDevs.Output()
-		if errDevs == nil {
-			lines := strings.Split(string(outDevs), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "List of") {
-					continue
-				}
-				parts := strings.Fields(line)
-				if len(parts) >= 2 && parts[1] == "device" {
-					serial = parts[0]
-					break
-				}
+	var serial string
+	var emulatorCmd *exec.Cmd
+
+	useEmulatorEnv := os.Getenv("USE_EMULATOR") == "true"
+	envSerial := os.Getenv("ANDROID_SERIAL")
+
+	runningDevices, _ := getRunningDevices()
+
+	if envSerial != "" {
+		serial = envSerial
+	} else if useEmulatorEnv {
+		for _, d := range runningDevices {
+			if strings.HasPrefix(d, "emulator-") {
+				serial = d
+				break
 			}
 		}
 		if serial == "" {
-			serial = "emulator-5554"
+			avds := getAvailableAVDs()
+			if len(avds) == 0 {
+				t.Fatal("USE_EMULATOR is true but no AVDs are configured/found.")
+			}
+			selectedAVD := avds[0]
+			for _, avd := range avds {
+				if avd == "proxyma_test_avd" {
+					selectedAVD = avd
+					break
+				}
+			}
+			serial, emulatorCmd = startEmulator(t, selectedAVD)
+			t.Cleanup(func() {
+				if emulatorCmd != nil && emulatorCmd.Process != nil {
+					t.Log("Cleaning up: killing started emulator...")
+					_ = emulatorCmd.Process.Kill()
+				}
+			})
 		}
-	}
-
-	t.Logf("Target Android Device Serial: %s", serial)
-	if !strings.HasPrefix(serial, "emulator-") {
-		t.Log("⚠️ WARNING: Target device is a physical phone. If Google Play Protect blocks the install with 'Unsafe app blocked', please click 'Install anyway' on the phone screen to continue.")
+	} else {
+		for _, d := range runningDevices {
+			if strings.HasPrefix(d, "emulator-") {
+				serial = d
+				break
+			}
+		}
+		if serial == "" && len(runningDevices) > 0 {
+			serial = runningDevices[0]
+		}
+		if serial == "" {
+			avds := getAvailableAVDs()
+			if len(avds) > 0 {
+				t.Log("No active Android devices/emulators found. Auto-booting configured emulator AVD...")
+				selectedAVD := avds[0]
+				for _, avd := range avds {
+					if avd == "proxyma_test_avd" {
+						selectedAVD = avd
+						break
+					}
+				}
+				serial, emulatorCmd = startEmulator(t, selectedAVD)
+				t.Cleanup(func() {
+					if emulatorCmd != nil && emulatorCmd.Process != nil {
+						t.Log("Cleaning up: killing started emulator...")
+						_ = emulatorCmd.Process.Kill()
+					}
+				})
+			} else {
+				serial = "emulator-5554"
+			}
+		}
 	}
 
 	adbCmd := func(args ...string) *exec.Cmd {
@@ -65,9 +108,24 @@ func TestAndroidConfigLoad(t *testing.T) {
 		return exec.Command("adb", allArgs...)
 	}
 
-	// 2. Clear old app data/uninstall from the emulator
-	t.Log("Uninstalling previous version of the app from emulator...")
-	_ = adbCmd("uninstall", "com.proxyma.android").Run()
+	if strings.HasPrefix(serial, "emulator-") {
+		t.Logf("🤖 Running test on EMULATED Android environment: %s", serial)
+		// Try to disable package verification on emulator to avoid popups
+		_ = adbCmd("shell", "settings", "put", "global", "package_verifier_enable", "0").Run()
+		_ = adbCmd("shell", "settings", "put", "global", "package_verifier_user_consent", "-1").Run()
+	} else {
+		t.Logf("📱 Running test on PHYSICAL Android device: %s", serial)
+		t.Log("⚠️ WARNING: Target device is a physical phone. If Google Play Protect blocks the install with 'Unsafe app blocked', please click 'Install anyway' on the phone screen to continue. Alternatively, you can run tests with USE_EMULATOR=true to automatically boot and test on a virtual emulator.")
+	}
+
+	// 2. Clear old app data/uninstall from the emulator (unless physical device or PRESERVE_DATA is true)
+	preserveData := os.Getenv("PRESERVE_DATA") == "true" || !strings.HasPrefix(serial, "emulator-")
+	if preserveData {
+		t.Log("Preserving previous version and data (skipping uninstall)...")
+	} else {
+		t.Log("Uninstalling previous version of the app from emulator...")
+		_ = adbCmd("uninstall", "com.proxyma.android").Run()
+	}
 
 	// 3. Install the APK
 	t.Log("Installing APK to emulator...")
@@ -101,4 +159,109 @@ func TestAndroidConfigLoad(t *testing.T) {
 	}, 6*time.Second, 200*time.Millisecond, "config.json was not created/loaded on the device!")
 
 	t.Log("Integration test passed: config.json exists and is readable.")
+}
+
+func getRunningDevices() ([]string, error) {
+	cmdDevs := exec.Command("adb", "devices")
+	outDevs, errDevs := cmdDevs.Output()
+	if errDevs != nil {
+		return nil, errDevs
+	}
+	var serials []string
+	lines := strings.Split(string(outDevs), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "List of") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && parts[1] == "device" {
+			serials = append(serials, parts[0])
+		}
+	}
+	return serials, nil
+}
+
+func getAvailableAVDs() []string {
+	emulatorPath := "emulator"
+	if _, err := exec.LookPath("emulator"); err != nil {
+		emulatorPath = "/opt/android-sdk/tools/emulator"
+	}
+	cmd := exec.Command(emulatorPath, "-list-avds")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var avds []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			avds = append(avds, line)
+		}
+	}
+	return avds
+}
+
+func startEmulator(t *testing.T, avdName string) (string, *exec.Cmd) {
+	t.Logf("Starting Android emulator for AVD '%s'...", avdName)
+	emulatorPath := "emulator"
+	if _, err := exec.LookPath("emulator"); err != nil {
+		emulatorPath = "/opt/android-sdk/tools/emulator"
+	}
+	cmd := exec.Command(emulatorPath, "-avd", avdName, "-no-audio", "-no-snapshot")
+	if os.Getenv("ANDROID_EMULATOR_HEADLESS") == "true" {
+		cmd.Args = append(cmd.Args, "-no-window")
+	}
+
+	err := cmd.Start()
+	if err != nil {
+		t.Fatalf("Failed to start emulator '%s': %v", avdName, err)
+	}
+
+	t.Log("Waiting for emulator to connect to adb...")
+	var serial string
+	for i := 0; i < 30; i++ {
+		time.Sleep(2 * time.Second)
+		devices, err := getRunningDevices()
+		if err == nil {
+			for _, d := range devices {
+				if strings.HasPrefix(d, "emulator-") {
+					serial = d
+					break
+				}
+			}
+		}
+		if serial != "" {
+			break
+		}
+	}
+	if serial == "" {
+		_ = cmd.Process.Kill()
+		t.Fatalf("Emulator started but did not show up in adb within 60s")
+	}
+
+	t.Logf("Emulator detected with serial %s. Waiting for boot to complete...", serial)
+	bootTimeout := 90 * time.Second
+	bootChan := make(chan error, 1)
+	go func() {
+		for {
+			cmdCheck := exec.Command("adb", "-s", serial, "shell", "getprop", "sys.boot_completed")
+			outCheck, errCheck := cmdCheck.Output()
+			if errCheck == nil && strings.TrimSpace(string(outCheck)) == "1" {
+				bootChan <- nil
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}()
+
+	select {
+	case <-bootChan:
+		t.Log("Emulator booted successfully.")
+	case <-time.After(bootTimeout):
+		_ = cmd.Process.Kill()
+		t.Fatalf("Emulator boot timed out after %v", bootTimeout)
+	}
+
+	return serial, cmd
 }

@@ -174,7 +174,7 @@ func TestVFSSnapshotRendering(t *testing.T) {
 
 	row, ok := ui.vfsFilesContainer.Objects[0].(*fyne.Container)
 	require.True(t, ok)
-	assert.Len(t, row.Objects, 4, "Row should contain Label, Subscribe button, Export button, Delete button")
+	assert.Len(t, row.Objects, 5, "Row should contain Label, Subscribe button, Open button, Open Location button, Delete button")
 
 	lbl, ok := row.Objects[0].(*widget.Label)
 	require.True(t, ok)
@@ -183,6 +183,14 @@ func TestVFSSnapshotRendering(t *testing.T) {
 	btnSub, ok := row.Objects[1].(*widget.Button)
 	require.True(t, ok)
 	assert.Equal(t, "Subscribe", btnSub.Text)
+
+	btnOpen, ok := row.Objects[2].(*widget.Button)
+	require.True(t, ok)
+	assert.Equal(t, "Open", btnOpen.Text)
+
+	btnOpenLoc, ok := row.Objects[3].(*widget.Button)
+	require.True(t, ok)
+	assert.Equal(t, "Open Location", btnOpenLoc.Text)
 
 	// Subscribe
 	btnSub.Tapped(&fyne.PointEvent{})

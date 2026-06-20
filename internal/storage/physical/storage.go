@@ -21,14 +21,6 @@ type Storage struct {
 	baseDir string
 }
 
-func Map[T, U any](slice []T, fn func(T) U) []U {
-	result := make([]U, len(slice))
-	for i, v := range slice {
-		result[i] = fn(v)
-	}
-	return result
-}
-
 func (st *Storage) Name() string {
 	return filepath.Base(st.baseDir)
 }
@@ -105,4 +97,8 @@ func (st *Storage) ReadBlob(hash string, w io.Writer) error {
 func (st *Storage) DeleteBlob(hash string) error {
 	fullPath := filepath.Join(st.baseDir, hash)
 	return os.Remove(fullPath)
+}
+
+func (st *Storage) GetBlobPath(hash string) string {
+	return filepath.Join(st.baseDir, hash)
 }

@@ -1,5 +1,19 @@
 # Changelog - Proxyma P2P Dynamic Clustering Update
 
+## 20-06-2026
+### Refactorización del Servidor (Granularidad Continua)
+* **Subcomponentes del Servidor**: Se dividió el struct monolítico `Server` en cuatro administradores independientes y seguros para subprocesos: `PeerRegistry` (contactos y servicios), `InviteManager` (tokens de emparejamiento), `BandwidthTracker` (telemetría de red) y `RelayManager` (colas y canales de relay). Se mantuvieron métodos delegadores en `Server` para preservar la compatibilidad con el resto del código y los tests.
+
+### Compresión Semántica y Deduplicación (UI & Core)
+* **CountingReadCloser**: Centralizado en `internal/utils` para eliminar la duplicidad en el rastreo de progreso de lectura.
+* **Refactorización de Formularios en Fyne**: Extraído `buildParameterWidget` en `helpers.go` para simplificar la creación y validación de parámetros de servicios en la UI.
+* **Telemetría de Velocidad unificada**: Creado `formatBandwidthSuffix` en `proxymaui.go` para formatear de forma uniforme las etiquetas con velocidad de red.
+* **getRunningServer()**: Incorporado en `helpers.go` para encapsular de forma segura la adquisición y control de `srv` bajo el mutex de la UI de Fyne.
+* **Cálculo de Ancho de Banda**: Simplificado en `bandwidth.go` abstrayendo los bucles de podado e históricos en `pruneHistory` y `sumCategory`.
+
+### Limpieza de Código Muerto
+* **Eliminación de funciones redundantes**: Se borraron funciones genéricas y métodos sin uso (`Map`, `FindFileAndDo`, `ExistsFileRelativeToBase`) bajo `internal/storage/physical` para reducir el costo de mantenimiento.
+
 ## 21-05-2026
 ### Relay y STUN
 * **Relay Fallback**: Los nodos detrás de NAT realizan long-polling (`/relay/poll`) autenticados mediante mTLS. Si la conexión directa falla, el emisor redirige un `RelayRequest` con un `ReqID` seguro al Sponsor (`/relay/forward`). El receptor procesa el mensaje localmente y responde por `/relay/reply`.
