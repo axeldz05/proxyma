@@ -136,14 +136,146 @@ var addServiceCmd = &cobra.Command{
 }
 
 var removeServiceCmd = &cobra.Command{
-	// (The remove command remains almost identical to the one we built before,
-	// but using serviceStorage and validating LoadConfig)
+	Use:   "remove [service_name]",
+	Short: "Remove a service from the local node",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		serviceName := args[0]
+		_ = loadConfigOrDie(serviceStorage)
+
+		servicesFile := filepath.Join(serviceStorage, "services.json")
+		services := make(map[string]LocalService)
+
+		if data, err := os.ReadFile(servicesFile); err == nil {
+			_ = json.Unmarshal(data, &services)
+		}
+
+		if _, exists := services[serviceName]; !exists {
+			return fmt.Errorf("❌ Service '%s' not found", serviceName)
+		}
+
+		delete(services, serviceName)
+
+		newData, _ := json.MarshalIndent(services, "", "  ")
+		if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
+			return fmt.Errorf("❌ Error saving %s: %v", servicesFile, err)
+		}
+
+		fmt.Printf("✅ Service '%s' removed successfully.\n", serviceName)
+		fmt.Println("🔄 Restart the node ('proxyma run') to load the changes.")
+		return nil
+	},
+}
+
+var discoverServiceCmd = &cobra.Command{
+	Use:   "discover",
+	Short: "Query active services in the cluster",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := sendUnixSocketCommand(serviceStorage, "service_discover", nil)
+		if err != nil {
+			return err
+		}
+
+		var services []string
+		if err := json.Unmarshal(data, &services); err != nil {
+			return fmt.Errorf("failed to parse services list: %w", err)
+		}
+
+		if len(services) == 0 {
+			fmt.Println("No active services found in the cluster.")
+			return nil
+		}
+
+		fmt.Println("Active services in cluster:")
+		for _, svc := range services {
+			fmt.Printf(" - %s\n", svc)
+		}
+		return nil
+	},
+}
+
+var runServiceCmd = &cobra.Command{
+	Use:   "run [service_name] [payload_json]",
+	Short: "Dispatch a task execution across the cluster and wait for results",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		serviceName := args[0]
+		payload := ""
+		if len(args) == 2 {
+			payload = args[1]
+			var js map[string]any
+			if err := json.Unmarshal([]byte(payload), &js); err != nil {
+				return fmt.Errorf("invalid payload JSON: %w", err)
+			}
+		}
+
+		fmt.Printf("🚀 Dispatching task for service '%s'...\n", serviceName)
+		data, err := sendUnixSocketCommand(serviceStorage, "service_run", map[string]string{
+			"service": serviceName,
+			"payload": payload,
+		})
+		if err != nil {
+			return err
+		}
+
+		var resp protocol.ServiceTaskResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return fmt.Errorf("failed to parse task response: %w", err)
+		}
+
+		fmt.Printf("✅ Task Finished:\n")
+		fmt.Printf("  Task ID: %s\n", resp.TaskID)
+		fmt.Printf("  Status:  %s\n", resp.Status)
+		if resp.Error != "" {
+			fmt.Printf("  Error:   %s\n", resp.Error)
+		}
+		if len(resp.Outputs) > 0 {
+			outBytes, _ := json.MarshalIndent(resp.Outputs, "  ", "  ")
+			fmt.Printf("  Outputs:\n  %s\n", string(outBytes))
+		}
+		return nil
+	},
+}
+
+var statusServiceCmd = &cobra.Command{
+	Use:   "status [task_id]",
+	Short: "Query status of a specific task execution",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		taskID := args[0]
+		data, err := sendUnixSocketCommand(serviceStorage, "service_status", map[string]string{
+			"task_id": taskID,
+		})
+		if err != nil {
+			return err
+		}
+
+		var resp protocol.ServiceTaskResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return fmt.Errorf("failed to parse task response: %w", err)
+		}
+
+		fmt.Printf("Task ID: %s\n", resp.TaskID)
+		fmt.Printf("Service: %s\n", resp.Service)
+		fmt.Printf("Status:  %s\n", resp.Status)
+		if resp.Error != "" {
+			fmt.Printf("Error:   %s\n", resp.Error)
+		}
+		if len(resp.Outputs) > 0 {
+			outBytes, _ := json.MarshalIndent(resp.Outputs, "", "  ")
+			fmt.Printf("Outputs:\n%s\n", string(outBytes))
+		}
+		return nil
+	},
 }
 
 func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.AddCommand(addServiceCmd)
 	serviceCmd.AddCommand(removeServiceCmd)
+	serviceCmd.AddCommand(discoverServiceCmd)
+	serviceCmd.AddCommand(runServiceCmd)
+	serviceCmd.AddCommand(statusServiceCmd)
 
 	defaultStorage := getDefaultStorage()
 

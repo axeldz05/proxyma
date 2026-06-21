@@ -48,6 +48,27 @@ type IndexEntry struct {
 	Deleted bool   `json:"deleted"`
 }
 
+type CLIFileEntry struct {
+	Name       string `json:"name"`
+	Version    int    `json:"version"`
+	Size       int64  `json:"size"`
+	Hash       string `json:"hash"`
+	Deleted    bool   `json:"deleted"`
+	Subscribed bool   `json:"subscribed"`
+	HasLocal   bool   `json:"has_local"`
+}
+
+type UnixRequest struct {
+	Action string            `json:"action"`
+	Args   map[string]string `json:"args,omitempty"`
+}
+
+type UnixResponse struct {
+	Success bool            `json:"success"`
+	Error   string          `json:"error,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
 type ServiceSchema struct {
 	Name        string                      `json:"name"`
 	Description string                      `json:"description"`

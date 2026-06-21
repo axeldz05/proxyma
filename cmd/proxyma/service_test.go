@@ -101,4 +101,85 @@ func TestServiceAddCmd(t *testing.T) {
 		require.Equal(t, "string", tokenParam.Type)
 		require.True(t, tokenParam.Required)
 	})
+
+	t.Run("Remove service", func(t *testing.T) {
+		rootCmd.SetArgs([]string{
+			"service", "remove", "my-script",
+			"--storage", tempDir,
+		})
+
+		err := rootCmd.Execute()
+		require.NoError(t, err)
+
+		servicesFile := filepath.Join(tempDir, "services.json")
+		data, err := os.ReadFile(servicesFile)
+		require.NoError(t, err)
+
+		var services map[string]LocalService
+		err = json.Unmarshal(data, &services)
+		require.NoError(t, err)
+
+		_, exists := services["my-script"]
+		require.False(t, exists)
+	})
+}
+
+func TestServiceDaemonCmds(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cfg := protocol.NodeConfig{
+		ID:          "test-node",
+		StoragePath: tempDir,
+	}
+	err := protocol.SaveConfig(cfg)
+	require.NoError(t, err)
+
+	t.Run("service discover", func(t *testing.T) {
+		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
+			require.Equal(t, "service_discover", req.Action)
+			return []string{"hello-service", "goodbye-service"}, nil
+		})
+		defer func() { _ = l.Close() }()
+
+		rootCmd.SetArgs([]string{"service", "discover", "--storage", tempDir})
+		err := rootCmd.Execute()
+		require.NoError(t, err)
+	})
+
+	t.Run("service run", func(t *testing.T) {
+		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
+			require.Equal(t, "service_run", req.Action)
+			require.Equal(t, "hello-service", req.Args["service"])
+			require.Equal(t, `{"x":1}`, req.Args["payload"])
+			return protocol.ServiceTaskResponse{
+				TaskID:  "task_123",
+				Service: "hello-service",
+				Status:  "completed",
+				Outputs: map[string]any{"res": "val"},
+			}, nil
+		})
+		defer func() { _ = l.Close() }()
+
+		rootCmd.SetArgs([]string{"service", "run", "hello-service", `{"x":1}`, "--storage", tempDir})
+		err := rootCmd.Execute()
+		require.NoError(t, err)
+	})
+
+	t.Run("service status", func(t *testing.T) {
+		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
+			require.Equal(t, "service_status", req.Action)
+			require.Equal(t, "task_123", req.Args["task_id"])
+			return protocol.ServiceTaskResponse{
+				TaskID:  "task_123",
+				Service: "hello-service",
+				Status:  "completed",
+				Outputs: map[string]any{"res": "val"},
+			}, nil
+		})
+		defer func() { _ = l.Close() }()
+
+		rootCmd.SetArgs([]string{"service", "status", "task_123", "--storage", tempDir})
+		err := rootCmd.Execute()
+		require.NoError(t, err)
+	})
 }

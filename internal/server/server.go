@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -182,17 +184,219 @@ func (s *Server) listenUnixSocket() {
 func (s *Server) handleUnixConnection(c net.Conn) {
 	defer func() { _ = c.Close() }()
 	buf := make([]byte, 1)
-	_, err := c.Read(buf) // wait for any byte
+	_, err := c.Read(buf)
 	if err != nil {
 		return
 	}
-	s.Config.Logger.Info("Sync triggered via unix socket")
-	err = s.ExecuteSync()
-	if err != nil {
-		s.Config.Logger.Error("Sync via unix socket failed", "error", err)
-		_, _ = c.Write([]byte{0})
-	} else {
-		_, _ = c.Write([]byte{1})
+
+	// Legacy 1-byte command compat
+	if buf[0] == 1 {
+		s.Config.Logger.Info("Sync triggered via legacy unix socket command")
+		err = s.ExecuteSync()
+		if err != nil {
+			s.Config.Logger.Error("Sync via legacy unix socket failed", "error", err)
+			_, _ = c.Write([]byte{0})
+		} else {
+			_, _ = c.Write([]byte{1})
+		}
+		return
+	}
+
+	// JSON Request
+	if buf[0] == '{' {
+		reader := io.MultiReader(bytes.NewReader(buf), c)
+		var req protocol.UnixRequest
+		if err := json.NewDecoder(reader).Decode(&req); err != nil {
+			respBytes, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: "invalid JSON request: " + err.Error()})
+			_, _ = c.Write(respBytes)
+			return
+		}
+
+		var respData any
+		var actionErr error
+
+		switch req.Action {
+		case "sync":
+			actionErr = s.ExecuteSync()
+
+		case "vfs_list":
+			snapshot := s.Storage.GetVFSSnapshot()
+			var list []protocol.CLIFileEntry
+			for _, entry := range snapshot {
+				hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
+				list = append(list, protocol.CLIFileEntry{
+					Name:       entry.Name,
+					Version:    entry.Version,
+					Size:       entry.Size,
+					Hash:       entry.Hash,
+					Deleted:    entry.Deleted,
+					Subscribed: s.Storage.IsSubscribed(entry.Name),
+					HasLocal:   hasLocal,
+				})
+			}
+			respData = list
+
+		case "vfs_upload":
+			filePath := req.Args["path"]
+			fileName := req.Args["name"]
+			if filePath == "" || fileName == "" {
+				actionErr = fmt.Errorf("missing path or name parameter")
+				break
+			}
+			f, err := os.Open(filePath)
+			if err != nil {
+				actionErr = fmt.Errorf("failed to open file: %w", err)
+				break
+			}
+			actionErr = s.Storage.SaveLocalFile(fileName, f)
+			_ = f.Close()
+
+		case "vfs_subscribe":
+			fileName := req.Args["name"]
+			if fileName == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			s.Storage.SetSubscription(fileName, true)
+			go func() { _ = s.ExecuteSync() }()
+
+		case "vfs_unsubscribe":
+			fileName := req.Args["name"]
+			if fileName == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			s.Storage.SetSubscription(fileName, false)
+
+		case "vfs_delete":
+			fileName := req.Args["name"]
+			if fileName == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			actionErr = s.Storage.DeleteLocalFile(fileName)
+
+		case "vfs_purge":
+			fileName := req.Args["name"]
+			if fileName == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			actionErr = s.Storage.DeleteLocalCache(fileName)
+
+		case "service_discover":
+			names := make(map[string]bool)
+			for _, name := range s.Compute.ListServices() {
+				names[name] = true
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			for peerID := range s.GetPeersCopy() {
+				peerSvc, err := s.DiscoverServices(ctx, peerID)
+				if err == nil {
+					for _, name := range peerSvc {
+						names[name] = true
+					}
+				}
+			}
+			cancel()
+			var result []string
+			for name := range names {
+				result = append(result, name)
+			}
+			respData = result
+
+		case "service_run":
+			serviceName := req.Args["service"]
+			payloadStr := req.Args["payload"]
+			if serviceName == "" {
+				actionErr = fmt.Errorf("missing service parameter")
+				break
+			}
+			var payload map[string]any
+			if payloadStr != "" {
+				_ = json.Unmarshal([]byte(payloadStr), &payload)
+			}
+
+			addr, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+			if err != nil {
+				actionErr = fmt.Errorf("failed to discover service: %w", err)
+				break
+			}
+
+			taskID := fmt.Sprintf("task_cli_%d", time.Now().UnixNano())
+			var targetPeerID string
+			for pid, paddr := range s.GetPeersCopy() {
+				if paddr == addr {
+					targetPeerID = pid
+					break
+				}
+			}
+			if targetPeerID == "" {
+				targetPeerID = addr
+			}
+
+			taskReq := protocol.TaskRequest{
+				TaskID:  taskID,
+				Service: serviceName,
+				ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
+				Payload: payload,
+			}
+
+			err = s.DispatchTask(targetPeerID, taskReq)
+			if err != nil {
+				actionErr = fmt.Errorf("failed to dispatch task: %w", err)
+				break
+			}
+
+			var resp protocol.ServiceTaskResponse
+			completed := false
+			for i := 0; i < 30; i++ {
+				time.Sleep(1 * time.Second)
+				r, ok := s.Compute.GetTaskResponse(taskID)
+				if ok {
+					if r.Status == "completed" || r.Status == "failed" {
+						resp = r
+						completed = true
+						break
+					}
+				}
+			}
+			if !completed {
+				actionErr = fmt.Errorf("task timed out on execution")
+				break
+			}
+			respData = resp
+
+		case "service_status":
+			taskID := req.Args["task_id"]
+			if taskID == "" {
+				actionErr = fmt.Errorf("missing task_id parameter")
+				break
+			}
+			r, ok := s.Compute.GetTaskResponse(taskID)
+			if !ok {
+				actionErr = fmt.Errorf("task not found")
+				break
+			}
+			respData = r
+
+		default:
+			actionErr = fmt.Errorf("unknown action: %s", req.Action)
+		}
+
+		var unixResp protocol.UnixResponse
+		if actionErr != nil {
+			unixResp = protocol.UnixResponse{Success: false, Error: actionErr.Error()}
+		} else {
+			var raw json.RawMessage
+			if respData != nil {
+				raw, _ = json.Marshal(respData)
+			}
+			unixResp = protocol.UnixResponse{Success: true, Data: raw}
+		}
+
+		respBytes, _ := json.Marshal(unixResp)
+		_, _ = c.Write(respBytes)
 	}
 }
 

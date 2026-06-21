@@ -1,7 +1,9 @@
 package proxyma
 
 import (
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,4 +56,52 @@ func setupLocalAdminClient(cfg protocol.NodeConfig) *http.Client {
 // generateDefaultNodeID generates a fallback node ID using hostname and a short random hex
 func generateDefaultNodeID() string {
 	return utils.GenerateDefaultNodeID()
+}
+
+func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
+	cfg := loadConfigOrDie(storagePath)
+	sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return nil, fmt.Errorf("daemon is unreachable. Is 'proxyma run' active? Error: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	req := protocol.UnixRequest{
+		Action: action,
+		Args:   args,
+	}
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	_, err = conn.Write(reqBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send command: %w", err)
+	}
+
+	var respBytes []byte
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			respBytes = append(respBytes, buf[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	var resp protocol.UnixResponse
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse daemon response: %w", err)
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+
+	return resp.Data, nil
 }
