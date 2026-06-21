@@ -111,32 +111,11 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 			})
 
 			openBtn := widget.NewButton("Open", func() {
-				if !hasLocal {
-					dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
-					return
-				}
-				blobPath := srv.Storage.GetLocalBlobPath(fileEntry.Hash)
-				u, err := url.Parse("file://" + filepath.Clean(blobPath))
-				if err != nil {
-					dialog.ShowError(err, w)
-					return
-				}
-				_ = fyne.CurrentApp().OpenURL(u)
+				openLocalVFSPath(w, fileEntry.Hash, hasLocal, false)
 			})
 
 			openLocBtn := widget.NewButton("Open Location", func() {
-				if !hasLocal {
-					dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
-					return
-				}
-				blobPath := srv.Storage.GetLocalBlobPath(fileEntry.Hash)
-				dirPath := filepath.Dir(blobPath)
-				u, err := url.Parse("file://" + filepath.Clean(dirPath))
-				if err != nil {
-					dialog.ShowError(err, w)
-					return
-				}
-				_ = fyne.CurrentApp().OpenURL(u)
+				openLocalVFSPath(w, fileEntry.Hash, hasLocal, true)
 			})
 
 			deleteBtn := widget.NewButton("Delete Local", func() {
@@ -179,16 +158,7 @@ func (ui *ProxymaUI) DiscoverServices(w fyne.Window) func() {
 			}
 
 			fyne.Do(func() {
-				ui.servicesListContainer.Objects = []fyne.CanvasObject{}
-				for name := range names {
-					svcName := name
-					labelStr := svcName + formatBandwidthSuffix("service:"+svcName, s)
-					btn := widget.NewButton(labelStr, func() {
-						loadServiceDetails(svcName, w, ui.serviceDetailContainer)
-					})
-					ui.servicesListContainer.Add(btn)
-				}
-				ui.servicesListContainer.Refresh()
+				ui.updateServicesList(w, names)
 			})
 		}()
 	}
@@ -241,7 +211,6 @@ func (ui *ProxymaUI) Refresh() {
 	}
 
 	if ui.servicesListContainer != nil {
-		ui.servicesListContainer.Objects = []fyne.CanvasObject{}
 		names := make(map[string]bool)
 		for _, name := range srv.Compute.ListServices() {
 			names[name] = true
@@ -251,16 +220,7 @@ func (ui *ProxymaUI) Refresh() {
 				names[name] = true
 			}
 		}
-
-		for name := range names {
-			svcName := name
-			labelStr := svcName + formatBandwidthSuffix("service:"+svcName, srv)
-			btn := widget.NewButton(labelStr, func() {
-				loadServiceDetails(svcName, ui.window, ui.serviceDetailContainer)
-			})
-			ui.servicesListContainer.Add(btn)
-		}
-		ui.servicesListContainer.Refresh()
+		ui.updateServicesList(ui.window, names)
 	}
 }
 
@@ -305,4 +265,34 @@ func formatBandwidthSuffix(category string, s *server.Server) string {
 		return fmt.Sprintf(" [Up: %.1f KB/s, Down: %.1f KB/s]", sentSpeed/1024.0, recvSpeed/1024.0)
 	}
 	return ""
+}
+
+func openLocalVFSPath(w fyne.Window, hash string, hasLocal bool, getDir bool) {
+	if !hasLocal {
+		dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
+		return
+	}
+	blobPath := srv.Storage.GetLocalBlobPath(hash)
+	if getDir {
+		blobPath = filepath.Dir(blobPath)
+	}
+	u, err := url.Parse("file://" + filepath.Clean(blobPath))
+	if err != nil {
+		dialog.ShowError(err, w)
+		return
+	}
+	_ = fyne.CurrentApp().OpenURL(u)
+}
+
+func (ui *ProxymaUI) updateServicesList(w fyne.Window, names map[string]bool) {
+	ui.servicesListContainer.Objects = []fyne.CanvasObject{}
+	for name := range names {
+		svcName := name
+		labelStr := svcName + formatBandwidthSuffix("service:"+svcName, srv)
+		btn := widget.NewButton(labelStr, func() {
+			loadServiceDetails(svcName, w, ui.serviceDetailContainer)
+		})
+		ui.servicesListContainer.Add(btn)
+	}
+	ui.servicesListContainer.Refresh()
 }
