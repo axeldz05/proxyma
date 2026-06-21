@@ -16,7 +16,7 @@ import (
 
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/cluster/join" || r.URL.Path == "/relay/forward" {
+		if r.URL.Path == "/cluster/join" || r.URL.Path == "/relay/forward" || r.URL.Path == "/peers/probe" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -57,6 +57,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /peers/leave", s.HandleLeavePeer)
 	mux.HandleFunc("POST /peers/offline", s.HandleOfflinePeer)
 	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
+	mux.HandleFunc("POST /peers/probe", s.HandleProbe)
 	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
 	mux.HandleFunc("GET /relay/poll", s.HandleRelayPoll)
 	mux.HandleFunc("POST /relay/forward", s.HandleRelayForward)
@@ -281,4 +282,56 @@ func (s *Server) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, s.Compute.ListServices())
+}
+
+func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
+	req, ok := utils.DecodeJSONOrError[protocol.ProbeRequest](w, r)
+	if !ok {
+		return
+	}
+
+	if req.Address == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Address is required")
+		return
+	}
+
+	// Security: Only allow probing the caller's IP to prevent SSRF
+	callerIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		callerIP = r.RemoteAddr
+	}
+
+	// Clean targetHost/Port
+	targetAddr := req.Address
+	if strings.Contains(targetAddr, "://") {
+		parsed, err := url.Parse(targetAddr)
+		if err == nil {
+			targetAddr = parsed.Host
+		}
+	}
+
+	_, targetPort, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		// If port splitting failed, try treating whole string as host:port
+		utils.RespondError(w, http.StatusBadRequest, "Invalid address format, port is required")
+		return
+	}
+
+	// Always override host with callerIP for safety
+	probeAddress := net.JoinHostPort(callerIP, targetPort)
+	s.Config.Logger.Debug("Probing reachability for client", "probeAddress", probeAddress)
+
+	conn, err := net.DialTimeout("tcp", probeAddress, 2*time.Second)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusOK, protocol.ProbeResponse{
+			Reachable: false,
+			Error:     err.Error(),
+		})
+		return
+	}
+	_ = conn.Close()
+
+	utils.RespondJSON(w, http.StatusOK, protocol.ProbeResponse{
+		Reachable: true,
+	})
 }

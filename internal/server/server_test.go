@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -44,11 +45,11 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 
 	// Both peers should now know each other
 	gotPeersSv1 := strings.TrimSpace(GetPeersSimulated(t, sv1))
-	expectedSv1 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0}}`, sv2.Config.ID, sv2.Config.Address)
+	expectedSv1 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0,"is_sponsor":false}}`, sv2.Config.ID, sv2.Config.Address)
 	require.Equal(t, expectedSv1, gotPeersSv1)
 
 	gotPeersSv2 := strings.TrimSpace(GetPeersSimulated(t, sv2))
-	expectedSv2 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0}}`, sv1.Config.ID, sv1.Config.Address)
+	expectedSv2 := fmt.Sprintf(`{"%s":{"addresses":["%s"],"sequence":0,"is_sponsor":false}}`, sv1.Config.ID, sv1.Config.Address)
 	require.Equal(t, expectedSv2, gotPeersSv2)
 
 	require.NoError(t, sv1.ExecuteSync())
@@ -1005,4 +1006,40 @@ func TestSponsorRegistryAndDiscovery(t *testing.T) {
 	require.Equal(t, "https://10.0.0.5:8443", sponsors["sponsor-peer"])
 	require.NotContains(t, sponsors, "regular-peer")
 }
+
+func TestProbeEndpoint(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(t, testutil.DefaultConfig(t, "probe-server"), nil)
+
+	parsed, err := url.Parse(srv.Config.Address)
+	require.NoError(t, err)
+
+	// Test 1: Reachable port
+	probeReq := protocol.ProbeRequest{
+		Address: parsed.Host,
+	}
+	bodyBytes, _ := json.Marshal(probeReq)
+	resp, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var probeResp protocol.ProbeResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&probeResp))
+	require.True(t, probeResp.Reachable, "Should be reachable")
+
+	// Test 2: Unreachable port (a port that is closed, e.g. 9999)
+	probeReq2 := protocol.ProbeRequest{
+		Address: "127.0.0.1:9999",
+	}
+	bodyBytes2, _ := json.Marshal(probeReq2)
+	resp2, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes2))
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+
+	var probeResp2 protocol.ProbeResponse
+	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&probeResp2))
+	require.False(t, probeResp2.Reachable, "Should be unreachable")
+	require.NotEmpty(t, probeResp2.Error)
+}
+
 

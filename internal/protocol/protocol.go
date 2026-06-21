@@ -166,3 +166,12 @@ type RelayResponse struct {
 	Headers    map[string]string `json:"headers"`
 	Body       []byte            `json:"body"`
 }
+
+type ProbeRequest struct {
+	Address string `json:"address"`
+}
+
+type ProbeResponse struct {
+	Reachable bool   `json:"reachable"`
+	Error     string `json:"error,omitempty"`
+}

@@ -7,3 +7,10 @@ import "time"
 func (s *Server) SetPendingInviteExpiration(secret string, t time.Time) {
 	s.Invites.Add(secret, t)
 }
+
+func (s *Server) GetHTTPServerAddr() string {
+	if s.httpServer == nil {
+		return ""
+	}
+	return s.httpServer.Addr
+}
