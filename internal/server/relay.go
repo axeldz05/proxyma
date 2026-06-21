@@ -77,9 +77,8 @@ func (rm *RelayManager) GetWaiter(reqID string) (chan protocol.RelayResponse, bo
 }
 
 func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
-	peerID := r.URL.Query().Get("id")
-	if peerID == "" {
-		utils.RespondError(w, http.StatusBadRequest, "Missing peer id")
+	peerID, ok := utils.GetRequiredQueryParam(w, r, "id")
+	if !ok {
 		return
 	}
 
@@ -111,9 +110,8 @@ func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[protocol.RelayRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[protocol.RelayRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -162,9 +160,8 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
-	resp, err := utils.DecodeJSON[protocol.RelayResponse](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	resp, ok := utils.DecodeJSONOrError[protocol.RelayResponse](w, r)
+	if !ok {
 		return
 	}
 

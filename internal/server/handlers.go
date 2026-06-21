@@ -75,9 +75,8 @@ type InviteResponse struct {
 }
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[protocol.AddPeerRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[protocol.AddPeerRequest](w, r)
+	if !ok {
 		return
 	}
 	if req.ID == "" || len(req.Address.Addresses) == 0 || req.Address.Addresses[0] == "" {
@@ -134,9 +133,8 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[protocol.JoinRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[protocol.JoinRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -188,9 +186,8 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[InviteRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[InviteRequest](w, r)
+	if !ok {
 		return
 	}
 	if req.ValidForMinutes <= 0 {
@@ -220,9 +217,8 @@ func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[protocol.AddPeerRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[protocol.AddPeerRequest](w, r)
+	if !ok {
 		return
 	}
 	s.AddPeer(req.ID, req.Address)
@@ -235,9 +231,8 @@ type LeaveRequest struct {
 }
 
 func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[LeaveRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[LeaveRequest](w, r)
+	if !ok {
 		return
 	}
 	s.RemovePeer(req.ID)
@@ -250,9 +245,8 @@ type OfflineRequest struct {
 }
 
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[OfflineRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[OfflineRequest](w, r)
+	if !ok {
 		return
 	}
 	s.SetPeerOnline(req.ID, false)
@@ -261,9 +255,8 @@ func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
-	req, err := utils.DecodeJSON[protocol.ServiceNotification](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	req, ok := utils.DecodeJSONOrError[protocol.ServiceNotification](w, r)
+	if !ok {
 		return
 	}
 

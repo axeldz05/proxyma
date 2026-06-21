@@ -24,3 +24,23 @@ func RespondJSON(w http.ResponseWriter, status int, payload any) {
 func RespondError(w http.ResponseWriter, status int, message string) {
 	RespondJSON(w, status, map[string]string{"error": message})
 }
+
+// DecodeJSONOrError decodes the request body and returns false with a Bad Request response if decoding fails.
+func DecodeJSONOrError[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	payload, err := DecodeJSON[T](r)
+	if err != nil {
+		RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+		return payload, false
+	}
+	return payload, true
+}
+
+// GetRequiredQueryParam retrieves a query parameter and returns false with a Bad Request response if empty.
+func GetRequiredQueryParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	val := r.URL.Query().Get(name)
+	if val == "" {
+		RespondError(w, http.StatusBadRequest, "Missing '" + name + "' query parameter")
+		return "", false
+	}
+	return val, true
+}

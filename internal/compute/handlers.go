@@ -7,9 +7,8 @@ import (
 )
 
 func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request) {
-	query, err := utils.DecodeJSON[protocol.DiscoveryQuery](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	query, ok := utils.DecodeJSONOrError[protocol.DiscoveryQuery](w, r)
+	if !ok {
 		return
 	}
 
@@ -47,9 +46,8 @@ func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Request) {
-	taskReq, err := utils.DecodeJSON[protocol.TaskRequest](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	taskReq, ok := utils.DecodeJSONOrError[protocol.TaskRequest](w, r)
+	if !ok {
 		return
 	}
 
@@ -71,9 +69,8 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Request) {
-	webhookPayload, err := utils.DecodeJSON[protocol.ServiceTaskResponse](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	webhookPayload, ok := utils.DecodeJSONOrError[protocol.ServiceTaskResponse](w, r)
+	if !ok {
 		return
 	}
 	s.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)

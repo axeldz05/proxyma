@@ -39,9 +39,8 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // handleNotification handles notifications from peers about new files
 func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Request) {
-	notification, err := utils.DecodeJSON[protocol.PeerNotification](r)
-	if err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	notification, ok := utils.DecodeJSONOrError[protocol.PeerNotification](w, r)
+	if !ok {
 		return
 	}
 	updated := se.vfs.Upsert(notification.File)
@@ -77,9 +76,8 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
-	fileName := r.URL.Query().Get("name")
-	if fileName == "" {
-		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
+	fileName, ok := utils.GetRequiredQueryParam(w, r, "name")
+	if !ok {
 		return
 	}
 	s.SetSubscription(fileName, true)
@@ -92,9 +90,8 @@ func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	fileName := r.URL.Query().Get("name")
-	if fileName == "" {
-		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
+	fileName, ok := utils.GetRequiredQueryParam(w, r, "name")
+	if !ok {
 		return
 	}
 
