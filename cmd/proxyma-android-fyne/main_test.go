@@ -88,6 +88,9 @@ func (m *mockPeerClient) Offline(ctx context.Context, peerID string, offlineReq 
 func (m *mockPeerClient) RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error) {
 	return protocol.ProbeResponse{Reachable: true}, nil
 }
+func (m *mockPeerClient) RotateTLS(ctx context.Context, peerID string, payload map[string]string) error {
+	return nil
+}
 
 func setupTestStorage(t *testing.T) string {
 	tmp, err := os.MkdirTemp("", "proxyma_test_*")

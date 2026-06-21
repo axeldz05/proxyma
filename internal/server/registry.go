@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"maps"
 	"sync"
@@ -18,6 +19,8 @@ type PeerRegistry struct {
 	activePeersMu     sync.RWMutex
 	clusterServices   map[string]map[string]protocol.ServiceSchema
 	clusterServicesMu sync.RWMutex
+	peerCerts         map[string]*x509.Certificate
+	peerCertsMu       sync.RWMutex
 }
 
 // NewPeerRegistry creates and initializes a new PeerRegistry.
@@ -28,6 +31,7 @@ func NewPeerRegistry(logger *slog.Logger, nodeID string) *PeerRegistry {
 		peers:           make(map[string]protocol.AddressRecord),
 		activePeers:     make(map[string]bool),
 		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
+		peerCerts:       make(map[string]*x509.Certificate),
 	}
 }
 
@@ -167,3 +171,17 @@ func (pr *PeerRegistry) UpdatePeerService(peerID string, action string, schema p
 		pr.logger.Info("Cluster service removed", "service", schema.Name, "peer", peerID)
 	}
 }
+
+func (pr *PeerRegistry) SetPeerCertificate(peerID string, cert *x509.Certificate) {
+	pr.peerCertsMu.Lock()
+	defer pr.peerCertsMu.Unlock()
+	pr.peerCerts[peerID] = cert
+}
+
+func (pr *PeerRegistry) GetPeerCertificate(peerID string) (*x509.Certificate, bool) {
+	pr.peerCertsMu.RLock()
+	defer pr.peerCertsMu.RUnlock()
+	cert, exists := pr.peerCerts[peerID]
+	return cert, exists
+}
+

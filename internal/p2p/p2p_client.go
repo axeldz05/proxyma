@@ -28,6 +28,7 @@ type PeerClient interface {
 	Leave(ctx context.Context, peerID string, leaveReq map[string]string) error
 	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
+	RotateTLS(ctx context.Context, peerID string, payload map[string]string) error
 }
 
 type HTTPPeerClient struct {
@@ -141,3 +142,8 @@ func (c *HTTPPeerClient) Offline(ctx context.Context, peerID string, offlineReq 
 func (c *HTTPPeerClient) RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error) {
 	return doJSON[protocol.ProbeResponse](ctx, c, "POST", targetAddr, "peers/probe", req)
 }
+
+func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload map[string]string) error {
+	return doVoid(ctx, c, "POST", peerID, "cluster/rotate", payload, http.StatusOK)
+}
+

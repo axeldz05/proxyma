@@ -50,6 +50,7 @@ var runCmd = &cobra.Command{
 		peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, logger)
 
 		srv := server.New(cfg, peerClient)
+		srv.SetTLSConfigs(serverTLS, clientTLS)
 		wrappedTransport.Recorder = srv
 		srv.LoadLocalServices()
 

@@ -375,3 +375,52 @@ func SetupNewNode(storagePath, nodeID, address string) error {
 	return protocol.SaveConfig(cfg)
 }
 
+func RotateCA(caFolderPath string) error {
+	caPath := filepath.Join(caFolderPath, "ca.crt")
+	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+
+	caCert, caKey, err := generateCA()
+	if err != nil {
+		return fmt.Errorf("error generating new CA: %w", err)
+	}
+	return saveCertAndKey(caPath, caKeyPath, caCert, caKey)
+}
+
+func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath string) (certPEM []byte, err error) {
+	caCert, caPrivKey, err := loadCAPair(caCertPath, caKeyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
+
+	certTemplate := x509.Certificate{
+		SerialNumber:          serialNumber,
+		DNSNames:              []string{peerID, "localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		Subject: pkix.Name{
+			CommonName:   peerID,
+			Organization: []string{"Proxyma Cluster"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, peerPubKey, caPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign certificate: %w", err)
+	}
+
+	certPEM = pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	return certPEM, nil
+}
+
+

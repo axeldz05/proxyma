@@ -3,10 +3,12 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
@@ -16,7 +18,7 @@ import (
 
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/cluster/join" || r.URL.Path == "/relay/forward" || r.URL.Path == "/peers/probe" {
+		if r.URL.Path == "/cluster/join" || r.URL.Path == "/relay/forward" || r.URL.Path == "/peers/probe" || r.URL.Path == "/peers/announce" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -28,6 +30,13 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 			peerID := r.TLS.PeerCertificates[0].Subject.CommonName
 			if peerID != "" {
+				_, registered := s.Peers.GetPeerRecord(peerID)
+				if !registered && peerID != s.Config.ID && peerID != "sponsor" && peerID != "bootstrap" {
+					s.Config.Logger.Warn("Reject mTLS: peer not in registry", "peerID", peerID, "ip", r.RemoteAddr)
+					utils.RespondError(w, http.StatusForbidden, "peer not registered in cluster")
+					return
+				}
+				s.Peers.SetPeerCertificate(peerID, r.TLS.PeerCertificates[0])
 				s.SetPeerOnline(peerID, true)
 			}
 		}
@@ -59,6 +68,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /peers/invite", s.HandleGenerateInvite)
 	mux.HandleFunc("POST /peers/probe", s.HandleProbe)
 	mux.HandleFunc("POST /cluster/join", s.HandleClusterJoin)
+	mux.HandleFunc("POST /cluster/rotate", s.HandleClusterRotate)
 	mux.HandleFunc("GET /relay/poll", s.HandleRelayPoll)
 	mux.HandleFunc("POST /relay/forward", s.HandleRelayForward)
 	mux.HandleFunc("POST /relay/reply", s.HandleRelayReply)
@@ -241,6 +251,7 @@ func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.RemovePeer(req.ID)
 	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
+	go s.RotateCAAndResignPeers()
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
 }
 
@@ -338,3 +349,40 @@ func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
 		Reachable: true,
 	})
 }
+
+func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
+	req, ok := utils.DecodeJSONOrError[map[string]string](w, r)
+	if !ok {
+		return
+	}
+
+	caCert := req["ca_cert"]
+	nodeCert := req["node_cert"]
+
+	if caCert == "" || nodeCert == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Missing ca_cert or node_cert")
+		return
+	}
+
+	certsDir := filepath.Dir(s.Config.CAPath)
+	caPath := s.Config.CAPath
+	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", s.Config.ID))
+	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", s.Config.ID))
+
+	err1 := os.WriteFile(caPath, []byte(caCert), 0644)
+	err2 := os.WriteFile(certPath, []byte(nodeCert), 0644)
+	if err1 != nil || err2 != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to save rotated certs")
+		return
+	}
+
+	err := s.ReloadTLSConfig(caPath, certPath, keyPath)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to reload rotated TLS: "+err.Error())
+		return
+	}
+
+	s.Config.Logger.Info("Successfully rotated CA and certificates dynamically.")
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "rotated"})
+}
+

@@ -42,6 +42,7 @@ func startNode() error {
 	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, appLogger)
 
 	srv = server.New(cfg, peerClient)
+	srv.SetTLSConfigs(stls, ctls)
 	wrappedTransport.Recorder = srv
 	srv.LoadLocalServices()
 
