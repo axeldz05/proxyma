@@ -3,22 +3,49 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 func NewStorage(baseDir string) *Storage {
-	return &Storage{
-		baseDir: baseDir,
+	st := &Storage{
+		baseDir:   baseDir,
+		blobCache: make(map[string]bool),
 	}
+	st.populateCache()
+	return st
 }
 
 type Storage struct {
-	baseDir string
+	baseDir   string
+	mu        sync.RWMutex
+	blobCache map[string]bool
+}
+
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func (st *Storage) populateCache() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	_ = VisitAndDo(st, func(path string, d fs.DirEntry) error {
+		name := d.Name()
+		if len(name) == 64 && isHexString(name) {
+			st.blobCache[name] = true
+		}
+		return nil
+	}, IsNotADir)
 }
 
 func (st *Storage) Name() string {
@@ -54,29 +81,25 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 			return "", 0, err
 		}
 	}
+
+	st.mu.Lock()
+	st.blobCache[generatedHash] = true
+	st.mu.Unlock()
+
 	return generatedHash, writtenBytes, nil
 }
 
 func (st *Storage) AmountOfBlobs() (int, error) {
-	result := 0
-	err := VisitAndDo(st, func(string, fs.DirEntry) error { result++; return nil },
-		IsNotADir)
-
-	if err != nil {
-		return 0, err
-	}
-	return result, nil
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return len(st.blobCache), nil
 }
 
 func (st *Storage) BlobExists(hash string) (bool, error) {
-	fullPath := filepath.Join(st.baseDir, hash)
-	if _, err := os.Stat(fullPath); err == nil {
-		return true, nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else {
-		return false, err
-	}
+	st.mu.RLock()
+	exists := st.blobCache[hash]
+	st.mu.RUnlock()
+	return exists, nil
 }
 
 func (st *Storage) ReadBlob(hash string, w io.Writer) error {
@@ -96,9 +119,29 @@ func (st *Storage) ReadBlob(hash string, w io.Writer) error {
 
 func (st *Storage) DeleteBlob(hash string) error {
 	fullPath := filepath.Join(st.baseDir, hash)
-	return os.Remove(fullPath)
+	err := os.Remove(fullPath)
+	if err == nil {
+		st.mu.Lock()
+		delete(st.blobCache, hash)
+		st.mu.Unlock()
+	}
+	return err
 }
 
 func (st *Storage) GetBlobPath(hash string) string {
 	return filepath.Join(st.baseDir, hash)
+}
+
+func (st *Storage) CleanupTempFiles() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	entries, err := os.ReadDir(st.baseDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "tmp-blob-") {
+			_ = os.Remove(filepath.Join(st.baseDir, entry.Name()))
+		}
+	}
 }

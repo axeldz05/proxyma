@@ -99,14 +99,13 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 			suffix := formatBandwidthSuffix("vfs:"+fileEntry.Hash, srv)
 			lbl := widget.NewLabel(fmt.Sprintf("%s (v%d, %s, %s)%s", fileEntry.Name, fileEntry.Version, byteCountSI(fileEntry.Size), statusText, suffix))
 			subBtn := widget.NewButton(subText, func() {
-				srv.Storage.SetSubscription(fileEntry.Name, !isSubscribed)
-				if !isSubscribed {
-					go func() {
+				go func() {
+					srv.Storage.SetSubscription(fileEntry.Name, !isSubscribed)
+					if !isSubscribed {
 						_ = srv.ExecuteSync()
-						ui.Refresh()
-					}()
-				}
-				ui.Refresh()
+					}
+					fyne.Do(ui.Refresh)
+				}()
 			})
 
 			openBtn := widget.NewButton("Open", func() {
@@ -118,12 +117,16 @@ func (ui *ProxymaUI) updateVFSSnapshot(w fyne.Window) func() {
 			})
 
 			deleteBtn := widget.NewButton("Delete Local", func() {
-				err := srv.Storage.DeleteLocalCache(fileEntry.Name)
-				if err != nil {
-					dialog.ShowError(err, w)
-				} else {
-					ui.Refresh()
-				}
+				go func() {
+					err := srv.Storage.DeleteLocalCache(fileEntry.Name)
+					fyne.Do(func() {
+						if err != nil {
+							dialog.ShowError(err, w)
+						} else {
+							ui.Refresh()
+						}
+					})
+				}()
 			})
 
 			row := container.NewHBox(lbl, subBtn, openBtn, openLocBtn, deleteBtn)

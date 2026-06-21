@@ -219,3 +219,8 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 func (se *StorageEngine) GetLocalBlobPath(hash string) string {
 	return se.physical.GetBlobPath(hash)
 }
+
+func (se *StorageEngine) CleanupTempFiles() {
+	se.physical.CleanupTempFiles()
+}
+

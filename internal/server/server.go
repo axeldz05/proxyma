@@ -96,10 +96,11 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 				return
 			case <-ticker.C:
 				s.Invites.Sweep()
+				s.Storage.CleanupTempFiles()
 			}
 		}
 	}()
-	
+	s.Storage.CleanupTempFiles()
 	return s
 }
 
