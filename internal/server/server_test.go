@@ -1023,7 +1023,7 @@ func TestProbeEndpoint(t *testing.T) {
 	bodyBytes, _ := json.Marshal(probeReq)
 	resp, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var probeResp protocol.ProbeResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&probeResp))
@@ -1036,7 +1036,7 @@ func TestProbeEndpoint(t *testing.T) {
 	bodyBytes2, _ := json.Marshal(probeReq2)
 	resp2, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes2))
 	require.NoError(t, err)
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 
 	var probeResp2 protocol.ProbeResponse
 	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&probeResp2))
@@ -1071,7 +1071,7 @@ func TestDetermineSponsorAndNATStatus(t *testing.T) {
 		// Mock STUN server that returns a loopback IP (which is private/CGNAT)
 		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 		require.NoError(t, err)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		stunAddr := conn.LocalAddr().String()
 

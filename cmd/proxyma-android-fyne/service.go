@@ -79,9 +79,13 @@ func runServiceTask(w fyne.Window, s *server.Server, schema protocol.ServiceSche
 		return
 	}
 
-	var progress *dialog.ProgressDialog
+	var progress dialog.Dialog
 	fyne.Do(func() {
-		progress = dialog.NewProgress("Running Service", "Executing compute task...", w)
+		bar := widget.NewProgressBarInfinite()
+		progress = dialog.NewCustomWithoutButtons("Running Service", container.NewVBox(
+			widget.NewLabel("Executing compute task..."),
+			bar,
+		), w)
 		progress.Show()
 	})
 
@@ -104,7 +108,7 @@ func runServiceTask(w fyne.Window, s *server.Server, schema protocol.ServiceSche
 			progress.Hide()
 		}
 		if !completed {
-			dialog.ShowError(errors.New("Task execution timed out"), w)
+			dialog.ShowError(uiError("Task execution timed out"), w)
 			return
 		}
 		if resp.Status == "failed" {
@@ -208,7 +212,7 @@ func buildImagePickerWidget(paramName string, inputs map[string]any, w fyne.Wind
 							dialog.ShowError(err, w)
 							return
 						}
-						defer f.Close()
+						defer func() { _ = f.Close() }()
 						vfsName := filepath.Base(tempPath)
 						saveReaderToVFS(w, s, vfsName, f, func() {
 							inputs[paramName] = vfsName
@@ -221,7 +225,7 @@ func buildImagePickerWidget(paramName string, inputs map[string]any, w fyne.Wind
 					if err != nil || reader == nil {
 						return
 					}
-					defer reader.Close()
+					defer func() { _ = reader.Close() }()
 					vfsName := reader.URI().Name()
 					saveReaderToVFS(w, s, vfsName, reader, func() {
 						inputs[paramName] = vfsName

@@ -39,7 +39,7 @@ func TestSTUNClient(t *testing.T) {
 	// Start a local mock STUN server
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	addr := conn.LocalAddr().String()
 

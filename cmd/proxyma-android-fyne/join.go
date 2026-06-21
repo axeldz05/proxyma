@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +49,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			if token == "" {
 				logDebug("Join failed: Smart Token is empty", nil)
 				fyne.Do(func() {
-					dialog.ShowError(errors.New("Smart Token is required"), w)
+					dialog.ShowError(uiError("Smart Token is required"), w)
 				})
 				return
 			}
@@ -90,7 +89,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			if err1 != nil || err2 != nil || err3 != nil {
 				logDebug("Failed writing certificate files to disk", fmt.Errorf("ca: %v, cert: %v, key: %v", err1, err2, err3))
 				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("Failed writing cert files to directory %s:\nca.crt: %v\ncert: %v\nkey: %v", certsDir, err1, err2, err3), w)
+					dialog.ShowError(uiError(fmt.Sprintf("Failed writing cert files to directory %s:\nca.crt: %v\ncert: %v\nkey: %v", certsDir, err1, err2, err3)), w)
 				})
 				return
 			}
@@ -109,14 +108,16 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 			if err != nil {
 				logDebug("Failed to save node config", err)
 				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("Failed saving config to %s:\n%w", appStorage, err), w)
+					dialog.ShowError(uiError(fmt.Sprintf("Failed saving config to %s:\n%v", appStorage, err)), w)
 				})
 				return
 			}
 			logDebug("Node config saved successfully.", nil)
 			fyne.Do(func() {
 				dialog.ShowInformation("Success", "Joined cluster successfully", w)
-				startNode()
+				if err := startNode(); err != nil {
+					dialog.ShowError(err, w)
+				}
 				refreshUI()
 				go func() {
 					s := getRunningServer()

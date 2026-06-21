@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -40,7 +39,7 @@ func (ui *ProxymaUI) SyncVFS(w fyne.Window) func() {
 	return func() {
 		s := getRunningServer()
 		if s == nil {
-			dialog.ShowError(errors.New("Node is not running"), w)
+			dialog.ShowError(uiError("Node is not running"), w)
 			return
 		}
 		go func() {
@@ -59,14 +58,14 @@ func (ui *ProxymaUI) UploadFile(w fyne.Window) func() {
 	return func() {
 		s := getRunningServer()
 		if s == nil {
-			dialog.ShowError(errors.New("Node is not running"), w)
+			dialog.ShowError(uiError("Node is not running"), w)
 			return
 		}
 		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil || reader == nil {
 				return
 			}
-			defer reader.Close()
+			defer func() { _ = reader.Close() }()
 			name := reader.URI().Name()
 			saveReaderToVFS(w, s, name, reader, func() {
 				dialog.ShowInformation("Uploaded", fmt.Sprintf("File %s uploaded successfully", name), w)
@@ -138,7 +137,7 @@ func (ui *ProxymaUI) DiscoverServices(w fyne.Window) func() {
 	return func() {
 		s := getRunningServer()
 		if s == nil {
-			dialog.ShowError(errors.New("Node is not running"), w)
+			dialog.ShowError(uiError("Node is not running"), w)
 			return
 		}
 		go func() {
@@ -248,9 +247,10 @@ func (ui *ProxymaUI) refreshLogs() {
 		}
 
 		prefix := "ℹ️ "
-		if rec.Level == "ERROR" {
+		switch rec.Level {
+		case "ERROR":
 			prefix = "❌ "
-		} else if rec.Level == "WARN" {
+		case "WARN":
 			prefix = "⚠️ "
 		}
 
@@ -269,7 +269,7 @@ func formatBandwidthSuffix(category string, s *server.Server) string {
 
 func openLocalVFSPath(w fyne.Window, hash string, hasLocal bool, getDir bool) {
 	if !hasLocal {
-		dialog.ShowError(errors.New("File is not present locally. Subscribe first."), w)
+		dialog.ShowError(uiError("File is not present locally. Subscribe first."), w)
 		return
 	}
 	blobPath := srv.Storage.GetLocalBlobPath(hash)

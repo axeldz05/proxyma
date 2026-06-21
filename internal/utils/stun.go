@@ -58,7 +58,7 @@ func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, e
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to connect to STUN: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
@@ -129,7 +129,8 @@ func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, e
 		attrVal := attributes[idx+4 : idx+4+int(attrLen)]
 
 		// Parse MAPPED-ADDRESS (0x0001) or XOR-MAPPED-ADDRESS (0x0020)
-		if attrType == 0x0001 { // MAPPED-ADDRESS
+		switch attrType {
+		case 0x0001: // MAPPED-ADDRESS
 			if len(attrVal) >= 8 {
 				family := attrVal[1]
 				if family == 1 { // IPv4
@@ -138,7 +139,7 @@ func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, e
 					return ip.String(), int(port), nil
 				}
 			}
-		} else if attrType == 0x0020 { // XOR-MAPPED-ADDRESS
+		case 0x0020: // XOR-MAPPED-ADDRESS
 			if len(attrVal) >= 8 {
 				family := attrVal[1]
 				if family == 1 { // IPv4

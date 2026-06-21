@@ -45,23 +45,22 @@ func startNode() error {
 	srv = server.New(cfg, peerClient)
 	srv.LoadLocalServices()
 
-	go func() error {
-		err = srv.ListenAndServe(srvTLS)
-		if err != nil {
-			return err
+	go func() {
+		if err := srv.ListenAndServe(srvTLS); err != nil && cfg.Logger != nil {
+			cfg.Logger.Error("Server ListenAndServe failed", "error", err)
 		}
-		return nil
 	}()
 
 	if cfg.BootstrapNode != "" {
-		go func() error {
+		go func() {
 			time.Sleep(2 * time.Second)
-			err = srv.AnnouncePresence(cfg.BootstrapNode)
-			if err != nil {
-				return err
+			if err := srv.AnnouncePresence(cfg.BootstrapNode); err != nil {
+				if cfg.Logger != nil {
+					cfg.Logger.Error("AnnouncePresence failed", "error", err)
+				}
+				return
 			}
 			go srv.StartRelayPolling(appCtx, cfg.BootstrapNode)
-			return nil
 		}()
 	}
 
