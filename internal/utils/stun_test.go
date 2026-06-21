@@ -98,3 +98,22 @@ func TestSTUNClient(t *testing.T) {
 	require.Equal(t, "127.0.0.1", extIP)
 	require.True(t, extPort > 0)
 }
+
+func TestExtractPort(t *testing.T) {
+	tests := []struct {
+		address  string
+		expected string
+	}{
+		{"https://127.0.0.1:8443", "8443"},
+		{"http://localhost:8080/manifest", "8080"},
+		{"10.0.0.5:9000", "9000"},
+		{"localhost", ""},
+		{":3000", "3000"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.address, func(t *testing.T) {
+			require.Equal(t, tt.expected, ExtractPort(tt.address))
+		})
+	}
+}

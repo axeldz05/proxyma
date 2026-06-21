@@ -15,7 +15,6 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/utils"
-	"strings"
 	"sync"
 	"time"
 )
@@ -108,7 +107,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
 	mux := s.wrapWithBandwidthCounting(s.handler)
-	addr := fmt.Sprintf(":%s", strings.Split(s.Config.Address, ":")[2])
+	addr := ":" + utils.ExtractPort(s.Config.Address)
 
 	hs := &http.Server{
 		Addr:      addr,

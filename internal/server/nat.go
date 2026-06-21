@@ -3,11 +3,8 @@ package server
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"strings"
 	"time"
 )
 
@@ -46,22 +43,9 @@ func (s *Server) determineSponsorAndNATStatus() {
 	// 3. Probe ourselves via a peer in the cluster (Bootstrap Node)
 	if s.Config.BootstrapNode != "" {
 		// Parse our own listening port
-		parsedOwn, err := url.Parse(s.Config.Address)
-		var ownPort string
-		if err == nil {
-			_, p, err := net.SplitHostPort(parsedOwn.Host)
-			if err == nil {
-				ownPort = p
-			}
-		}
+		ownPort := utils.ExtractPort(s.Config.Address)
 		if ownPort == "" {
-			// fallback/default port
-			if strings.Contains(s.Config.Address, ":") {
-				parts := strings.Split(s.Config.Address, ":")
-				ownPort = parts[len(parts)-1]
-			} else {
-				ownPort = "8443"
-			}
+			ownPort = "8443"
 		}
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
