@@ -114,7 +114,10 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	s.AddPeer(req.ID, req.Address)
 
 	peersSnapshot := s.GetPeersRecordCopy()
-	peersSnapshot[s.Config.ID] = protocol.AddressRecord{Addresses: []string{s.Config.Address}}
+	peersSnapshot[s.Config.ID] = protocol.AddressRecord{
+		Addresses: []string{s.Config.Address},
+		IsSponsor: s.IsSponsorNode(),
+	}
 
 	go func(newID string, newAddress protocol.AddressRecord, clusterPeers map[string]protocol.AddressRecord) {
 		payload := protocol.AddPeerRequest{ID: newID, Address: newAddress}

@@ -27,6 +27,7 @@ type PeerClient interface {
 	ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
 	Leave(ctx context.Context, peerID string, leaveReq map[string]string) error
 	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
+	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 }
 
 type HTTPPeerClient struct {
@@ -135,4 +136,8 @@ func (c *HTTPPeerClient) Leave(ctx context.Context, peerID string, leaveReq map[
 
 func (c *HTTPPeerClient) Offline(ctx context.Context, peerID string, offlineReq map[string]string) error {
 	return doVoid(ctx, c, "POST", peerID, "peers/offline", offlineReq, http.StatusOK)
+}
+
+func (c *HTTPPeerClient) RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error) {
+	return doJSON[protocol.ProbeResponse](ctx, c, "POST", targetAddr, "peers/probe", req)
 }

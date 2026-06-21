@@ -22,6 +22,7 @@ type MockPeerClient struct {
 	OnReplyRelay          func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
 	OnLeave               func(ctx context.Context, peerID string, leaveReq map[string]string) error
 	OnOffline             func(ctx context.Context, peerID string, offlineReq map[string]string) error
+	OnRequestProbe        func(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 }
 
 func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {
@@ -121,4 +122,11 @@ func (m *MockPeerClient) Offline(ctx context.Context, peerID string, offlineReq 
 		return m.OnOffline(ctx, peerID, offlineReq)
 	}
 	return nil
+}
+
+func (m *MockPeerClient) RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error) {
+	if m.OnRequestProbe != nil {
+		return m.OnRequestProbe(ctx, targetAddr, req)
+	}
+	return protocol.ProbeResponse{Reachable: true}, nil
 }

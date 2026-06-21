@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"net/http/httptest"
@@ -1040,6 +1042,74 @@ func TestProbeEndpoint(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&probeResp2))
 	require.False(t, probeResp2.Reachable, "Should be unreachable")
 	require.NotEmpty(t, probeResp2.Error)
+}
+
+func TestDetermineSponsorAndNATStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("manual override true", func(t *testing.T) {
+		isSponsorOverride := true
+		cfg := testutil.DefaultConfig(t, "override-true")
+		cfg.IsSponsorOverride = &isSponsorOverride
+
+		srv := NewServer(t, cfg, nil)
+		srv.CheckNAT()
+		require.True(t, srv.IsSponsorNode())
+	})
+
+	t.Run("manual override false", func(t *testing.T) {
+		isSponsorOverride := false
+		cfg := testutil.DefaultConfig(t, "override-false")
+		cfg.IsSponsorOverride = &isSponsorOverride
+
+		srv := NewServer(t, cfg, nil)
+		srv.CheckNAT()
+		require.False(t, srv.IsSponsorNode())
+	})
+
+	t.Run("auto-detect behind CGNAT", func(t *testing.T) {
+		// Mock STUN server that returns a loopback IP (which is private/CGNAT)
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+		require.NoError(t, err)
+		defer conn.Close()
+
+		stunAddr := conn.LocalAddr().String()
+
+		go func() {
+			buf := make([]byte, 1024)
+			n, raddr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			if n < 20 {
+				return
+			}
+
+			// Respond with loopback IP (127.0.0.1) as mapped address
+			resp := make([]byte, 32)
+			binary.BigEndian.PutUint16(resp[0:2], 0x0101)  // Success Response
+			binary.BigEndian.PutUint16(resp[2:4], 12)      // Length
+			binary.BigEndian.PutUint32(resp[4:8], 0x2112A442)
+			copy(resp[8:20], buf[8:20])
+
+			binary.BigEndian.PutUint16(resp[20:22], 0x0001) // MAPPED-ADDRESS
+			binary.BigEndian.PutUint16(resp[22:24], 8)
+			resp[24] = 0
+			resp[25] = 1 // IPv4
+			binary.BigEndian.PutUint16(resp[26:28], uint16(raddr.Port))
+			binary.BigEndian.PutUint32(resp[28:32], binary.BigEndian.Uint32(net.ParseIP("127.0.0.1").To4()))
+
+			_, _ = conn.WriteToUDP(resp, raddr)
+		}()
+
+		cfg := testutil.DefaultConfig(t, "auto-detect-node")
+		cfg.STUNServer = stunAddr
+
+		srv := NewServer(t, cfg, nil)
+		srv.CheckNAT()
+		// Since STUN returned 127.0.0.1 which is in private/loopback range, it should auto-detect as NOT a Sponsor
+		require.False(t, srv.IsSponsorNode())
+	})
 }
 
 

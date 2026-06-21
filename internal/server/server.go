@@ -36,6 +36,9 @@ type Server struct {
 	downloadQueue chan DownloadJob
 	unixListener  net.Listener
 	done          chan struct{}
+
+	isSponsor     bool
+	checkNATOnce  sync.Once
 }
 
 type DownloadJob struct {
@@ -116,6 +119,12 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 
 	s.httpServer = hs
 	s.Config.Logger.Info("Starting secure P2P node", "address", addr)
+
+	// Run NAT auto-detection asynchronously after a brief delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		s.CheckNAT()
+	}()
 
 	return hs.ListenAndServeTLS("", "")
 }
@@ -379,9 +388,13 @@ func (s *Server) ExecuteSync() error {
 }
 
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
+	s.CheckNAT()
 	payload := protocol.AddPeerRequest{
 		ID:      s.Config.ID,
-		Address: protocol.AddressRecord{Addresses: []string{s.Config.Address}},
+		Address: protocol.AddressRecord{
+			Addresses: []string{s.Config.Address},
+			IsSponsor: s.isSponsor,
+		},
 	}
 
 	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
@@ -400,6 +413,12 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		_ = s.ExecuteSync()
 	}()
 	return nil
+}
+
+func (s *Server) CheckNAT() {
+	s.checkNATOnce.Do(func() {
+		s.determineSponsorAndNATStatus()
+	})
 }
 
 func (s *Server) downloadWorker() {
