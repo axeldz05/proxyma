@@ -46,9 +46,11 @@ var runCmd = &cobra.Command{
 		baseTransport := &http.Transport{
 			TLSClientConfig: clientTLS,
 		}
-		peerClient := p2p.NewHTTPPeerClient(baseTransport, cfg.BootstrapNode, logger)
+		wrappedTransport := &p2p.BandwidthRoundTripper{Base: baseTransport}
+		peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, logger)
 
 		srv := server.New(cfg, peerClient)
+		wrappedTransport.Recorder = srv
 		srv.LoadLocalServices()
 
 		stop := make(chan os.Signal, 1)

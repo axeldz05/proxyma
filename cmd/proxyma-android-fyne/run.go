@@ -10,7 +10,6 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
-	"proxyma/internal/utils"
 )
 
 func getRunningServer() *server.Server {
@@ -39,10 +38,11 @@ func startNode() error {
 
 	srvTLS = stls
 	baseTransport := &http.Transport{TLSClientConfig: ctls}
-	wrappedTransport := &bandwidthRoundTripper{base: baseTransport}
+	wrappedTransport := &p2p.BandwidthRoundTripper{Base: baseTransport}
 	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, appLogger)
 
 	srv = server.New(cfg, peerClient)
+	wrappedTransport.Recorder = srv
 	srv.LoadLocalServices()
 
 	go func() {
@@ -77,38 +77,4 @@ func stopNode() {
 	defer cancel()
 	_ = srv.Shutdown(ctx)
 	srv = nil
-}
-
-type bandwidthRoundTripper struct {
-	base http.RoundTripper
-}
-
-func (b *bandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		req.Body = &utils.CountingReadCloser{
-			ReadCloser: req.Body,
-			OnRead: func(n int) {
-				if s := getRunningServer(); s != nil {
-					s.RecordBytesSent(int64(n), req.URL.RequestURI())
-				}
-			},
-		}
-	}
-
-	resp, err := b.base.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.Body != nil {
-		resp.Body = &utils.CountingReadCloser{
-			ReadCloser: resp.Body,
-			OnRead: func(n int) {
-				if s := getRunningServer(); s != nil {
-					s.RecordBytesReceived(int64(n), req.URL.RequestURI())
-				}
-			},
-		}
-	}
-	return resp, nil
 }

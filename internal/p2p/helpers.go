@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"proxyma/internal/utils"
 	"strings"
 )
 
@@ -122,3 +123,43 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 
 	return nil
 }
+
+// BandwidthRecorder abstracts bandwidth tracking to prevent circular dependencies.
+type BandwidthRecorder interface {
+	RecordBytesSent(n int64, path string)
+	RecordBytesReceived(n int64, path string)
+}
+
+// BandwidthRoundTripper intercepts HTTP requests and responses to count bandwidth.
+type BandwidthRoundTripper struct {
+	Base     http.RoundTripper
+	Recorder BandwidthRecorder
+}
+
+func (b *BandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil && b.Recorder != nil {
+		req.Body = &utils.CountingReadCloser{
+			ReadCloser: req.Body,
+			OnRead: func(n int) {
+				b.Recorder.RecordBytesSent(int64(n), req.URL.RequestURI())
+			},
+		}
+	}
+
+	resp, err := b.Base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Body != nil && b.Recorder != nil {
+		resp.Body = &utils.CountingReadCloser{
+			ReadCloser: resp.Body,
+			OnRead: func(n int) {
+				b.Recorder.RecordBytesReceived(int64(n), req.URL.RequestURI())
+			},
+		}
+	}
+
+	return resp, nil
+}
+
