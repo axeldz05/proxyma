@@ -89,8 +89,8 @@ func pruneHistory(history []TransferRecord, threshold time.Time) ([]TransferReco
 		}
 		total += rec.Bytes
 	}
-	if i > 0 {
-		return history[i:], total
+	if i >= 0 {
+		return history[i+1:], total
 	}
 	return history, total
 }

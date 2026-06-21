@@ -134,8 +134,10 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 		Deleted: true,
 	}
 	if se.vfs.Upsert(fileMeta) {
-		if err := se.physical.DeleteBlob(entry.Hash); err != nil {
-			return fmt.Errorf("file %se could not be deleted", fileMeta.Name)
+		if se.countHashReferences(entry.Hash) == 0 {
+			if err := se.physical.DeleteBlob(entry.Hash); err != nil {
+				return fmt.Errorf("file %se could not be deleted", fileMeta.Name)
+			}
 		}
 		go se.notifyFunc(fileMeta)
 	}
@@ -148,7 +150,9 @@ func (se *StorageEngine) DeleteLocalCache(fileName string) error {
 		return fmt.Errorf("file %s not found", fileName)
 	}
 	se.SetSubscription(fileName, false)
-	_ = se.physical.DeleteBlob(entry.Hash)
+	if se.countSubscribedHashReferences(entry.Hash) == 0 {
+		_ = se.physical.DeleteBlob(entry.Hash)
+	}
 	return nil
 }
 
@@ -182,8 +186,10 @@ func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 
 	if se.vfs.Upsert(fileInfo) {
 		if exists {
-			if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
-				se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
+			if se.countHashReferences(savedFileInfo.Hash) == 0 {
+				if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
+					se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
+				}
 			}
 		}
 		se.logger.Info("File remotely deleted", "file", fileInfo.Name)
@@ -197,7 +203,9 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	}
 
 	if savedHash != fileInfo.Hash {
-		_ = se.physical.DeleteBlob(savedHash)
+		if se.countHashReferences(savedHash) == 0 {
+			_ = se.physical.DeleteBlob(savedHash)
+		}
 		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
 		return fmt.Errorf("hash mismatch")
 	}
@@ -209,8 +217,10 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	}
 
 	se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name)
-	if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
-		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
+	if se.countHashReferences(fileInfo.Hash) == 0 {
+		if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
+			se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
+		}
 	}
 
 	return nil
@@ -222,5 +232,27 @@ func (se *StorageEngine) GetLocalBlobPath(hash string) string {
 
 func (se *StorageEngine) CleanupTempFiles() {
 	se.physical.CleanupTempFiles()
+}
+
+func (se *StorageEngine) countHashReferences(hash string) int {
+	refCount := 0
+	snapshot := se.vfs.Snapshot()
+	for _, entry := range snapshot {
+		if !entry.Deleted && entry.Hash == hash {
+			refCount++
+		}
+	}
+	return refCount
+}
+
+func (se *StorageEngine) countSubscribedHashReferences(hash string) int {
+	refCount := 0
+	snapshot := se.vfs.Snapshot()
+	for name, entry := range snapshot {
+		if !entry.Deleted && entry.Hash == hash && se.IsSubscribed(name) {
+			refCount++
+		}
+	}
+	return refCount
 }
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 func NewStorage(baseDir string) *Storage {
@@ -141,7 +142,10 @@ func (st *Storage) CleanupTempFiles() {
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "tmp-blob-") {
-			_ = os.Remove(filepath.Join(st.baseDir, entry.Name()))
+			info, err := entry.Info()
+			if err == nil && time.Since(info.ModTime()) > 30*time.Minute {
+				_ = os.Remove(filepath.Join(st.baseDir, entry.Name()))
+			}
 		}
 	}
 }

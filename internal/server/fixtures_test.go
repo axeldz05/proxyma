@@ -58,6 +58,8 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 	ts.TLS = serverTLS
 	ts.StartTLS()
 
+	app.SetTLSConfigs(ts.TLS, clientTLS)
+
 	ts.Client().Transport = &http.Transport{
 		TLSClientConfig:   clientTLS,
 		DisableKeepAlives: true,

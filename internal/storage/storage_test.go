@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/testutil"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -422,4 +424,92 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 	// Verify consistent state: all files should exist in VFS
 	snapshot := engine.GetVFSSnapshot()
 	require.Equal(t, goroutines, len(snapshot), "All files should be tracked in VFS")
+}
+
+func TestCASReferenceCountingAndDeduplication(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-cas")
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	// 1. Upload identical content to two different files (Deduplication)
+	content := []byte("shared content")
+	err := engine.SaveLocalFile("file1.txt", bytes.NewReader(content))
+	require.NoError(t, err)
+
+	meta1, exists := engine.GetFileMeta("file1.txt")
+	require.True(t, exists)
+
+	err = engine.SaveLocalFile("file2.txt", bytes.NewReader(content))
+	require.NoError(t, err)
+
+	meta2, exists := engine.GetFileMeta("file2.txt")
+	require.True(t, exists)
+
+	require.Equal(t, meta1.Hash, meta2.Hash, "Identical content must produce identical hash")
+
+	// Verify one physical blob exists
+	existsInDisk, _ := engine.HasPhysicalBlob(meta1.Hash)
+	require.True(t, existsInDisk)
+
+	// 2. Delete file1.txt (shared CAS hash).
+	// Content should still exist on disk because file2.txt still uses it!
+	err = engine.DeleteLocalFile("file1.txt")
+	require.NoError(t, err)
+
+	existsInDisk, _ = engine.HasPhysicalBlob(meta1.Hash)
+	require.True(t, existsInDisk, "Physical blob must NOT be deleted while file2.txt still references it")
+
+	// 3. Delete file2.txt.
+	// Since no active files reference the hash anymore, the blob must be purged.
+	err = engine.DeleteLocalFile("file2.txt")
+	require.NoError(t, err)
+
+	existsInDisk, _ = engine.HasPhysicalBlob(meta1.Hash)
+	require.False(t, existsInDisk, "Physical blob must be deleted when references drop to 0")
+}
+
+func TestCleanupTempFilesRespectsActiveDownloads(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-temp")
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath, nil, 0,
+		func(entry protocol.IndexEntry) {},
+		func(ie protocol.IndexEntry, s string) error { return nil },
+	)
+
+	// Create a "recent" temp file mimicking an active download
+	recentTempFile, err := os.CreateTemp(cfg.StoragePath, "tmp-blob-*")
+	require.NoError(t, err)
+	_, _ = recentTempFile.Write([]byte("active data"))
+	recentTempPath := recentTempFile.Name()
+	_ = recentTempFile.Close()
+
+	// Create an "old" temp file mimicking an orphaned/dead download
+	oldTempFile, err := os.CreateTemp(cfg.StoragePath, "tmp-blob-*")
+	require.NoError(t, err)
+	_, _ = oldTempFile.Write([]byte("stale data"))
+	oldTempPath := oldTempFile.Name()
+	_ = oldTempFile.Close()
+
+	// Backdate the ModTime of the old temp file to 1 hour ago
+	oldTime := time.Now().Add(-1 * time.Hour)
+	err = os.Chtimes(oldTempPath, oldTime, oldTime)
+	require.NoError(t, err)
+
+	// Execute CleanupTempFiles
+	engine.CleanupTempFiles()
+
+	// Verify: recent/active temp file remains, old/stale one is cleaned up!
+	_, err = os.Stat(recentTempPath)
+	require.NoError(t, err, "Active temp file must NOT be deleted by cleanup sweep")
+
+	_, err = os.Stat(oldTempPath)
+	require.True(t, os.IsNotExist(err), "Orphaned temp file must be cleaned up")
+
+	// Clean up recent temp file manually
+	_ = os.Remove(recentTempPath)
 }

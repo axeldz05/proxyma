@@ -758,6 +758,7 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 	if s.clientTLSConfig != nil {
 		s.clientTLSConfig.Certificates = newClientTLS.Certificates
 		s.clientTLSConfig.RootCAs = newClientTLS.RootCAs
+		s.clientTLSConfig.VerifyPeerCertificate = newClientTLS.VerifyPeerCertificate
 	}
 
 	return nil

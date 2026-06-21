@@ -351,6 +351,23 @@ func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for CA rotation")
+		return
+	}
+	peerID := r.TLS.PeerCertificates[0].Subject.CommonName
+	if peerID == "" {
+		utils.RespondError(w, http.StatusForbidden, "Missing peer ID in client certificate")
+		return
+	}
+
+	record, exists := s.Peers.GetPeerRecord(peerID)
+	if !exists || !record.IsSponsor {
+		s.Config.Logger.Warn("Reject CA rotation push: sender is not a registered Sponsor/CA authority", "peerID", peerID)
+		utils.RespondError(w, http.StatusForbidden, "Only Sponsor/CA authority can rotate cluster certificates")
+		return
+	}
+
 	req, ok := utils.DecodeJSONOrError[map[string]string](w, r)
 	if !ok {
 		return
@@ -369,15 +386,26 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", s.Config.ID))
 	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", s.Config.ID))
 
+	// Fallback to storage path if key is not in certsDir (common in test fixture layouts)
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		testKeyPath := filepath.Join(s.Config.StoragePath, fmt.Sprintf("%s.key", s.Config.ID))
+		if _, err := os.Stat(testKeyPath); err == nil {
+			keyPath = testKeyPath
+			certPath = filepath.Join(s.Config.StoragePath, fmt.Sprintf("%s.crt", s.Config.ID))
+		}
+	}
+
 	err1 := os.WriteFile(caPath, []byte(caCert), 0644)
 	err2 := os.WriteFile(certPath, []byte(nodeCert), 0644)
 	if err1 != nil || err2 != nil {
+		s.Config.Logger.Error("Failed to save rotated certs", "err1", err1, "err2", err2)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to save rotated certs")
 		return
 	}
 
 	err := s.ReloadTLSConfig(caPath, certPath, keyPath)
 	if err != nil {
+		s.Config.Logger.Error("Failed to reload rotated TLS", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to reload rotated TLS: "+err.Error())
 		return
 	}

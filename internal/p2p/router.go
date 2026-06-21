@@ -92,17 +92,9 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		
 		// Attempt direct connection with a short timeout to fail-fast
 		r.logDebug("Routing direct request", "url", clone.URL.String())
-		dCtx, dCancel := context.WithCancel(clone.Context())
-		timer := time.AfterFunc(2000*time.Millisecond, dCancel)
+		dCtx, dCancel := context.WithTimeout(clone.Context(), 2000*time.Millisecond)
 		directReq := clone.Clone(dCtx)
 		resp, err := r.Base.RoundTrip(directReq)
-		if !timer.Stop() {
-			dCancel()
-			if err == nil {
-				_ = resp.Body.Close()
-				err = context.DeadlineExceeded
-			}
-		}
 		if err == nil {
 			resp.Body = NewCancelReadCloser(resp.Body, dCancel)
 			return resp, nil
