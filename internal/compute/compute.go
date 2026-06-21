@@ -80,6 +80,9 @@ func (c *ComputeEngine) GetTaskResponse(taskID string) (protocol.ServiceTaskResp
 	if !ok {
 		return protocol.ServiceTaskResponse{}, false
 	}
+	if res.Status == "completed" || res.Status == "failed" {
+		c.taskStatuses.Delete(taskID)
+	}
 	return res, true
 }
 

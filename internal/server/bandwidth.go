@@ -37,6 +37,8 @@ func (bt *BandwidthTracker) RecordBytesSent(n int64, path string) {
 		Bytes:     n,
 		Category:  bt.CategorizePath(path),
 	})
+	threshold := time.Now().Add(-5 * time.Second)
+	bt.sentHistory, _ = pruneHistory(bt.sentHistory, threshold)
 }
 
 // RecordBytesReceived records the number of bytes received via a request path.
@@ -49,6 +51,8 @@ func (bt *BandwidthTracker) RecordBytesReceived(n int64, path string) {
 		Bytes:     n,
 		Category:  bt.CategorizePath(path),
 	})
+	threshold := time.Now().Add(-5 * time.Second)
+	bt.receivedHistory, _ = pruneHistory(bt.receivedHistory, threshold)
 }
 
 // GetCurrentBandwidth calculates the upload and download bandwidth for the last 5 seconds.
