@@ -228,6 +228,101 @@ func stopNode() {
 	srv = nil
 }
 
+func buildServicePermissionsLabels(schema protocol.ServiceSchema) []string {
+	var reqPermissions []string
+	hasImageParam := false
+	hasFileParam := false
+
+	for pName := range schema.Parameters {
+		if isImageParam(pName) {
+			hasImageParam = true
+		}
+		if isFileParam(pName) {
+			hasFileParam = true
+		}
+	}
+
+	if hasImageParam {
+		reqPermissions = append(reqPermissions, "Camera (to take photo for upload)")
+		reqPermissions = append(reqPermissions, "Gallery / Storage (to select photo)")
+	} else if hasFileParam {
+		reqPermissions = append(reqPermissions, "Storage (to read/write local files)")
+	}
+
+	return reqPermissions
+}
+
+func runServiceTask(w fyne.Window, s *server.Server, schema protocol.ServiceSchema, providerAddr string, inputs map[string]any) {
+	taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
+
+	var targetPeerID string
+	for pid, paddr := range s.GetPeersCopy() {
+		if paddr == providerAddr {
+			targetPeerID = pid
+			break
+		}
+	}
+	if targetPeerID == "" {
+		targetPeerID = providerAddr
+	}
+
+	payloadMap := make(map[string]any)
+	for k, v := range inputs {
+		payloadMap[k] = v
+	}
+
+	req := protocol.TaskRequest{
+		TaskID:  taskID,
+		Service: schema.Name,
+		ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
+		Payload: payloadMap,
+	}
+
+	err := s.DispatchTask(targetPeerID, req)
+	if err != nil {
+		fyne.Do(func() {
+			dialog.ShowError(err, w)
+		})
+		return
+	}
+
+	var progress *dialog.ProgressDialog
+	fyne.Do(func() {
+		progress = dialog.NewProgress("Running Service", "Executing compute task...", w)
+		progress.Show()
+	})
+
+	var resp protocol.ServiceTaskResponse
+	completed := false
+	for i := 0; i < 30; i++ {
+		time.Sleep(1 * time.Second)
+		r, ok := s.Compute.GetTaskResponse(taskID)
+		if ok {
+			if r.Status == "completed" || r.Status == "failed" {
+				resp = r
+				completed = true
+				break
+			}
+		}
+	}
+
+	fyne.Do(func() {
+		if progress != nil {
+			progress.Hide()
+		}
+		if !completed {
+			dialog.ShowError(errors.New("Task execution timed out"), w)
+			return
+		}
+		if resp.Status == "failed" {
+			dialog.ShowError(errors.New(resp.Error), w)
+		} else {
+			outBytes, _ := json.MarshalIndent(resp.Outputs, "", "  ")
+			dialog.ShowInformation("Execution Complete", string(outBytes), w)
+		}
+	})
+}
+
 func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 	s := getRunningServer()
 	if s == nil {
@@ -251,26 +346,7 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 			dest.Add(widget.NewLabel("Description: " + schema.Description))
 			dest.Add(widget.NewLabel("Provider Address: " + addr))
 
-			var reqPermissions []string
-			hasImageParam := false
-			hasFileParam := false
-
-			for pName := range schema.Parameters {
-				if isImageParam(pName) {
-					hasImageParam = true
-				}
-				if isFileParam(pName) {
-					hasFileParam = true
-				}
-			}
-
-			if hasImageParam {
-				reqPermissions = append(reqPermissions, "Camera (to take photo for upload)")
-				reqPermissions = append(reqPermissions, "Gallery / Storage (to select photo)")
-			} else if hasFileParam {
-				reqPermissions = append(reqPermissions, "Storage (to read/write local files)")
-			}
-
+			reqPermissions := buildServicePermissionsLabels(schema)
 			if len(reqPermissions) > 0 {
 				dest.Add(widget.NewLabel("Required Permissions:"))
 				for _, perm := range reqPermissions {
@@ -287,76 +363,7 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 			}
 
 			runBtn := widget.NewButton("Run Service", func() {
-				go func() {
-					taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
-
-					var targetPeerID string
-					for pid, paddr := range s.GetPeersCopy() {
-						if paddr == addr {
-							targetPeerID = pid
-							break
-						}
-					}
-					if targetPeerID == "" {
-						targetPeerID = addr
-					}
-
-					payloadMap := make(map[string]any)
-					for k, v := range inputs {
-						payloadMap[k] = v
-					}
-
-					req := protocol.TaskRequest{
-						TaskID:  taskID,
-						Service: schema.Name,
-						ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
-						Payload: payloadMap,
-					}
-
-					err = s.DispatchTask(targetPeerID, req)
-					if err != nil {
-						fyne.Do(func() {
-							dialog.ShowError(err, w)
-						})
-						return
-					}
-
-					var progress *dialog.ProgressDialog
-					fyne.Do(func() {
-						progress = dialog.NewProgress("Running Service", "Executing compute task...", w)
-						progress.Show()
-					})
-
-					var resp protocol.ServiceTaskResponse
-					completed := false
-					for i := 0; i < 30; i++ {
-						time.Sleep(1 * time.Second)
-						r, ok := s.Compute.GetTaskResponse(taskID)
-						if ok {
-							if r.Status == "completed" || r.Status == "failed" {
-								resp = r
-								completed = true
-								break
-							}
-						}
-					}
-
-					fyne.Do(func() {
-						if progress != nil {
-							progress.Hide()
-						}
-						if !completed {
-							dialog.ShowError(errors.New("Task execution timed out"), w)
-							return
-						}
-						if resp.Status == "failed" {
-							dialog.ShowError(errors.New(resp.Error), w)
-						} else {
-							outBytes, _ := json.MarshalIndent(resp.Outputs, "", "  ")
-							dialog.ShowInformation("Execution Complete", string(outBytes), w)
-						}
-					})
-				}()
+				go runServiceTask(w, s, schema, addr, inputs)
 			})
 			dest.Add(runBtn)
 			dest.Refresh()
