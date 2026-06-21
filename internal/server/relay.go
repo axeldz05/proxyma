@@ -115,6 +115,11 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Body) > 65536 {
+		utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay payload exceeds 64KB limit")
+		return
+	}
+
 	if req.Target == "" || req.ReqID == "" {
 		utils.RespondError(w, http.StatusBadRequest, "Missing target or req_id")
 		return

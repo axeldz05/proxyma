@@ -93,7 +93,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Attempt direct connection with a short timeout to fail-fast
 		r.logDebug("Routing direct request", "url", clone.URL.String())
 		dCtx, dCancel := context.WithCancel(clone.Context())
-		timer := time.AfterFunc(500*time.Millisecond, dCancel)
+		timer := time.AfterFunc(2000*time.Millisecond, dCancel)
 		directReq := clone.Clone(dCtx)
 		resp, err := r.Base.RoundTrip(directReq)
 		if !timer.Stop() {
@@ -121,8 +121,11 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		if clone.Body != nil {
 			bodyBytes, _ := io.ReadAll(clone.Body)
-			relayReq.Body = bodyBytes
 			_ = clone.Body.Close()
+			if len(bodyBytes) > 65536 {
+				return nil, fmt.Errorf("payload exceeds 64KB limit for relay fallback")
+			}
+			relayReq.Body = bodyBytes
 		}
 		relayReq.Headers = make(map[string]string)
 		for k, v := range clone.Header {
