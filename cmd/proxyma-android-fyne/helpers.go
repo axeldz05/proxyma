@@ -256,11 +256,10 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 			hasFileParam := false
 
 			for pName := range schema.Parameters {
-				lowerName := strings.ToLower(pName)
-				if strings.Contains(lowerName, "image") || strings.Contains(lowerName, "img") || strings.Contains(lowerName, "photo") {
+				if isImageParam(pName) {
 					hasImageParam = true
 				}
-				if strings.Contains(lowerName, "file") || strings.Contains(lowerName, "path") {
+				if isFileParam(pName) {
 					hasFileParam = true
 				}
 			}
@@ -365,98 +364,117 @@ func loadServiceDetails(name string, w fyne.Window, dest *fyne.Container) {
 	}()
 }
 
+func isImageParam(paramName string) bool {
+	lower := strings.ToLower(paramName)
+	return strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo")
+}
+
+func isFileParam(paramName string) bool {
+	lower := strings.ToLower(paramName)
+	return strings.Contains(lower, "file") || strings.Contains(lower, "path")
+}
+
+func getParamDescription(paramName, paramType string) string {
+	switch paramType {
+	case "bool":
+		return fmt.Sprintf("Description: Toggle to enable or disable the %s option.", paramName)
+	case "int", "float":
+		return fmt.Sprintf("Description: Enter a numerical value for %s.", paramName)
+	default:
+		if isImageParam(paramName) {
+			return fmt.Sprintf("Description: Provide an image file path or capture a photo for %s.", paramName)
+		}
+		return fmt.Sprintf("Description: Provide a text value for %s.", paramName)
+	}
+}
+
+func buildImagePickerWidget(paramName string, inputs map[string]any, w fyne.Window, s *server.Server) fyne.CanvasObject {
+	btnContainer := container.NewVBox()
+	valLabel := widget.NewLabel("No image selected")
+
+	chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
+		dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
+			if take {
+				tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
+				err := capturePhoto(tempPath)
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
+					if proceed {
+						f, err := os.Open(tempPath)
+						if err != nil {
+							dialog.ShowError(err, w)
+							return
+						}
+						defer f.Close()
+						vfsName := filepath.Base(tempPath)
+						saveReaderToVFS(w, s, vfsName, f, func() {
+							inputs[paramName] = vfsName
+							valLabel.SetText(vfsName)
+						})
+					}
+				}, w)
+			} else {
+				dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+					if err != nil || reader == nil {
+						return
+					}
+					defer reader.Close()
+					vfsName := reader.URI().Name()
+					saveReaderToVFS(w, s, vfsName, reader, func() {
+						inputs[paramName] = vfsName
+						valLabel.SetText(vfsName)
+					})
+				}, w)
+			}
+		}, w)
+	})
+	btnContainer.Add(chooseBtn)
+	btnContainer.Add(valLabel)
+	return btnContainer
+}
+
 func buildParameterWidget(paramName string, rules protocol.ServiceParameter, inputs map[string]any, w fyne.Window, s *server.Server) []fyne.CanvasObject {
 	var objects []fyne.CanvasObject
 	objects = append(objects, widget.NewLabel(paramName+" ("+rules.Type+", Required: "+strconv.FormatBool(rules.Required)+")"))
 
-	descLabel := ""
-	if rules.Type == "bool" {
-		descLabel = fmt.Sprintf("Description: Toggle to enable or disable the %s option.", paramName)
-	} else if rules.Type == "int" || rules.Type == "float" {
-		descLabel = fmt.Sprintf("Description: Enter a numerical value for %s.", paramName)
-	} else {
-		if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
-			descLabel = fmt.Sprintf("Description: Provide an image file path or capture a photo for %s.", paramName)
-		} else {
-			descLabel = fmt.Sprintf("Description: Provide a text value for %s.", paramName)
-		}
-	}
-	objects = append(objects, widget.NewLabel(descLabel))
+	objects = append(objects, widget.NewLabel(getParamDescription(paramName, rules.Type)))
 
-	if rules.Type == "bool" {
-		chk := widget.NewCheck("", func(val bool) {
+	var inputWidget fyne.CanvasObject
+	switch rules.Type {
+	case "bool":
+		inputWidget = widget.NewCheck("", func(val bool) {
 			inputs[paramName] = val
 		})
-		objects = append(objects, chk)
-	} else if rules.Type == "int" {
+	case "int":
 		entry := widget.NewEntry()
 		entry.OnChanged = func(val string) {
 			v, _ := strconv.Atoi(val)
 			inputs[paramName] = v
 		}
-		objects = append(objects, entry)
-	} else if rules.Type == "float" {
+		inputWidget = entry
+	case "float":
 		entry := widget.NewEntry()
 		entry.OnChanged = func(val string) {
 			v, _ := strconv.ParseFloat(val, 64)
 			inputs[paramName] = v
 		}
-		objects = append(objects, entry)
-	} else {
-		if strings.Contains(strings.ToLower(paramName), "image") || strings.Contains(strings.ToLower(paramName), "img") {
-			btnContainer := container.NewVBox()
-			valLabel := widget.NewLabel("No image selected")
-
-			chooseBtn := widget.NewButton("Choose Image (Photo/Gallery)", func() {
-				dialog.ShowCustomConfirm("Select Image Source", "Take Photo", "Open Gallery", widget.NewLabel("Choose an option"), func(take bool) {
-					if take {
-						tempPath := filepath.Join(appStorage, fmt.Sprintf("photo_%d.jpg", time.Now().Unix()))
-						err := capturePhoto(tempPath)
-						if err != nil {
-							dialog.ShowError(err, w)
-							return
-						}
-						dialog.ShowCustomConfirm("Camera Invoked", "Proceed", "Cancel", widget.NewLabel("Press Proceed once the photo is captured"), func(proceed bool) {
-							if proceed {
-								f, err := os.Open(tempPath)
-								if err != nil {
-									dialog.ShowError(err, w)
-									return
-								}
-								defer f.Close()
-								vfsName := filepath.Base(tempPath)
-								saveReaderToVFS(w, s, vfsName, f, func() {
-									inputs[paramName] = vfsName
-									valLabel.SetText(vfsName)
-								})
-							}
-						}, w)
-					} else {
-						dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-							if err != nil || reader == nil {
-								return
-							}
-							defer reader.Close()
-							vfsName := reader.URI().Name()
-							saveReaderToVFS(w, s, vfsName, reader, func() {
-								inputs[paramName] = vfsName
-								valLabel.SetText(vfsName)
-							})
-						}, w)
-					}
-				}, w)
-			})
-			btnContainer.Add(chooseBtn)
-			btnContainer.Add(valLabel)
-			objects = append(objects, btnContainer)
+		inputWidget = entry
+	default:
+		if isImageParam(paramName) {
+			inputWidget = buildImagePickerWidget(paramName, inputs, w, s)
 		} else {
 			entry := widget.NewEntry()
 			entry.OnChanged = func(val string) {
 				inputs[paramName] = val
 			}
-			objects = append(objects, entry)
+			inputWidget = entry
 		}
 	}
+
+	objects = append(objects, inputWidget)
 	return objects
 }
 
