@@ -980,3 +980,29 @@ func TestOfflineNotificationAndSelfHealing(t *testing.T) {
 	srv1.AddPeer(srv2.Config.ID, protocol.AddressRecord{Addresses: []string{srv2.Config.Address}})
 	require.True(t, srv1.IsPeerOnline(srv2.Config.ID), "Node2 should be marked online after reconnecting / sending announce")
 }
+
+func TestSponsorRegistryAndDiscovery(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(t, testutil.DefaultConfig(t, "local-node"), nil)
+
+	// Peer 1 is a Sponsor
+	srv.AddPeer("sponsor-peer", protocol.AddressRecord{
+		Addresses: []string{"https://10.0.0.5:8443"},
+		Sequence:  1,
+		IsSponsor: true,
+	})
+
+	// Peer 2 is not a Sponsor
+	srv.AddPeer("regular-peer", protocol.AddressRecord{
+		Addresses: []string{"https://10.0.0.6:8443"},
+		Sequence:  1,
+		IsSponsor: false,
+	})
+
+	sponsors := srv.GetSponsorPeers()
+	require.Len(t, sponsors, 1)
+	require.Contains(t, sponsors, "sponsor-peer")
+	require.Equal(t, "https://10.0.0.5:8443", sponsors["sponsor-peer"])
+	require.NotContains(t, sponsors, "regular-peer")
+}
+

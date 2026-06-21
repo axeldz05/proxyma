@@ -125,6 +125,19 @@ func (pr *PeerRegistry) GetPeersRecordCopy() map[string]protocol.AddressRecord {
 	return snapshot
 }
 
+// GetSponsorPeers returns a mapping of all peer IDs to their primary address if they are Sponsors.
+func (pr *PeerRegistry) GetSponsorPeers() map[string]string {
+	pr.peersMu.RLock()
+	defer pr.peersMu.RUnlock()
+	sponsors := make(map[string]string)
+	for k, v := range pr.peers {
+		if v.IsSponsor && len(v.Addresses) > 0 {
+			sponsors[k] = v.Addresses[0]
+		}
+	}
+	return sponsors
+}
+
 // GetClusterServices returns the registered services of a specific peer.
 func (pr *PeerRegistry) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
 	pr.clusterServicesMu.RLock()

@@ -68,13 +68,17 @@ type ServiceBid struct {
 }
 
 type NodeConfig struct {
-	ID            string `json:"id"`
-	Address       string `json:"address"`
-	StoragePath   string `json:"storage_path"`
-	Workers       int    `json:"workers"`
-	CAPath        string `json:"ca_path"`
-	BootstrapNode string `json:"bootstrap_node,omitempty"`
-	Logger        *slog.Logger
+	ID                   string `json:"id"`
+	Address              string `json:"address"`
+	StoragePath          string `json:"storage_path"`
+	Workers              int    `json:"workers"`
+	CAPath               string `json:"ca_path"`
+	BootstrapNode        string `json:"bootstrap_node,omitempty"`
+	STUNServer           string `json:"stun_server,omitempty"`
+	IsSponsorOverride    *bool  `json:"is_sponsor_override,omitempty"`
+	MinRelayPollInterval int    `json:"min_relay_poll_interval,omitempty"`
+	MaxRelayPollInterval int    `json:"max_relay_poll_interval,omitempty"`
+	Logger               *slog.Logger
 }
 
 const (
@@ -110,6 +114,7 @@ type JoinResponse struct {
 type AddressRecord struct {
 	Addresses []string `json:"addresses"`
 	Sequence  int64    `json:"sequence"`
+	IsSponsor bool     `json:"is_sponsor"`
 }
 
 type AddPeerRequest struct {

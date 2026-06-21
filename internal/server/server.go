@@ -352,6 +352,10 @@ func (s *Server) GetPeersCopy() map[string]string {
 	return s.Peers.GetPeersCopy()
 }
 
+func (s *Server) GetSponsorPeers() map[string]string {
+	return s.Peers.GetSponsorPeers()
+}
+
 func (s *Server) ExecuteSync() error {
 	for peerID := range s.GetPeersCopy() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
