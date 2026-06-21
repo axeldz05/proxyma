@@ -1,8 +1,6 @@
 package proxyma
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +9,7 @@ import (
 
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 )
 
 // getDefaultStorage returns the default storage path from environment or fallback
@@ -54,13 +53,5 @@ func setupLocalAdminClient(cfg protocol.NodeConfig) *http.Client {
 
 // generateDefaultNodeID generates a fallback node ID using hostname and a short random hex
 func generateDefaultNodeID() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "node"
-	}
-	bytes := make([]byte, 2)
-	if _, err := rand.Read(bytes); err != nil {
-		return fmt.Sprintf("%s-0000", hostname)
-	}
-	return fmt.Sprintf("%s-%s", hostname, hex.EncodeToString(bytes))
+	return utils.GenerateDefaultNodeID()
 }

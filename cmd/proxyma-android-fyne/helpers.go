@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -90,13 +87,7 @@ func joinCluster(tokenEntry *widget.Entry, w fyne.Window, nidEntry *widget.Entry
 				return
 			}
 			if nid == "" {
-				hostname, err := os.Hostname()
-				if err != nil {
-					hostname = "node"
-				}
-				b := make([]byte, 2)
-				_, _ = rand.Read(b)
-				nid = fmt.Sprintf("%s-%s", hostname, hex.EncodeToString(b))
+				nid = utils.GenerateDefaultNodeID()
 				logDebug(fmt.Sprintf("Auto-generated NodeID: %q", nid), nil)
 			}
 
@@ -434,13 +425,10 @@ func buildParameterWidget(paramName string, rules protocol.ServiceParameter, inp
 								}
 								defer f.Close()
 								vfsName := filepath.Base(tempPath)
-								err = s.Storage.SaveLocalFile(vfsName, f)
-								if err != nil {
-									dialog.ShowError(err, w)
-									return
-								}
-								inputs[paramName] = vfsName
-								valLabel.SetText(vfsName)
+								saveReaderToVFS(w, s, vfsName, f, func() {
+									inputs[paramName] = vfsName
+									valLabel.SetText(vfsName)
+								})
 							}
 						}, w)
 					} else {
@@ -450,13 +438,10 @@ func buildParameterWidget(paramName string, rules protocol.ServiceParameter, inp
 							}
 							defer reader.Close()
 							vfsName := reader.URI().Name()
-							err = s.Storage.SaveLocalFile(vfsName, reader)
-							if err != nil {
-								dialog.ShowError(err, w)
-								return
-							}
-							inputs[paramName] = vfsName
-							valLabel.SetText(vfsName)
+							saveReaderToVFS(w, s, vfsName, reader, func() {
+								inputs[paramName] = vfsName
+								valLabel.SetText(vfsName)
+							})
 						}, w)
 					}
 				}, w)
@@ -490,15 +475,10 @@ func capturePhoto(tempPath string) error {
 }
 
 func getLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "127.0.0.1"
-	}
-	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
+	ips, _ := utils.GetLocalIPs()
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip.String()
 		}
 	}
 	return "127.0.0.1"
@@ -517,46 +497,27 @@ func byteCountSI(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
 
-func createInitialConfig(w fyne.Window, port string) {
-	_ = os.MkdirAll(appStorage, 0755)
-	certsDir := filepath.Join(appStorage, "certs")
-	_ = os.MkdirAll(certsDir, 0755)
-
-	hostname, err := os.Hostname()
+func saveReaderToVFS(w fyne.Window, s *server.Server, name string, r io.Reader, onSuccess func()) {
+	err := s.Storage.SaveLocalFile(name, r)
 	if err != nil {
-		hostname = "node"
-	}
-	b := make([]byte, 2)
-	_, _ = rand.Read(b)
-	nid := fmt.Sprintf("%s-%s", hostname, hex.EncodeToString(b))
-	if err := p2p.InitCluster(certsDir); err != nil {
 		fyne.Do(func() {
 			dialog.ShowError(err, w)
 		})
 		return
 	}
-	if err := p2p.IssueNodeCertificate(certsDir, certsDir, nid); err != nil {
-		fyne.Do(func() {
-			dialog.ShowError(err, w)
-		})
-		return
+	if onSuccess != nil {
+		fyne.Do(onSuccess)
 	}
+}
 
+func createInitialConfig(w fyne.Window, port string) {
+	nid := utils.GenerateDefaultNodeID()
 	localIP := getLocalIP()
 	localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
-	caPath := filepath.Join(certsDir, "ca.crt")
-	cfg := protocol.NodeConfig{
-		ID:          nid,
-		Address:     localAddr,
-		StoragePath: appStorage,
-		Workers:     4,
-		CAPath:      caPath,
-	}
-	if err = protocol.SaveConfig(cfg); err != nil {
+	if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
 		fyne.Do(func() {
 			dialog.ShowError(err, w)
 		})
-		return
 	}
 }
 func loadConfigOrDie(storagePath string, w fyne.Window) protocol.NodeConfig {

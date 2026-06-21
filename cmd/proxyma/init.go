@@ -3,9 +3,7 @@ package proxyma
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"proxyma/internal/p2p"
-	"proxyma/internal/protocol"
 
 	"github.com/spf13/cobra"
 )
@@ -25,34 +23,10 @@ var initCmd = &cobra.Command{
 			initID = generateDefaultNodeID()
 		}
 		fmt.Printf("🏗️ Initializing node '%s'...\n", initID)
-		if err := os.MkdirAll(initStorage, 0755); err != nil {
-			fmt.Printf("❌ Error creating storage directory: %v\n", err)
-			os.Exit(1)
-		}
-		certsDir := filepath.Join(initStorage, "certs")
-		_ = os.MkdirAll(certsDir, 0755)
-		fmt.Println("🔐 Generating cryptographic material...")
-		if err := p2p.InitCluster(certsDir); err != nil {
-			fmt.Printf("❌ Error generating CA: %v\n", err)
-			os.Exit(1)
-		}
-		if err := p2p.IssueNodeCertificate(certsDir, certsDir, initID); err != nil {
-			fmt.Printf("❌ Error generating node certificates: %v\n", err)
-			os.Exit(1)
-		}
 		address := fmt.Sprintf("https://%s:%s", initID, initPort)
-		caPath := filepath.Join(certsDir, "ca.crt")
-
-		cfg := protocol.NodeConfig{
-			ID:          initID,
-			Address:     address,
-			StoragePath: initStorage,
-			Workers:     4,
-			CAPath:      caPath,
-		}
-
-		if err := protocol.SaveConfig(cfg); err != nil {
-			fmt.Printf("❌ Error saving configuration: %v\n", err)
+		fmt.Println("🔐 Generating cryptographic material...")
+		if err := p2p.SetupNewNode(initStorage, initID, address); err != nil {
+			fmt.Printf("❌ Error initializing node: %v\n", err)
 			os.Exit(1)
 		}
 

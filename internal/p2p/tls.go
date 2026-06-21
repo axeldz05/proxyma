@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"proxyma/internal/protocol"
 	"time"
 )
 
@@ -346,3 +347,31 @@ func fileExists(filename string) bool {
 func generatePrivateKey() (*ecdsa.PrivateKey, error) {
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 }
+
+// SetupNewNode initializes the directories, CA, node certificate, and saves the initial config.
+func SetupNewNode(storagePath, nodeID, address string) error {
+	if err := os.MkdirAll(storagePath, 0755); err != nil {
+		return fmt.Errorf("error creating storage directory: %w", err)
+	}
+	certsDir := filepath.Join(storagePath, "certs")
+	_ = os.MkdirAll(certsDir, 0755)
+
+	if err := InitCluster(certsDir); err != nil {
+		return fmt.Errorf("error generating CA: %w", err)
+	}
+	if err := IssueNodeCertificate(certsDir, certsDir, nodeID); err != nil {
+		return fmt.Errorf("error generating node certificates: %w", err)
+	}
+
+	caPath := filepath.Join(certsDir, "ca.crt")
+	cfg := protocol.NodeConfig{
+		ID:          nodeID,
+		Address:     address,
+		StoragePath: storagePath,
+		Workers:     4,
+		CAPath:      caPath,
+	}
+
+	return protocol.SaveConfig(cfg)
+}
+

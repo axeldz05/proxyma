@@ -254,7 +254,7 @@ func TestServiceDetailsPermissionsAndLabels(t *testing.T) {
 
 	// Since RequestServiceToCluster runs in a goroutine, we need to wait briefly
 	require.Eventually(t, func() bool {
-		return len(dest.Objects) > 0
+		return len(dest.Objects) >= 6
 	}, 2*time.Second, 100*time.Millisecond)
 
 	var labelTexts []string

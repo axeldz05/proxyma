@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"proxyma/internal/utils"
 	"strconv"
 	"strings"
 )
@@ -25,20 +26,18 @@ type InvitePayload struct {
 }
 
 func getLocalIPs() ([]net.IP, error) {
-	addrs, err := net.InterfaceAddrs()
+	ips, err := utils.GetLocalIPs()
 	if err != nil {
 		return nil, err
 	}
-	var ips []net.IP
-	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.IsLinkLocalMulticast() || ipnet.IP.IsLinkLocalUnicast() {
-				continue
-			}
-			ips = append(ips, ipnet.IP)
+	var filtered []net.IP
+	for _, ip := range ips {
+		if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
+			continue
 		}
+		filtered = append(filtered, ip)
 	}
-	return ips, nil
+	return filtered, nil
 }
 
 func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {

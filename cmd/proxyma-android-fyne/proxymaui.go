@@ -68,13 +68,10 @@ func (ui *ProxymaUI) UploadFile(w fyne.Window) func() {
 			}
 			defer reader.Close()
 			name := reader.URI().Name()
-			err = s.Storage.SaveLocalFile(name, reader)
-			if err != nil {
-				dialog.ShowError(err, w)
-			} else {
+			saveReaderToVFS(w, s, name, reader, func() {
 				dialog.ShowInformation("Uploaded", fmt.Sprintf("File %s uploaded successfully", name), w)
 				ui.Refresh()
-			}
+			})
 		}, w)
 	}
 }
