@@ -183,6 +183,17 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 	s.Config.Logger.Info("Starting Relay Polling", "sponsor", sponsorAddr)
 
+	minInterval := time.Duration(s.Config.MinRelayPollInterval) * time.Second
+	if minInterval <= 0 {
+		minInterval = 2 * time.Second
+	}
+	maxInterval := time.Duration(s.Config.MaxRelayPollInterval) * time.Second
+	if maxInterval <= 0 {
+		maxInterval = 45 * time.Second
+	}
+
+	currentSleep := time.Duration(0)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -190,12 +201,33 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		default:
 		}
 
+		if currentSleep > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(currentSleep):
+			}
+		}
+
 		pollCtx, pollCancel := context.WithTimeout(ctx, 15*time.Second)
 		relayReq, err := s.peerClient.PollRelay(pollCtx, sponsorAddr, s.Config.ID)
 		pollCancel()
 		if err != nil {
-			s.Config.Logger.Debug("Relay poll failed", "error", err)
-			// Network error, backoff
+			s.Config.Logger.Debug("Relay poll failed, trying to failover", "error", err)
+
+			// Try to find another sponsor from GetSponsorPeers()
+			sponsors := s.GetSponsorPeers()
+			if len(sponsors) > 0 {
+				for id, addr := range sponsors {
+					if addr != sponsorAddr && s.IsPeerOnline(id) {
+						s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", addr)
+						sponsorAddr = addr
+						break
+					}
+				}
+			}
+
+			// Network error backoff
 			select {
 			case <-ctx.Done():
 				return
@@ -205,9 +237,21 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		}
 
 		if relayReq.ReqID == "" {
-			// Timeout reached without messages, poll again immediately
+			// Timeout reached without messages (204 No Content)
+			// Increase sleep interval adaptively
+			if currentSleep == 0 {
+				currentSleep = minInterval
+			} else {
+				currentSleep += 2 * time.Second
+				if currentSleep > maxInterval {
+					currentSleep = maxInterval
+				}
+			}
 			continue
 		}
+
+		// Message received! Reset sleep for instant responsiveness
+		currentSleep = 0
 
 		// Process the request asynchronously so we can keep polling
 		go s.processRelayRequest(sponsorAddr, relayReq)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"proxyma/internal/p2p"
@@ -117,4 +118,63 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	require.Equal(t, 201, finalRes.StatusCode)
 	require.Equal(t, "response relay", string(finalRes.Body))
 	_ = fwdResp.Body.Close()
+}
+
+func TestAdaptiveRelayPollingAndFailover(t *testing.T) {
+	t.Parallel()
+
+	sponsorCh := make(chan string, 10)
+	pollCount := 0
+
+	mockClient := &testutil.MockPeerClient{
+		OnPollRelay: func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
+			pollCount++
+			sponsorCh <- sponsorAddr
+			if sponsorAddr == "https://first-sponsor:8443" && pollCount == 1 {
+				// Fail the first poll to trigger failover
+				return protocol.RelayRequest{}, fmt.Errorf("connection failed")
+			}
+			// Otherwise return empty response (timeout / 204 No Content)
+			return protocol.RelayRequest{}, nil
+		},
+	}
+
+	cfg := testutil.DefaultConfig(t, "adaptive-client")
+	srv := NewServer(t, cfg, mockClient)
+
+	// Register two sponsors in the registry
+	srv.AddPeer("sponsor1", protocol.AddressRecord{
+		Addresses: []string{"https://first-sponsor:8443"},
+		Sequence:  1,
+		IsSponsor: true,
+	})
+	srv.AddPeer("sponsor2", protocol.AddressRecord{
+		Addresses: []string{"https://second-sponsor:8443"},
+		Sequence:  1,
+		IsSponsor: true,
+	})
+
+	srv.SetPeerOnline("sponsor1", true)
+	srv.SetPeerOnline("sponsor2", true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start the relay polling in a goroutine
+	go srv.StartRelayPolling(ctx, "https://first-sponsor:8443")
+
+	// Verify we switch to the second sponsor after the first one fails
+	select {
+	case firstSponsor := <-sponsorCh:
+		require.Equal(t, "https://first-sponsor:8443", firstSponsor)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for first poll")
+	}
+
+	select {
+	case secondSponsor := <-sponsorCh:
+		require.Equal(t, "https://second-sponsor:8443", secondSponsor)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for failover poll to second sponsor")
+	}
 }
