@@ -6,3 +6,12 @@ tests/e2e/logs
 *log
 *.keystore
 *.apk
+.gradle
+**/build/
+!**/src/**/build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+.gradletasknamecache
+.project
+.classpath

@@ -114,6 +114,8 @@ func (bt *BandwidthTracker) GetTotalBandwidth() (int64, int64) {
 
 // CategorizePath maps a request path to a telemetry/bandwidth category string.
 func (bt *BandwidthTracker) CategorizePath(path string) string {
+	// should consider making a more generalized form of categorizing
+	// without needing to hardcode prefixes
 	if strings.HasPrefix(path, "/download/") {
 		cleanPath := path
 		if idx := strings.Index(path, "?"); idx != -1 {
