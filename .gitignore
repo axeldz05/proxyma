@@ -14,4 +14,4 @@ gradle-app.setting
 !gradle-wrapper.properties
 .gradletasknamecache
 .project
-.classpath
+.classpathbuild/*
