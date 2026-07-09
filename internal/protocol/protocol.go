@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 )
 
 // NewLogger creates the centralized logger for the Proxyma node.
@@ -56,6 +59,18 @@ type CLIFileEntry struct {
 	Deleted    bool   `json:"deleted"`
 	Subscribed bool   `json:"subscribed"`
 	HasLocal   bool   `json:"has_local"`
+}
+
+type VFSFileStatus struct {
+	Name       string  `json:"name"`
+	Version    int     `json:"version"`
+	Size       int64   `json:"size"`
+	Hash       string  `json:"hash"`
+	Subscribed bool    `json:"subscribed"`
+	HasLocal   bool    `json:"hasLocal"`
+	Deleted    bool    `json:"deleted"`
+	UpSpeed    float64 `json:"upSpeed"`
+	DownSpeed  float64 `json:"downSpeed"`
 }
 
 type UnixRequest struct {
@@ -195,4 +210,59 @@ type ProbeRequest struct {
 type ProbeResponse struct {
 	Reachable bool   `json:"reachable"`
 	Error     string `json:"error,omitempty"`
+}
+
+type PeerStatus struct {
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	Online  bool   `json:"online"`
+	Error   string `json:"error,omitempty"`
+}
+
+type BandwidthStats struct {
+	UploadSpeed   int64 `json:"upload_speed"`
+	DownloadSpeed int64 `json:"download_speed"`
+	TotalSent     int64 `json:"total_sent"`
+	TotalReceived int64 `json:"total_received"`
+}
+
+type LogRecord struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"` // "INFO", "WARN", "ERROR", "DEBUG"
+	Message   string `json:"message"`
+}
+
+var (
+	LogBuffer   []LogRecord
+	LogBufferMu sync.Mutex
+)
+
+type LogWriter struct {
+	Stdout io.Writer
+}
+
+func (w *LogWriter) Write(p []byte) (n int, err error) {
+	n, err = w.Stdout.Write(p)
+	line := string(p)
+	level := "INFO"
+	if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=error") {
+		level = "ERROR"
+	} else if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=warn") {
+		level = "WARN"
+	} else if strings.Contains(line, "level=DEBUG") || strings.Contains(line, "level=debug") {
+		level = "DEBUG"
+	}
+
+	LogBufferMu.Lock()
+	LogBuffer = append(LogBuffer, LogRecord{
+		Timestamp: time.Now().Format("15:04:05"),
+		Level:     level,
+		Message:   strings.TrimSpace(line),
+	})
+	if len(LogBuffer) > 1000 {
+		LogBuffer = LogBuffer[len(LogBuffer)-1000:]
+	}
+	LogBufferMu.Unlock()
+
+	return n, err
 }

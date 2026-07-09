@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -121,7 +121,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 		Addr:      addr,
 		Handler:   mux,
 		TLSConfig: serverTLS,
-		ErrorLog:  slog.NewLogLogger(s.Config.Logger.Handler(), slog.LevelError),
+		ErrorLog:  log.New(&tlsErrorWriter{server: s}, "", 0),
 	}
 
 	s.httpServer = hs
@@ -220,21 +220,7 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			actionErr = s.ExecuteSync()
 
 		case "vfs_list":
-			snapshot := s.Storage.GetVFSSnapshot()
-			var list []protocol.CLIFileEntry
-			for _, entry := range snapshot {
-				hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
-				list = append(list, protocol.CLIFileEntry{
-					Name:       entry.Name,
-					Version:    entry.Version,
-					Size:       entry.Size,
-					Hash:       entry.Hash,
-					Deleted:    entry.Deleted,
-					Subscribed: s.Storage.IsSubscribed(entry.Name),
-					HasLocal:   hasLocal,
-				})
-			}
-			respData = list
+			respData = s.LocalVFSList()
 
 		case "vfs_upload":
 			filePath := req.Args["path"]
@@ -285,87 +271,10 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			actionErr = s.Storage.DeleteLocalCache(fileName)
 
 		case "service_discover":
-			names := make(map[string]bool)
-			for _, name := range s.Compute.ListServices() {
-				names[name] = true
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			for peerID := range s.GetPeersCopy() {
-				peerSvc, err := s.DiscoverServices(ctx, peerID)
-				if err == nil {
-					for _, name := range peerSvc {
-						names[name] = true
-					}
-				}
-			}
-			cancel()
-			var result []string
-			for name := range names {
-				result = append(result, name)
-			}
-			respData = result
+			respData, actionErr = s.LocalServiceDiscover()
 
 		case "service_run":
-			serviceName := req.Args["service"]
-			payloadStr := req.Args["payload"]
-			if serviceName == "" {
-				actionErr = fmt.Errorf("missing service parameter")
-				break
-			}
-			var payload map[string]any
-			if payloadStr != "" {
-				_ = json.Unmarshal([]byte(payloadStr), &payload)
-			}
-
-			addr, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
-			if err != nil {
-				actionErr = fmt.Errorf("failed to discover service: %w", err)
-				break
-			}
-
-			taskID := fmt.Sprintf("task_cli_%d", time.Now().UnixNano())
-			var targetPeerID string
-			for pid, paddr := range s.GetPeersCopy() {
-				if paddr == addr {
-					targetPeerID = pid
-					break
-				}
-			}
-			if targetPeerID == "" {
-				targetPeerID = addr
-			}
-
-			taskReq := protocol.TaskRequest{
-				TaskID:  taskID,
-				Service: serviceName,
-				ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
-				Payload: payload,
-			}
-
-			err = s.DispatchTask(targetPeerID, taskReq)
-			if err != nil {
-				actionErr = fmt.Errorf("failed to dispatch task: %w", err)
-				break
-			}
-
-			var resp protocol.ServiceTaskResponse
-			completed := false
-			for i := 0; i < 30; i++ {
-				time.Sleep(1 * time.Second)
-				r, ok := s.Compute.GetTaskResponse(taskID)
-				if ok {
-					if r.Status == "completed" || r.Status == "failed" {
-						resp = r
-						completed = true
-						break
-					}
-				}
-			}
-			if !completed {
-				actionErr = fmt.Errorf("task timed out on execution")
-				break
-			}
-			respData = resp
+			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"])
 
 		case "service_status":
 			taskID := req.Args["task_id"]
@@ -379,6 +288,22 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 				break
 			}
 			respData = r
+
+		case "invite_generate":
+			respData, actionErr = s.LocalInviteGenerate(15)
+
+		case "logs":
+			protocol.LogBufferMu.Lock()
+			logsCopy := make([]protocol.LogRecord, len(protocol.LogBuffer))
+			copy(logsCopy, protocol.LogBuffer)
+			protocol.LogBufferMu.Unlock()
+			respData = logsCopy
+
+		case "bandwidth":
+			respData = s.LocalBandwidthStats()
+
+		case "peers":
+			respData = s.LocalPeersList()
 
 		default:
 			actionErr = fmt.Errorf("unknown action: %s", req.Action)
@@ -450,6 +375,10 @@ func (s *Server) SetPeerOnline(peerID string, online bool) {
 	s.Peers.SetPeerOnline(peerID, online)
 }
 
+func (s *Server) SetPeerOffline(peerID string, err error) {
+	s.Peers.SetPeerOffline(peerID, err)
+}
+
 func (s *Server) IsPeerOnline(peerID string) bool {
 	return s.Peers.IsPeerOnline(peerID)
 }
@@ -496,7 +425,7 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
-			s.SetPeerOnline(peerID, false)
+			s.SetPeerOffline(peerID, err)
 		} else {
 			s.SetPeerOnline(peerID, true)
 		}
@@ -519,7 +448,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 			bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
 			if err != nil {
 				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
-				s.SetPeerOnline(peerID, false)
+				s.SetPeerOffline(peerID, err)
 			} else {
 				s.SetPeerOnline(peerID, true)
 			}
@@ -559,7 +488,7 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 	err := s.peerClient.SubmitTask(ctx, targetPeerID, req)
 	if err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
-		s.SetPeerOnline(targetPeerID, false)
+		s.SetPeerOffline(targetPeerID, err)
 		return fmt.Errorf("failed to dispatch task to peer: %v", err)
 	}
 	s.SetPeerOnline(targetPeerID, true)
@@ -581,7 +510,7 @@ func (s *Server) ExecuteSync() error {
 		cancel()
 		if err != nil {
 			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
-			s.SetPeerOnline(peerID, false)
+			s.SetPeerOffline(peerID, err)
 			continue
 		}
 		s.SetPeerOnline(peerID, true)
@@ -846,5 +775,209 @@ func (s *Server) RotateCAAndResignPeers() {
 		return
 	}
 	s.Config.Logger.Info("CA Rotation completed successfully on Sponsor/CA node.")
+}
+
+func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
+	snapshot := s.Storage.GetVFSSnapshot()
+	list := []protocol.VFSFileStatus{}
+	for _, entry := range snapshot {
+		if entry.Deleted {
+			continue
+		}
+		hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
+		isSubscribed := s.Storage.IsSubscribed(entry.Name)
+		sentSpeed, recvSpeed := s.GetCategoryBandwidth("vfs:" + entry.Hash)
+
+		list = append(list, protocol.VFSFileStatus{
+			Name:       entry.Name,
+			Version:    entry.Version,
+			Size:       entry.Size,
+			Hash:       entry.Hash,
+			Subscribed: isSubscribed,
+			HasLocal:   hasLocal,
+			Deleted:    entry.Deleted,
+			UpSpeed:    sentSpeed,
+			DownSpeed:  recvSpeed,
+		})
+	}
+	return list
+}
+
+func (s *Server) LocalServiceDiscover() ([]string, error) {
+	names := make(map[string]bool)
+	for _, name := range s.Compute.ListServices() {
+		names[name] = true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for peerID := range s.GetPeersCopy() {
+		peerSvc, err := s.DiscoverServices(ctx, peerID)
+		if err == nil {
+			for _, name := range peerSvc {
+				names[name] = true
+			}
+		}
+	}
+	var result []string
+	for name := range names {
+		result = append(result, name)
+	}
+	return result, nil
+}
+
+func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
+	var payload map[string]any
+	if payloadStr != "" {
+		_ = json.Unmarshal([]byte(payloadStr), &payload)
+	}
+
+	addr, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+	if err != nil {
+		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
+	}
+
+	taskID := fmt.Sprintf("task_kt_%d", time.Now().UnixNano())
+	var targetPeerID string
+	for pid, paddr := range s.GetPeersCopy() {
+		if paddr == addr {
+			targetPeerID = pid
+			break
+		}
+	}
+	if targetPeerID == "" {
+		targetPeerID = addr
+	}
+
+	taskReq := protocol.TaskRequest{
+		TaskID:  taskID,
+		Service: serviceName,
+		ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
+		Payload: payload,
+	}
+
+	err = s.DispatchTask(targetPeerID, taskReq)
+	if err != nil {
+		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to dispatch task: %w", err)
+	}
+
+	var resp protocol.ServiceTaskResponse
+	completed := false
+	for i := 0; i < 30; i++ {
+		time.Sleep(1 * time.Second)
+		r, ok := s.Compute.GetTaskResponse(taskID)
+		if ok {
+			if r.Status == "completed" || r.Status == "failed" {
+				resp = r
+				completed = true
+				break
+			}
+		}
+	}
+	if !completed {
+		return protocol.ServiceTaskResponse{}, fmt.Errorf("task timed out on execution")
+	}
+	return resp, nil
+}
+
+func (s *Server) LocalInviteGenerate(validForMinutes int) (string, error) {
+	if validForMinutes <= 0 {
+		validForMinutes = 15
+	}
+	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
+	if err != nil {
+		return "", err
+	}
+	expiration := time.Now().Add(time.Duration(validForMinutes) * time.Minute)
+	s.AddPendingInvite(secretHex, expiration)
+	return smartToken, nil
+}
+
+func (s *Server) LocalBandwidthStats() protocol.BandwidthStats {
+	upSpeed, downSpeed := s.GetCurrentBandwidth()
+	totalSent, totalRecv := s.GetTotalBandwidth()
+	return protocol.BandwidthStats{
+		UploadSpeed:   int64(upSpeed),
+		DownloadSpeed: int64(downSpeed),
+		TotalSent:     totalSent,
+		TotalReceived: totalRecv,
+	}
+}
+
+func (s *Server) LocalPeersList() []protocol.PeerStatus {
+	var list []protocol.PeerStatus
+	for id, addr := range s.GetPeersCopy() {
+		online := s.IsPeerOnline(id)
+		var errMsg string
+		if !online {
+			errMsg = s.Peers.GetPeerError(id)
+		}
+		list = append(list, protocol.PeerStatus{
+			ID:      id,
+			Address: addr,
+			Online:  online,
+			Error:   errMsg,
+		})
+	}
+	return list
+}
+
+type tlsErrorWriter struct {
+	server *Server
+}
+
+func (w *tlsErrorWriter) Write(p []byte) (n int, err error) {
+	line := string(p)
+	if strings.Contains(line, "TLS handshake error") {
+		parts := strings.SplitN(line, "TLS handshake error from ", 2)
+		if len(parts) == 2 {
+			addrPart := parts[1]
+			addrErrParts := strings.SplitN(addrPart, ": ", 2)
+			if len(addrErrParts) == 2 {
+				hostPort := addrErrParts[0]
+				errMsg := addrErrParts[1]
+
+				host, _, err := net.SplitHostPort(hostPort)
+				if err != nil {
+					host = hostPort
+				}
+
+				// Find registered peer matching this IP/Host
+				peerID := ""
+				peerAddr := ""
+				for id, pRecord := range w.server.Peers.GetPeersRecordCopy() {
+					for _, a := range pRecord.Addresses {
+						if strings.Contains(a, host) {
+							peerID = id
+							peerAddr = a
+							break
+						}
+					}
+					if peerID != "" {
+						break
+					}
+				}
+
+				if peerID != "" {
+					w.server.Config.Logger.Error("TLS Handshake error from registered peer",
+						"peerID", peerID,
+						"peerAddress", peerAddr,
+						"remoteAddr", hostPort,
+						"error", strings.TrimSpace(errMsg),
+					)
+					w.server.SetPeerOffline(peerID, fmt.Errorf("TLS handshake failed: %s", strings.TrimSpace(errMsg)))
+					return len(p), nil
+				} else {
+					w.server.Config.Logger.Error("TLS Handshake error from unknown source",
+						"remoteAddr", hostPort,
+						"error", strings.TrimSpace(errMsg),
+					)
+					return len(p), nil
+				}
+			}
+		}
+	}
+	// Fallback to standard logging to avoid suppressing other HTTP server errors
+	w.server.Config.Logger.Error("HTTP server error", "message", strings.TrimSpace(line))
+	return len(p), nil
 }
 

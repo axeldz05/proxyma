@@ -1,13 +1,14 @@
-package proxyma
+package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
-	"proxyma/internal/protocol"
+	proxyma_bind "proxyma/cmd/proxyma-bind"
 
 	"github.com/spf13/cobra"
 )
@@ -23,13 +24,20 @@ var vfsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all files in the virtual file system snapshot",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := sendUnixSocketCommand(vfsStorage, "vfs_list", nil)
-		if err != nil {
-			return err
-		}
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
 
-		var list []protocol.CLIFileEntry
-		if err := json.Unmarshal(data, &list); err != nil {
+		jsonStr := proxyma_bind.GetVFSFilesJson()
+		if strings.Contains(jsonStr, `"error":`) {
+			type ErrResp struct {
+				Error string `json:"error"`
+			}
+			var errR ErrResp
+			_ = json.Unmarshal([]byte(jsonStr), &errR)
+			return fmt.Errorf("%s", errR.Error)
+		}
+		var list []proxyma_bind.VFSFileStatus
+		if err := json.Unmarshal([]byte(jsonStr), &list); err != nil {
 			return fmt.Errorf("failed to parse files: %w", err)
 		}
 
@@ -83,12 +91,12 @@ var vfsUploadCmd = &cobra.Command{
 			name = args[1]
 		}
 
-		_, err = sendUnixSocketCommand(vfsStorage, "vfs_upload", map[string]string{
-			"path": absPath,
-			"name": name,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
+
+		errStr := proxyma_bind.UploadFile(name, absPath)
+		if errStr != "" {
+			return fmt.Errorf("%s", errStr)
 		}
 
 		fmt.Printf("✅ File '%s' uploaded successfully to VFS.\n", name)
@@ -102,11 +110,12 @@ var vfsSubscribeCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, err := sendUnixSocketCommand(vfsStorage, "vfs_subscribe", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
+
+		errStr := proxyma_bind.SetSubscription(name, true)
+		if errStr != "" {
+			return fmt.Errorf("%s", errStr)
 		}
 
 		fmt.Printf("✅ Subscribed to file '%s'. Synchronization triggered.\n", name)
@@ -120,11 +129,12 @@ var vfsUnsubscribeCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, err := sendUnixSocketCommand(vfsStorage, "vfs_unsubscribe", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
+
+		errStr := proxyma_bind.SetSubscription(name, false)
+		if errStr != "" {
+			return fmt.Errorf("%s", errStr)
 		}
 
 		fmt.Printf("✅ Unsubscribed from file '%s'.\n", name)
@@ -138,11 +148,12 @@ var vfsDeleteCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, err := sendUnixSocketCommand(vfsStorage, "vfs_delete", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
+
+		errStr := proxyma_bind.DeleteFile(name)
+		if errStr != "" {
+			return fmt.Errorf("%s", errStr)
 		}
 
 		fmt.Printf("✅ File '%s' marked as deleted in VFS registry.\n", name)
@@ -156,11 +167,12 @@ var vfsPurgeCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		_, err := sendUnixSocketCommand(vfsStorage, "vfs_purge", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(vfsStorage)
+		proxyma_bind.SetStoragePath(vfsStorage)
+
+		errStr := proxyma_bind.DeleteLocalCache(name)
+		if errStr != "" {
+			return fmt.Errorf("%s", errStr)
 		}
 
 		fmt.Printf("✅ Physical cache for file '%s' purged from disk.\n", name)

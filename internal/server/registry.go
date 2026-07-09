@@ -17,6 +17,8 @@ type PeerRegistry struct {
 	peersMu           sync.RWMutex
 	activePeers       map[string]bool
 	activePeersMu     sync.RWMutex
+	peerErrors        map[string]string
+	peerErrorsMu      sync.RWMutex
 	clusterServices   map[string]map[string]protocol.ServiceSchema
 	clusterServicesMu sync.RWMutex
 	peerCerts         map[string]*x509.Certificate
@@ -30,6 +32,7 @@ func NewPeerRegistry(logger *slog.Logger, nodeID string) *PeerRegistry {
 		nodeID:          nodeID,
 		peers:           make(map[string]protocol.AddressRecord),
 		activePeers:     make(map[string]bool),
+		peerErrors:      make(map[string]string),
 		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
 		peerCerts:       make(map[string]*x509.Certificate),
 	}
@@ -37,8 +40,50 @@ func NewPeerRegistry(logger *slog.Logger, nodeID string) *PeerRegistry {
 
 // AddPeer adds or updates a peer's address record. It returns true if the peer record was actually updated.
 func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRecord) bool {
+	if peerID == pr.nodeID {
+		return false
+	}
+
 	pr.peersMu.Lock()
 	defer pr.peersMu.Unlock()
+
+	// Clean up stale peers with the same primary address
+	if len(addressRecord.Addresses) > 0 {
+		newPrimaryAddr := addressRecord.Addresses[0]
+		var staleIDs []string
+		for id, existingRecord := range pr.peers {
+			if id != peerID && len(existingRecord.Addresses) > 0 && existingRecord.Addresses[0] == newPrimaryAddr {
+				staleIDs = append(staleIDs, id)
+			}
+		}
+
+		if len(staleIDs) > 0 {
+			for _, staleID := range staleIDs {
+				delete(pr.peers, staleID)
+			}
+			pr.activePeersMu.Lock()
+			for _, staleID := range staleIDs {
+				delete(pr.activePeers, staleID)
+			}
+			pr.activePeersMu.Unlock()
+
+			pr.peerErrorsMu.Lock()
+			for _, staleID := range staleIDs {
+				delete(pr.peerErrors, staleID)
+			}
+			pr.peerErrorsMu.Unlock()
+
+			pr.clusterServicesMu.Lock()
+			for _, staleID := range staleIDs {
+				delete(pr.clusterServices, staleID)
+			}
+			pr.clusterServicesMu.Unlock()
+
+			for _, staleID := range staleIDs {
+				pr.logger.Info("Removing stale peer replaced by new peer ID at same address", "stalePeerID", staleID, "newPeerID", peerID, "address", newPrimaryAddr)
+			}
+		}
+	}
 
 	existing, exists := pr.peers[peerID]
 	if exists {
@@ -63,7 +108,15 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 	}
 
 	pr.peers[peerID] = addressRecord
-	pr.SetPeerOnline(peerID, true)
+	// SetPeerOnline will acquire activePeersMu.Lock() internally, which is safe since we lock in the correct order
+	pr.activePeersMu.Lock()
+	pr.activePeers[peerID] = true
+	pr.activePeersMu.Unlock()
+
+	pr.peerErrorsMu.Lock()
+	delete(pr.peerErrors, peerID)
+	pr.peerErrorsMu.Unlock()
+
 	pr.logger.Info("peerID added to peers", "peerID", peerID, "node", pr.nodeID)
 	return true
 }
@@ -78,6 +131,10 @@ func (pr *PeerRegistry) RemovePeer(peerID string) {
 	delete(pr.activePeers, peerID)
 	pr.activePeersMu.Unlock()
 
+	pr.peerErrorsMu.Lock()
+	delete(pr.peerErrors, peerID)
+	pr.peerErrorsMu.Unlock()
+
 	pr.clusterServicesMu.Lock()
 	delete(pr.clusterServices, peerID)
 	pr.clusterServicesMu.Unlock()
@@ -88,8 +145,36 @@ func (pr *PeerRegistry) RemovePeer(peerID string) {
 // SetPeerOnline marks a peer as online or offline.
 func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
 	pr.activePeersMu.Lock()
-	defer pr.activePeersMu.Unlock()
 	pr.activePeers[peerID] = online
+	pr.activePeersMu.Unlock()
+
+	if online {
+		pr.peerErrorsMu.Lock()
+		delete(pr.peerErrors, peerID)
+		pr.peerErrorsMu.Unlock()
+	}
+}
+
+// SetPeerOffline marks a peer as offline and stores the connection error.
+func (pr *PeerRegistry) SetPeerOffline(peerID string, err error) {
+	pr.activePeersMu.Lock()
+	pr.activePeers[peerID] = false
+	pr.activePeersMu.Unlock()
+
+	pr.peerErrorsMu.Lock()
+	if err != nil {
+		pr.peerErrors[peerID] = err.Error()
+	} else {
+		pr.peerErrors[peerID] = "unknown connection error"
+	}
+	pr.peerErrorsMu.Unlock()
+}
+
+// GetPeerError retrieves the connection error for a specific peer.
+func (pr *PeerRegistry) GetPeerError(peerID string) string {
+	pr.peerErrorsMu.RLock()
+	defer pr.peerErrorsMu.RUnlock()
+	return pr.peerErrors[peerID]
 }
 
 // IsPeerOnline checks if a peer is online.

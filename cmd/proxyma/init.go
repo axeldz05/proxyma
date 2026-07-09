@@ -1,4 +1,4 @@
-package proxyma
+package main
 
 import (
 	"fmt"

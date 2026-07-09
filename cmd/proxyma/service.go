@@ -1,4 +1,4 @@
-package proxyma
+package main
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/protocol"
 
 	"github.com/spf13/cobra"
@@ -171,13 +172,12 @@ var discoverServiceCmd = &cobra.Command{
 	Use:   "discover",
 	Short: "Query active services in the cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := sendUnixSocketCommand(serviceStorage, "service_discover", nil)
-		if err != nil {
-			return err
-		}
+		_ = loadConfigOrDie(serviceStorage)
+		proxyma_bind.SetStoragePath(serviceStorage)
 
+		jsonStr := proxyma_bind.DiscoverServices()
 		var services []string
-		if err := json.Unmarshal(data, &services); err != nil {
+		if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 			return fmt.Errorf("failed to parse services list: %w", err)
 		}
 
@@ -210,16 +210,21 @@ var runServiceCmd = &cobra.Command{
 		}
 
 		fmt.Printf("🚀 Dispatching task for service '%s'...\n", serviceName)
-		data, err := sendUnixSocketCommand(serviceStorage, "service_run", map[string]string{
-			"service": serviceName,
-			"payload": payload,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(serviceStorage)
+		proxyma_bind.SetStoragePath(serviceStorage)
+
+		jsonStr := proxyma_bind.RunService(serviceName, payload)
+		if strings.Contains(jsonStr, `"error":`) && !strings.Contains(jsonStr, `"status":`) {
+			type ErrResp struct {
+				Error string `json:"error"`
+			}
+			var errR ErrResp
+			_ = json.Unmarshal([]byte(jsonStr), &errR)
+			return fmt.Errorf("%s", errR.Error)
 		}
 
 		var resp protocol.ServiceTaskResponse
-		if err := json.Unmarshal(data, &resp); err != nil {
+		if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
 			return fmt.Errorf("failed to parse task response: %w", err)
 		}
 
@@ -243,15 +248,21 @@ var statusServiceCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
-		data, err := sendUnixSocketCommand(serviceStorage, "service_status", map[string]string{
-			"task_id": taskID,
-		})
-		if err != nil {
-			return err
+		_ = loadConfigOrDie(serviceStorage)
+		proxyma_bind.SetStoragePath(serviceStorage)
+
+		jsonStr := proxyma_bind.GetTaskStatus(taskID)
+		if strings.Contains(jsonStr, `"error":`) && !strings.Contains(jsonStr, `"status":`) {
+			type ErrResp struct {
+				Error string `json:"error"`
+			}
+			var errR ErrResp
+			_ = json.Unmarshal([]byte(jsonStr), &errR)
+			return fmt.Errorf("%s", errR.Error)
 		}
 
 		var resp protocol.ServiceTaskResponse
-		if err := json.Unmarshal(data, &resp); err != nil {
+		if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
 			return fmt.Errorf("failed to parse task response: %w", err)
 		}
 

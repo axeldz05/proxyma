@@ -1,12 +1,11 @@
-package proxyma
+package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
-	"proxyma/internal/server"
+	"strings"
+
+	proxyma_bind "proxyma/cmd/proxyma-bind"
 
 	"github.com/spf13/cobra"
 )
@@ -20,26 +19,18 @@ var inviteCmd = &cobra.Command{
 	Use:   "invite",
 	Short: "Create an Invite Token for a new node to join the cluster",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := loadConfigOrDie(inviteStorage)
-		client := setupLocalAdminClient(cfg)
-		reqPayload := server.InviteRequest{ValidForMinutes: 30}
-		bodyBytes, _ := json.Marshal(reqPayload)
-		url := fmt.Sprintf("%s/peers/invite", cfg.Address)
-		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
+		_ = loadConfigOrDie(inviteStorage)
+		proxyma_bind.SetStoragePath(inviteStorage)
 
-		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusCreated {
-			fmt.Println("❌ Error: couldn't connect to local server. Is it running?")
+		token := proxyma_bind.GenerateInviteToken()
+		if token == "" || strings.HasPrefix(token, "error:") {
+			fmt.Printf("❌ Error generating invite: %s\n", token)
 			os.Exit(1)
 		}
-		defer func() { _ = resp.Body.Close() }()
-
-		var inviteResp server.InviteResponse
-		_ = json.NewDecoder(resp.Body).Decode(&inviteResp)
 
 		fmt.Println("✅ Invite Token generated successfully")
 		fmt.Println("The invited node should execute:")
-		fmt.Printf("\n  proxyma cluster join --token %s\n\n", inviteResp.Token)
+		fmt.Printf("\n  proxyma cluster join --token %s\n\n", token)
 	},
 }
 

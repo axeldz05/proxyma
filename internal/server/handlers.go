@@ -123,9 +123,14 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 
 	s.AddPeer(req.ID, req.Address)
 
+	sponsorAddr := s.Config.Address
+	if isLoopbackOrLocalHost(sponsorAddr) {
+		sponsorAddr = "https://" + r.Host
+	}
+
 	peersSnapshot := s.GetPeersRecordCopy()
 	peersSnapshot[s.Config.ID] = protocol.AddressRecord{
-		Addresses: []string{s.Config.Address},
+		Addresses: []string{sponsorAddr},
 		IsSponsor: s.IsSponsorNode(),
 	}
 
@@ -412,5 +417,14 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 
 	s.Config.Logger.Info("Successfully rotated CA and certificates dynamically.")
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "rotated"})
+}
+
+func isLoopbackOrLocalHost(addr string) bool {
+	parsed, err := url.Parse(addr)
+	if err != nil {
+		return true
+	}
+	host := parsed.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || !strings.Contains(host, ".")
 }
 

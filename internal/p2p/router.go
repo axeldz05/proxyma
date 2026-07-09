@@ -77,7 +77,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Clone the request so we don't modify the original
 	clone := req.Clone(req.Context())
-	
+
 	var lastErr error
 	// Phase 1: Direct Routing
 	for _, rawAddr := range record.Addresses {
@@ -89,7 +89,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		clone.URL.Scheme = parsedAddr.Scheme
 		clone.URL.Host = parsedAddr.Host
-		
+
 		// Attempt direct connection with a short timeout to fail-fast
 		r.logDebug("Routing direct request", "url", clone.URL.String())
 		dCtx, dCancel := context.WithTimeout(clone.Context(), 2000*time.Millisecond)
@@ -188,5 +188,3 @@ func NewCancelReadCloser(body io.ReadCloser, cancel context.CancelFunc) io.ReadC
 		Cancel:     cancel,
 	}
 }
-
-
