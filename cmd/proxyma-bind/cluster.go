@@ -1,0 +1,147 @@
+package proxyma_bind
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
+)
+
+// GenerateInviteToken creates an invite token valid for 15 minutes.
+func GenerateInviteToken() string {
+	srvMutex.Lock()
+	s := srv
+	srvMutex.Unlock()
+
+	if s == nil {
+		data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		var token string
+		if err := json.Unmarshal(data, &token); err != nil {
+			return "error: invalid token response: " + err.Error()
+		}
+		return token
+	}
+
+	token, err := s.LocalInviteGenerate(15)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	return token
+}
+
+// JoinCluster joins an existing cluster, writes configuration, and starts the node.
+func JoinCluster(storagePath string, token string, nodeID string, port string) string {
+	appStorage = storagePath
+	writer := &protocol.LogWriter{Stdout: os.Stdout}
+	appLogger = protocol.NewLogger(writer, true)
+
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, "\"'")
+	if token == "" {
+		return "error: smart token is required"
+	}
+
+	if nodeID == "" {
+		nodeID = utils.GenerateDefaultNodeID()
+	}
+
+	// Auto load or generate configuration first
+	var cfg protocol.NodeConfig
+	if c, err := protocol.LoadConfig(appStorage); err == nil {
+		cfg = c
+	} else {
+		// Default config values
+		cfg = protocol.NodeConfig{
+			Workers:     4,
+			StoragePath: appStorage,
+		}
+	}
+
+	localIP := "127.0.0.1"
+	ips, _ := utils.GetLocalIPs()
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			localIP = ip.String()
+			break
+		}
+	}
+	localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
+
+	logFn := func(msg string, err error) {
+		if appLogger != nil {
+			if err != nil {
+				appLogger.Error(msg, "error", err)
+			} else {
+				appLogger.Info(msg)
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	caCert, cert, privKeyPEM, successfulAddr, err := p2p.JoinCluster(ctx, token, nodeID, localAddr, logFn)
+	if err != nil {
+		return fmt.Sprintf("error: join failed: %v", err)
+	}
+
+	certsDir := filepath.Join(appStorage, "certs")
+	_ = os.RemoveAll(certsDir)
+	_ = os.MkdirAll(certsDir, 0755)
+
+	caPath := filepath.Join(certsDir, "ca.crt")
+	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", nodeID))
+	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", nodeID))
+
+	_ = os.WriteFile(caPath, []byte(caCert), 0644)
+	_ = os.WriteFile(certPath, []byte(cert), 0644)
+	_ = os.WriteFile(keyPath, privKeyPEM, 0600)
+
+	newCfg := protocol.NodeConfig{
+		ID:            nodeID,
+		Address:       localAddr,
+		StoragePath:   appStorage,
+		Workers:       cfg.Workers,
+		CAPath:        caPath,
+		BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
+	}
+
+	err = protocol.SaveConfig(newCfg)
+	if err != nil {
+		return fmt.Sprintf("error: failed to save config: %v", err)
+	}
+
+	// Stop previous server instance and start newly configured one
+	StopNode()
+	startErr := StartNode(appStorage, true)
+	if startErr != "" {
+		return fmt.Sprintf("error: start failed: %s", startErr)
+	}
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		srvMutex.Lock()
+		s := srv
+		srvMutex.Unlock()
+		if s != nil {
+			_ = s.ExecuteSync()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			for peerID := range s.GetPeersCopy() {
+				_, _ = s.DiscoverServices(ctx, peerID)
+			}
+		}
+	}()
+
+	return ""
+}

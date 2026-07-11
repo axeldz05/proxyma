@@ -21,19 +21,19 @@ func TestVfsCmds(t *testing.T) {
 	err := protocol.SaveConfig(cfg)
 	require.NoError(t, err)
 
-	t.Run("vfs list - empty", func(t *testing.T) {
+	t.Run("storage list - empty", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_list", req.Action)
 			return []protocol.CLIFileEntry{}, nil
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "list", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "list", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs list - entries", func(t *testing.T) {
+	t.Run("storage list - entries", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_list", req.Action)
 			return []protocol.CLIFileEntry{
@@ -50,12 +50,12 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "list", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "list", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs upload", func(t *testing.T) {
+	t.Run("storage upload", func(t *testing.T) {
 		dummyFile := filepath.Join(tempDir, "upload.txt")
 		err := os.WriteFile(dummyFile, []byte("hello"), 0644)
 		require.NoError(t, err)
@@ -67,12 +67,12 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "upload", dummyFile, "custom_name.txt", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "upload", "--path", dummyFile, "--name", "custom_name.txt", "--storage", tempDir})
 		err = rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs subscribe", func(t *testing.T) {
+	t.Run("storage subscribe", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_subscribe", req.Action)
 			require.Equal(t, "file.txt", req.Args["name"])
@@ -80,12 +80,12 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "subscribe", "file.txt", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "subscribe", "--name", "file.txt", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs unsubscribe", func(t *testing.T) {
+	t.Run("storage unsubscribe", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_unsubscribe", req.Action)
 			require.Equal(t, "file.txt", req.Args["name"])
@@ -93,12 +93,12 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "unsubscribe", "file.txt", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "unsubscribe", "--name", "file.txt", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs delete", func(t *testing.T) {
+	t.Run("storage delete", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_delete", req.Action)
 			require.Equal(t, "file.txt", req.Args["name"])
@@ -106,12 +106,12 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "delete", "file.txt", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "delete", "--name", "file.txt", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
-	t.Run("vfs purge", func(t *testing.T) {
+	t.Run("storage purge", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_purge", req.Action)
 			require.Equal(t, "file.txt", req.Args["name"])
@@ -119,13 +119,13 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "purge", "file.txt", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "purge", "--name", "file.txt", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
 
 	t.Run("daemon unreachable error", func(t *testing.T) {
-		rootCmd.SetArgs([]string{"vfs", "list", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "list", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.Error(t, err)
 	})
@@ -136,7 +136,7 @@ func TestVfsCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"vfs", "list", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"storage", "list", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "something went wrong")

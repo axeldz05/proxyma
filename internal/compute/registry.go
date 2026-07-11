@@ -26,6 +26,12 @@ func (r *ServiceRegistry) GetHandler(serviceName string) (ServiceHandler, bool) 
 	return service.handler, true
 }
 
+func (r *ServiceRegistry) Clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.services = make(map[string]registeredService)
+}
+
 func (r *ServiceRegistry) Register(schema protocol.ServiceSchema, handler ServiceHandler) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

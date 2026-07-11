@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 	"proxyma/internal/utils"
+	"proxyma/shared/ssot"
 )
 
 var (
@@ -36,6 +36,13 @@ func SetStoragePath(path string) {
 	srvMutex.Lock()
 	appStorage = path
 	srvMutex.Unlock()
+}
+
+// GetStoragePath returns the currently configured storage path.
+func GetStoragePath() string {
+	srvMutex.Lock()
+	defer srvMutex.Unlock()
+	return appStorage
 }
 
 func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
@@ -88,8 +95,6 @@ func sendUnixSocketCommand(storagePath string, action string, args map[string]st
 
 	return resp.Data, nil
 }
-
-
 
 // StartNode launches the proxyma node.
 // Returns empty string on success, or the error message on failure.
@@ -256,501 +261,6 @@ func GetTotalReceived() int64 {
 	return totalRecv
 }
 
-// GetPeersJson returns active peers.
-func GetPeersJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "peers", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list := s.LocalPeersList()
-	b, _ := json.Marshal(list)
-	return string(b)
-}
-
-// GetBandwidthStatsJson returns real-time bandwidth statistics.
-func GetBandwidthStatsJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "bandwidth", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	stats := s.LocalBandwidthStats()
-	b, _ := json.Marshal(stats)
-	return string(b)
-}
-
-type VFSFileStatus struct {
-	Name       string  `json:"name"`
-	Version    int     `json:"version"`
-	Size       int64   `json:"size"`
-	Hash       string  `json:"hash"`
-	Subscribed bool    `json:"subscribed"`
-	HasLocal   bool    `json:"hasLocal"`
-	Deleted    bool    `json:"deleted"`
-	UpSpeed    float64 `json:"upSpeed"`
-	DownSpeed  float64 `json:"downSpeed"`
-}
-
-// GetVFSFilesJson returns JSON array of VFSFileStatus.
-func GetVFSFilesJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "vfs_list", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list := s.LocalVFSList()
-	b, _ := json.Marshal(list)
-	return string(b)
-}
-
-// SyncVFS triggers VFS synchronization.
-func SyncVFS() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "sync", nil)
-		if err != nil {
-			return err.Error()
-		}
-		return ""
-	}
-
-	err := s.ExecuteSync()
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// UploadFile uploads a local file to the node's VFS.
-func UploadFile(name string, filePath string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_upload", map[string]string{
-			"path": filePath,
-			"name": name,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		return ""
-	}
-
-	f, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Sprintf("failed to open file %s: %v", filePath, err)
-	}
-	defer f.Close()
-
-	err = s.Storage.SaveLocalFile(name, f)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// SetSubscription enables/disables subscription for a VFS file.
-func SetSubscription(name string, subscribe bool) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		action := "vfs_subscribe"
-		if !subscribe {
-			action = "vfs_unsubscribe"
-		}
-		_, err := sendUnixSocketCommand(appStorage, action, map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		return ""
-	}
-
-	s.Storage.SetSubscription(name, subscribe)
-	if subscribe {
-		go func() {
-			_ = s.ExecuteSync()
-		}()
-	}
-	return ""
-}
-
-// DeleteLocalCache deletes the local blob copy of a VFS file.
-func DeleteLocalCache(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_purge", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		return ""
-	}
-
-	err := s.Storage.DeleteLocalCache(name)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// DeleteFile marks a VFS file as deleted in the registry.
-func DeleteFile(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_delete", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		return ""
-	}
-
-	err := s.Storage.DeleteLocalFile(name)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// GetLocalBlobPath returns absolute local file path for open operations.
-func GetLocalBlobPath(hash string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		return filepath.Join(appStorage, "blobs", hash)
-	}
-	return s.Storage.GetLocalBlobPath(hash)
-}
-
-// DiscoverServices returns active cluster services.
-func DiscoverServices() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_discover", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list, err := s.LocalServiceDiscover()
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(list)
-	return string(b)
-}
-
-type ParameterDetail struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
-}
-
-type ServiceDetail struct {
-	Name                 string            `json:"name"`
-	Description          string            `json:"description"`
-	ProviderAddress      string            `json:"providerAddress"`
-	RequiredPermissions  []string          `json:"requiredPermissions"`
-	Parameters           []ParameterDetail `json:"parameters"`
-}
-
-// GetServiceDetails gets metadata for a given service.
-func GetServiceDetails(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		return `{"error": "Node is not running"}`
-	}
-
-	addr, schema, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-
-	var reqPermissions []string
-	hasImageParam := false
-	hasFileParam := false
-
-	var params []ParameterDetail
-	for pName, rules := range schema.Parameters {
-		lower := strings.ToLower(pName)
-		isImg := strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo")
-		isFil := strings.Contains(lower, "file") || strings.Contains(lower, "path")
-
-		if isImg {
-			hasImageParam = true
-		}
-		if isFil {
-			hasFileParam = true
-		}
-
-		desc := fmt.Sprintf("Provide a text value for %s.", pName)
-		switch rules.Type {
-		case "bool":
-			desc = fmt.Sprintf("Toggle to enable or disable the %s option.", pName)
-		case "int", "float":
-			desc = fmt.Sprintf("Enter a numerical value for %s.", pName)
-		default:
-			if isImg {
-				desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", pName)
-			}
-		}
-
-		params = append(params, ParameterDetail{
-			Name:        pName,
-			Type:        rules.Type,
-			Required:    rules.Required,
-			Description: desc,
-		})
-	}
-
-	if hasImageParam {
-		reqPermissions = append(reqPermissions, "Camera (to take photo for upload)")
-		reqPermissions = append(reqPermissions, "Gallery / Storage (to select photo)")
-	} else if hasFileParam {
-		reqPermissions = append(reqPermissions, "Storage (to read/write local files)")
-	}
-
-	detail := ServiceDetail{
-		Name:                schema.Name,
-		Description:         schema.Description,
-		ProviderAddress:     addr,
-		RequiredPermissions: reqPermissions,
-		Parameters:          params,
-	}
-
-	b, _ := json.Marshal(detail)
-	return string(b)
-}
-
-// RunService runs a task and waits up to 30s.
-func RunService(name string, payloadJson string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_run", map[string]string{
-			"service": name,
-			"payload": payloadJson,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	resp, err := s.LocalServiceRun(name, payloadJson)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
-}
-
-// GetTaskStatus queries the status of a specific task.
-func GetTaskStatus(taskID string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_status", map[string]string{
-			"task_id": taskID,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	resp, ok := s.Compute.GetTaskResponse(taskID)
-	if !ok {
-		return `{"error": "task not found"}`
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
-}
-
-// GenerateInviteToken creates an invite token valid for 15 minutes.
-func GenerateInviteToken() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		var token string
-		if err := json.Unmarshal(data, &token); err != nil {
-			return "error: invalid token response: " + err.Error()
-		}
-		return token
-	}
-
-	token, err := s.LocalInviteGenerate(15)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	return token
-}
-
-// JoinCluster joins an existing cluster, writes configuration, and starts the node.
-func JoinCluster(storagePath string, token string, nodeID string, port string) string {
-	appStorage = storagePath
-	writer := &protocol.LogWriter{Stdout: os.Stdout}
-	appLogger = protocol.NewLogger(writer, true)
-
-	token = strings.TrimSpace(token)
-	token = strings.Trim(token, "\"'")
-	if token == "" {
-		return "error: smart token is required"
-	}
-
-	if nodeID == "" {
-		nodeID = utils.GenerateDefaultNodeID()
-	}
-
-	// Auto load or generate configuration first
-	var cfg protocol.NodeConfig
-	if c, err := protocol.LoadConfig(appStorage); err == nil {
-		cfg = c
-	} else {
-		// Default config values
-		cfg = protocol.NodeConfig{
-			Workers:     4,
-			StoragePath: appStorage,
-		}
-	}
-
-	localIP := "127.0.0.1"
-	ips, _ := utils.GetLocalIPs()
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			localIP = ip.String()
-			break
-		}
-	}
-	localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
-
-	logFn := func(msg string, err error) {
-		if appLogger != nil {
-			if err != nil {
-				appLogger.Error(msg, "error", err)
-			} else {
-				appLogger.Info(msg)
-			}
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	caCert, cert, privKeyPEM, successfulAddr, err := p2p.JoinCluster(ctx, token, nodeID, localAddr, logFn)
-	if err != nil {
-		return fmt.Sprintf("error: join failed: %v", err)
-	}
-
-	certsDir := filepath.Join(appStorage, "certs")
-	_ = os.RemoveAll(certsDir)
-	_ = os.MkdirAll(certsDir, 0755)
-
-	caPath := filepath.Join(certsDir, "ca.crt")
-	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", nodeID))
-	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", nodeID))
-
-	_ = os.WriteFile(caPath, []byte(caCert), 0644)
-	_ = os.WriteFile(certPath, []byte(cert), 0644)
-	_ = os.WriteFile(keyPath, privKeyPEM, 0600)
-
-	newCfg := protocol.NodeConfig{
-		ID:            nodeID,
-		Address:       localAddr,
-		StoragePath:   appStorage,
-		Workers:       cfg.Workers,
-		CAPath:        caPath,
-		BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
-	}
-
-	err = protocol.SaveConfig(newCfg)
-	if err != nil {
-		return fmt.Sprintf("error: failed to save config: %v", err)
-	}
-
-	// Stop previous server instance and start newly configured one
-	StopNode()
-	startErr := StartNode(appStorage, true)
-	if startErr != "" {
-		return fmt.Sprintf("error: start failed: %s", startErr)
-	}
-
-	go func() {
-		time.Sleep(1 * time.Second)
-		srvMutex.Lock()
-		s := srv
-		srvMutex.Unlock()
-		if s != nil {
-			_ = s.ExecuteSync()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			for peerID := range s.GetPeersCopy() {
-				_, _ = s.DiscoverServices(ctx, peerID)
-			}
-		}
-	}()
-
-	return ""
-}
-
 // ChangeStorageLocation stops node, copies directory, updates configs and restarts node.
 func ChangeStorageLocation(newPath string) string {
 	srvMutex.Lock()
@@ -786,29 +296,6 @@ func ChangeStorageLocation(newPath string) string {
 	}
 
 	return ""
-}
-
-// GetLogsJson returns JSON logs.
-func GetLogsJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "logs", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	protocol.LogBufferMu.Lock()
-	defer protocol.LogBufferMu.Unlock()
-	if protocol.LogBuffer == nil {
-		return "[]"
-	}
-	b, _ := json.Marshal(protocol.LogBuffer)
-	return string(b)
 }
 
 func copyFile(src, dst string) error {
@@ -864,4 +351,13 @@ func copyDir(src string, dst string) error {
 		}
 	}
 	return nil
+}
+
+// GetSSOTSchemaJSON serializes the global SSOT domains to JSON.
+func GetSSOTSchemaJSON() string {
+	b, err := json.Marshal(ssot.Registry)
+	if err != nil {
+		return fmt.Sprintf(`{"error": %q}`, err.Error())
+	}
+	return string(b)
 }

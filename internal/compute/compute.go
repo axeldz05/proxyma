@@ -80,9 +80,6 @@ func (c *ComputeEngine) GetTaskResponse(taskID string) (protocol.ServiceTaskResp
 	if !ok {
 		return protocol.ServiceTaskResponse{}, false
 	}
-	if res.Status == "completed" || res.Status == "failed" {
-		c.taskStatuses.Delete(taskID)
-	}
 	return res, true
 }
 
@@ -104,14 +101,19 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 	c.activeWorkers.Add(1)
 	defer c.activeWorkers.Add(-1)
 
-	c.logger.Info("Working on task...", "job_id", t.TaskID)
+	c.logger.Info("Working on task...", "job_id", t.TaskID, "service", t.Service)
 
 	handler, exists := c.registry.GetHandler(t.Service)
 	if !exists {
 		c.logger.Error("Service not found during execution", "service", t.Service)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if t.Payload == nil {
+		t.Payload = make(map[string]any)
+	}
+	t.Payload["requester_node_id"] = t.RequesterNodeID
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	outputs, err := handler(ctx, t.Payload)
 	cancel()
 
@@ -120,6 +122,9 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 	if err != nil {
 		status = "failed"
 		errorMessage = err.Error()
+		c.logger.Error("Task execution failed", "job_id", t.TaskID, "service", t.Service, "error", err)
+	} else {
+		c.logger.Info("Task execution completed successfully", "job_id", t.TaskID, "service", t.Service)
 	}
 	responsePayload := protocol.ServiceTaskResponse{
 		TaskID:  t.TaskID,
@@ -202,9 +207,48 @@ func (c *ComputeEngine) MarkTaskAsFailed(req protocol.TaskRequest, reason string
 
 func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {
 	c.taskStatuses.Store(response.TaskID, response)
+
+	var keysToDelete []string
+	count := 0
+	c.taskStatuses.Range(func(key, value any) bool {
+		count++
+		if resp, ok := value.(protocol.ServiceTaskResponse); ok {
+			if resp.Status == "completed" || resp.Status == "failed" {
+				if taskIDStr, ok := key.(string); ok {
+					keysToDelete = append(keysToDelete, taskIDStr)
+				}
+			}
+		}
+		return true
+	})
+
+	if count > 100 && len(keysToDelete) > 0 {
+		toDelete := count - 100
+		if toDelete > len(keysToDelete) {
+			toDelete = len(keysToDelete)
+		}
+		for i := 0; i < toDelete; i++ {
+			c.taskStatuses.Delete(keysToDelete[i])
+		}
+	}
+}
+
+func (c *ComputeEngine) GetAllTaskStatuses() []protocol.ServiceTaskResponse {
+	list := make([]protocol.ServiceTaskResponse, 0)
+	c.taskStatuses.Range(func(key, value any) bool {
+		if resp, ok := value.(protocol.ServiceTaskResponse); ok {
+			list = append(list, resp)
+		}
+		return true
+	})
+	return list
 }
 
 func (c *ComputeEngine) Close() {
 	close(c.taskQueue)
 	c.wg.Wait()
+}
+
+func (c *ComputeEngine) ClearServices() {
+	c.registry.Clear()
 }

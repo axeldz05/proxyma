@@ -59,6 +59,14 @@ func (c *HTTPPeerClient) RemovePeerRoute(peerID string) {
 	c.router.RemovePeerRoute(peerID)
 }
 
+func (c *HTTPPeerClient) SetNodeID(id string) {
+	c.router.NodeID = id
+}
+
+func (c *HTTPPeerClient) SetOwnAddress(addr string) {
+	c.router.OwnAddress = addr
+}
+
 func (c *HTTPPeerClient) UpdateSponsorAddress(addr string) {
 	c.router.UpdateSponsorAddress(addr)
 }

@@ -25,6 +25,8 @@ type P2PRoundTripper struct {
 	SponsorAddress string
 	Base           http.RoundTripper
 	Logger         *slog.Logger
+	NodeID         string
+	OwnAddress     string
 }
 
 func (r *P2PRoundTripper) UpdatePeerRoute(peerID string, record protocol.AddressRecord) {
@@ -85,6 +87,39 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			lastErr = err
 			continue
+		}
+
+		host := parsedAddr.Hostname()
+		port := parsedAddr.Port()
+		if port == "" {
+			if parsedAddr.Scheme == "https" {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+
+		if r.OwnAddress != "" {
+			ownParsed, errOwn := url.Parse(r.OwnAddress)
+			if errOwn == nil {
+				ownPort := ownParsed.Port()
+				if ownPort == "" {
+					if ownParsed.Scheme == "https" {
+						ownPort = "443"
+					} else {
+						ownPort = "80"
+					}
+				}
+
+				isLoopbackTarget := host == "127.0.0.1" || host == "localhost" || host == "::1"
+
+				if (isLoopbackTarget && port == ownPort) || (parsedAddr.Host == ownParsed.Host) {
+					if peerID != r.NodeID {
+						r.logDebug("Skipping loopback address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
+						continue
+					}
+				}
+			}
 		}
 
 		clone.URL.Scheme = parsedAddr.Scheme

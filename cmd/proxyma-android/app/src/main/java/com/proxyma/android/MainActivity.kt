@@ -33,6 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.proxyma.android.models.*
 import com.proxyma.android.ui.screens.*
 import com.proxyma.android.ui.theme.DeepGray
 import com.proxyma.android.ui.theme.ProxymaAppTheme
@@ -57,6 +60,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Set global storage path for Go-mobile bindings
+        val path = java.io.File(filesDir, "proxyma_data").absolutePath
+        proxyma_bind.Proxyma_bind.setStoragePath(path)
 
         // Bind Foreground Service
         val intent = Intent(this, ProxymaService::class.java)
@@ -89,6 +96,22 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainLayout(service: ProxymaService?) {
     var selectedTab by remember { mutableIntStateOf(0) }
+
+    val ssotDomains = remember {
+        try {
+            val json = proxyma_bind.Proxyma_bind.getSSOTSchemaJSON()
+            Gson().fromJson<List<Map<String, Any>>>(json, object : TypeToken<List<Map<String, Any>>>() {}.type) ?: emptyList()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    val telemetryDomain = ssotDomains.find { domain -> domain["name"] == "telemetry" }
+    val clusterDomain = ssotDomains.find { domain -> domain["name"] == "cluster" }
+    val storageDomain = ssotDomains.find { domain -> domain["name"] == "storage" }
+    val serviceDomain = ssotDomains.find { domain -> domain["name"] == "service" }
+    val peersDomain = ssotDomains.find { domain -> domain["name"] == "peers" }
 
     Scaffold(
         bottomBar = {
@@ -133,11 +156,11 @@ fun MainLayout(service: ProxymaService?) {
                 .background(DeepGray)
         ) {
             when (selectedTab) {
-                0 -> StatusScreen()
-                1 -> PairingScreen(service)
-                2 -> VFSScreen()
-                3 -> ServicesScreen()
-                4 -> LogsScreen()
+                0 -> StatusScreen(telemetryDomain, peersDomain)
+                1 -> PairingScreen(service, clusterDomain)
+                2 -> VFSScreen(storageDomain)
+                3 -> ServicesScreen(serviceDomain)
+                4 -> LogsScreen(telemetryDomain)
             }
         }
     }

@@ -56,12 +56,25 @@ join_cluster() {
     local node_id=$1
     local sponsor_id=$2
     local sponsor_port=$3
+    local local_port=$4
+
+    if [ -z "$local_port" ]; then
+        if [[ "$node_id" == *"node-1"* ]]; then
+            local_port="8081"
+        elif [[ "$node_id" == *"node-2"* ]]; then
+            local_port="8082"
+        elif [[ "$node_id" == *"node-3"* ]]; then
+            local_port="8083"
+        else
+            local_port="8080"
+        fi
+    fi
 
     echo -e "🎟️ [$sponsor_id]: Generating invitation token for $node_id..."
     local invite_output
-    invite_output=$(exec_node "$sponsor_id" ./proxyma invite)
+    invite_output=$(exec_node "$sponsor_id" ./proxyma cluster invite)
     local token
-    token=$(echo "$invite_output" | grep -o "ey[a-zA-Z0-9._-]*")
+    token=$(echo "$invite_output" | tail -n 1 | tr -d '\r\n ')
 
     if [ -z "$token" ]; then
         echo -e "${RED}❌ Error generating invitation token on $sponsor_id${NC}"
@@ -69,7 +82,7 @@ join_cluster() {
     fi
 
     echo -e "🔗 [$node_id]: Joining the cluster..."
-    run_node "$node_id" join --id "$node_id" --token "$token" >/dev/null
+    run_node "$node_id" cluster join --node_id "$node_id" --token "$token" --port "$local_port" >/dev/null
 }
 
 call_api() {

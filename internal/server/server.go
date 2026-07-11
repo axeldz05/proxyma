@@ -24,15 +24,15 @@ import (
 )
 
 type Server struct {
-	Config        protocol.NodeConfig
-	Compute       *compute.ComputeEngine
-	Storage       *storage.StorageEngine
-	peerClient    p2p.PeerClient
-	
-	Peers         *PeerRegistry
-	Invites       *InviteManager
-	Bandwidth     *BandwidthTracker
-	Relays        *RelayManager
+	Config     protocol.NodeConfig
+	Compute    *compute.ComputeEngine
+	Storage    *storage.StorageEngine
+	peerClient p2p.PeerClient
+
+	Peers     *PeerRegistry
+	Invites   *InviteManager
+	Bandwidth *BandwidthTracker
+	Relays    *RelayManager
 
 	handler       http.Handler
 	httpServer    *http.Server
@@ -62,7 +62,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		downloadQueue: make(chan DownloadJob, 100),
 		done:          make(chan struct{}),
 	}
-	
+
 	s.Peers = NewPeerRegistry(cfg.Logger, cfg.ID)
 	s.Invites = NewInviteManager(cfg.Logger)
 	s.Bandwidth = NewBandwidthTracker()
@@ -74,7 +74,20 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		updater.UpdateSponsorAddress(cfg.BootstrapNode)
 	}
 
+	if setter, ok := s.peerClient.(interface {
+		SetNodeID(id string)
+	}); ok {
+		setter.SetNodeID(cfg.ID)
+	}
+
+	if setter, ok := s.peerClient.(interface {
+		SetOwnAddress(addr string)
+	}); ok {
+		setter.SetOwnAddress(cfg.Address)
+	}
+
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	s.Compute.SetAddress(cfg.Address)
 	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
 		for peerID, peerAddress := range s.GetPeersCopy() {
 			if rawSource == peerAddress {
@@ -93,7 +106,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	for range cfg.Workers {
 		go s.downloadWorker()
 	}
-	
+
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -273,21 +286,38 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		case "service_discover":
 			respData, actionErr = s.LocalServiceDiscover()
 
+		case "service_add":
+			respData, actionErr = s.LocalServiceAdd(
+				req.Args["name"],
+				req.Args["type"],
+				req.Args["exec"],
+				req.Args["desc"],
+				req.Args["param"],
+				req.Args["no-required"],
+				req.Args["schema-file"],
+			)
+
+		case "service_remove":
+			respData, actionErr = s.LocalServiceRemove(req.Args["name"])
+
 		case "service_run":
 			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"])
+
+		case "service_run_file":
+			respData, actionErr = s.LocalServiceRunFile(req.Args["service"], req.Args["input"], req.Args["output"], req.Args["param"])
 
 		case "service_status":
 			taskID := req.Args["task_id"]
 			if taskID == "" {
-				actionErr = fmt.Errorf("missing task_id parameter")
-				break
+				respData = s.Compute.GetAllTaskStatuses()
+			} else {
+				r, ok := s.Compute.GetTaskResponse(taskID)
+				if !ok {
+					actionErr = fmt.Errorf("task not found")
+					break
+				}
+				respData = r
 			}
-			r, ok := s.Compute.GetTaskResponse(taskID)
-			if !ok {
-				actionErr = fmt.Errorf("task not found")
-				break
-			}
-			respData = r
 
 		case "invite_generate":
 			respData, actionErr = s.LocalInviteGenerate(15)
@@ -325,7 +355,14 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 	}
 }
 
+type LocalService struct {
+	Type   string                 `json:"type"`
+	Exec   string                 `json:"exec,omitempty"`
+	Schema protocol.ServiceSchema `json:"schema"`
+}
+
 func (s *Server) LoadLocalServices() {
+	s.Compute.ClearServices()
 	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
 	data, err := os.ReadFile(servicesFile)
 	if err != nil {
@@ -335,12 +372,6 @@ func (s *Server) LoadLocalServices() {
 		}
 		s.Config.Logger.Error("Failed to read services.json", "error", err)
 		return
-	}
-
-	type LocalService struct {
-		Type   string                 `json:"type"`
-		Exec   string                 `json:"exec,omitempty"`
-		Schema protocol.ServiceSchema `json:"schema"`
 	}
 
 	var services map[string]LocalService
@@ -353,7 +384,116 @@ func (s *Server) LoadLocalServices() {
 		var handler compute.ServiceHandler
 		switch svc.Type {
 		case "script", "exec":
-			handler = compute.BuildScriptHandler(svc.Exec)
+			baseHandler := compute.BuildScriptHandler(svc.Exec)
+			handler = func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+				inputHash, hasHash := payload["input_hash"].(string)
+				inputName, hasName := payload["input_name"].(string)
+				requesterNodeID, hasReq := payload["requester_node_id"].(string)
+
+				var inputSizeVal int64
+				var hasSize bool
+				if rawSize, ok := payload["input_size"]; ok {
+					if fv, ok := rawSize.(float64); ok {
+						inputSizeVal = int64(fv)
+						hasSize = true
+					} else if iv, ok := rawSize.(int64); ok {
+						inputSizeVal = iv
+						hasSize = true
+					} else if iv, ok := rawSize.(int); ok {
+						inputSizeVal = int64(iv)
+						hasSize = true
+					}
+				}
+
+				var localInputPath string
+				var cleanInputOnExit bool
+
+				if hasHash && hasName && inputHash != "" {
+					hasLocal, _ := s.Storage.HasPhysicalBlob(inputHash)
+					if hasLocal {
+						localInputPath = s.Storage.GetLocalBlobPath(inputHash)
+						payload["input_path"] = localInputPath
+					} else if hasSize && hasReq && requesterNodeID != "" {
+						s.Config.Logger.Info("File input detected in payload. Downloading P2P from requester...", "requester", requesterNodeID, "file", inputName, "hash", inputHash)
+
+						inputMeta := protocol.IndexEntry{
+							Name:    inputName,
+							Hash:    inputHash,
+							Size:    inputSizeVal,
+							Version: 1,
+						}
+						s.Storage.Upsert(inputMeta)
+						s.Storage.SetSubscription(inputName, true)
+
+						dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
+						body, err := s.peerClient.DownloadBlob(dlCtx, requesterNodeID, inputHash)
+						if err != nil {
+							dlCancel()
+							return nil, fmt.Errorf("failed to download input file P2P: %w", err)
+						}
+						err = s.Storage.StoreRemoteBlob(inputMeta, body)
+						_ = body.Close()
+						dlCancel()
+						if err != nil {
+							return nil, fmt.Errorf("failed to save input blob: %w", err)
+						}
+
+						localInputPath = s.Storage.GetLocalBlobPath(inputHash)
+						payload["input_path"] = localInputPath
+						cleanInputOnExit = true
+					}
+				}
+
+				outputName, hasOutName := payload["output_name"].(string)
+				if !hasOutName || outputName == "" {
+					if inputName != "" {
+						outputName = "output_" + inputName
+					} else {
+						outputName = "output_result"
+					}
+					payload["output_name"] = outputName
+				}
+				localOutputPath := filepath.Join(os.TempDir(), fmt.Sprintf("service_out_%d_%s", time.Now().UnixNano(), filepath.Base(outputName)))
+				payload["output_path"] = localOutputPath
+
+				outputs, err := baseHandler(ctx, payload)
+				if cleanInputOnExit && localInputPath != "" {
+					_ = s.Storage.DeleteLocalCache(inputName)
+				}
+				if err != nil {
+					if localOutputPath != "" {
+						_ = os.Remove(localOutputPath)
+					}
+					return nil, err
+				}
+
+				if localOutputPath != "" {
+					if _, statErr := os.Stat(localOutputPath); statErr == nil {
+						f, openErr := os.Open(localOutputPath)
+						if openErr != nil {
+							_ = os.Remove(localOutputPath)
+							return nil, fmt.Errorf("failed to open output file: %w", openErr)
+						}
+						outHash, outSize, uploadErr := s.Storage.SaveLocalFileWithoutNotification(outputName, f)
+						_ = f.Close()
+						_ = os.Remove(localOutputPath)
+						if uploadErr != nil {
+							return nil, fmt.Errorf("failed to upload output file: %w", uploadErr)
+						}
+
+						if outputs == nil {
+							outputs = make(map[string]any)
+						}
+						outputs["output_hash"] = outHash
+						outputs["output_size"] = outSize
+						outputs["output_name"] = outputName
+					} else {
+						s.Config.Logger.Warn("Service completed successfully but output file was not created by the script", "expected_path", localOutputPath)
+					}
+				}
+
+				return outputs, nil
+			}
 		case "grpc":
 			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
 		default:
@@ -432,7 +572,7 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 	}
 }
 
-func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, protocol.ServiceSchema, error) {
+func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
@@ -464,7 +604,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	wg.Wait()
 
 	if len(bids) == 0 {
-		return "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)
+		return "", "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)
 	}
 
 	bestBid := bids[0]
@@ -476,7 +616,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		}
 	}
 
-	return bestBid.NodeAddr, bestBid.Schema, nil
+	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
 }
 
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
@@ -489,7 +629,7 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 	if err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
 		s.SetPeerOffline(targetPeerID, err)
-		return fmt.Errorf("failed to dispatch task to peer: %v", err)
+		return err
 	}
 	s.SetPeerOnline(targetPeerID, true)
 	return nil
@@ -528,7 +668,7 @@ func (s *Server) ExecuteSync() error {
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	s.CheckNAT()
 	payload := protocol.AddPeerRequest{
-		ID:      s.Config.ID,
+		ID: s.Config.ID,
 		Address: protocol.AddressRecord{
 			Addresses: []string{s.Config.Address},
 			IsSponsor: s.isSponsor,
@@ -831,38 +971,39 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 		_ = json.Unmarshal([]byte(payloadStr), &payload)
 	}
 
-	addr, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+	targetPeerID, _, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
 	if err != nil {
 		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
 	}
 
 	taskID := fmt.Sprintf("task_kt_%d", time.Now().UnixNano())
-	var targetPeerID string
-	for pid, paddr := range s.GetPeersCopy() {
-		if paddr == addr {
-			targetPeerID = pid
-			break
-		}
-	}
-	if targetPeerID == "" {
-		targetPeerID = addr
-	}
-
 	taskReq := protocol.TaskRequest{
-		TaskID:  taskID,
-		Service: serviceName,
-		ReplyTo: fmt.Sprintf("%s/services/callback", s.Config.Address),
-		Payload: payload,
+		TaskID:          taskID,
+		Service:         serviceName,
+		RequesterNodeID: s.Config.ID,
+		ReplyTo:         fmt.Sprintf("https://%s.proxyma.local/services/callback", s.Config.ID),
+		Payload:         payload,
 	}
 
-	err = s.DispatchTask(targetPeerID, taskReq)
-	if err != nil {
-		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to dispatch task: %w", err)
+	s.Compute.RegisterOutgoingTask(taskReq)
+
+	if targetPeerID == s.Config.ID {
+		err = s.Compute.SubmitTask(taskReq)
+		if err != nil {
+			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
+			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to submit local task: %w", err)
+		}
+	} else {
+		err = s.DispatchTask(targetPeerID, taskReq)
+		if err != nil {
+			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
+			return protocol.ServiceTaskResponse{}, err
+		}
 	}
 
 	var resp protocol.ServiceTaskResponse
 	completed := false
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		time.Sleep(1 * time.Second)
 		r, ok := s.Compute.GetTaskResponse(taskID)
 		if ok {
@@ -876,7 +1017,86 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 	if !completed {
 		return protocol.ServiceTaskResponse{}, fmt.Errorf("task timed out on execution")
 	}
+
+	if completed && resp.Status == "completed" && resp.Outputs != nil {
+		if outputHash, ok := resp.Outputs["output_hash"].(string); ok && outputHash != "" {
+			outputName, _ := resp.Outputs["output_name"].(string)
+			outputSizeVal, _ := resp.Outputs["output_size"].(float64)
+			if outputName != "" {
+				nextVersion := 1
+				if existing, exists := s.Storage.GetFileMeta(outputName); exists {
+					nextVersion = existing.Version + 1
+				}
+				outputMeta := protocol.IndexEntry{
+					Name:    outputName,
+					Hash:    outputHash,
+					Size:    int64(outputSizeVal),
+					Version: nextVersion,
+				}
+				s.Storage.Upsert(outputMeta)
+				s.Storage.SetSubscription(outputName, true)
+
+				dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
+				if err == nil {
+					_ = s.Storage.StoreRemoteBlob(outputMeta, body)
+					_ = body.Close()
+				} else {
+					s.Config.Logger.Error("Failed to auto-download output blob", "error", err)
+				}
+				dlCancel()
+			}
+		}
+	}
+
 	return resp, nil
+}
+
+func (s *Server) LocalServiceRunFile(serviceName, inputPath, outputName, paramStr string) (protocol.ServiceTaskResponse, error) {
+	var tempInputName string
+	var inputHash string
+	var inputSize int64
+
+	if outputName == "" {
+		outputName = "output_" + filepath.Base(inputPath)
+	}
+
+	if _, err := os.Stat(inputPath); err == nil {
+		f, err := os.Open(inputPath)
+		if err != nil {
+			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to open local input file: %w", err)
+		}
+		defer f.Close()
+
+		tempInputName = "temp_ocr_" + filepath.Base(inputPath)
+		hashVal, sizeVal, err := s.Storage.SaveLocalFileWithoutNotification(tempInputName, f)
+		if err != nil {
+			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to save input file: %w", err)
+		}
+		inputHash = hashVal
+		inputSize = sizeVal
+	} else {
+		meta, ok := s.Storage.GetFileMeta(inputPath)
+		if !ok {
+			return protocol.ServiceTaskResponse{}, fmt.Errorf("input file not found on disk or VFS: %s", inputPath)
+		}
+		tempInputName = inputPath
+		inputHash = meta.Hash
+		inputSize = meta.Size
+	}
+
+	payload := make(map[string]any)
+	if paramStr != "" {
+		_ = json.Unmarshal([]byte(paramStr), &payload)
+	}
+	payload["input_name"] = tempInputName
+	payload["input_hash"] = inputHash
+	payload["input_size"] = inputSize
+	payload["output_name"] = outputName
+	payload["requester_node_id"] = s.Config.ID
+
+	payloadBytes, _ := json.Marshal(payload)
+	return s.LocalServiceRun(serviceName, string(payloadBytes))
 }
 
 func (s *Server) LocalInviteGenerate(validForMinutes int) (string, error) {
@@ -981,3 +1201,132 @@ func (w *tlsErrorWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile string) (string, error) {
+	if serviceType == "" {
+		serviceType = "exec"
+	}
+
+	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
+	services := make(map[string]LocalService)
+
+	if data, err := os.ReadFile(servicesFile); err == nil {
+		_ = json.Unmarshal(data, &services)
+	}
+
+	var localService LocalService
+	var serviceName string
+
+	if strings.HasSuffix(name, ".json") || schemaFile != "" {
+		fileToRead := name
+		if schemaFile != "" {
+			fileToRead = schemaFile
+		}
+		data, err := os.ReadFile(fileToRead)
+		if err != nil {
+			return "", fmt.Errorf("couldn't read service file: %w", err)
+		}
+		if schemaFile != "" {
+			var schema protocol.ServiceSchema
+			if err := json.Unmarshal(data, &schema); err != nil {
+				return "", fmt.Errorf("invalid schema file format: %w", err)
+			}
+			localService.Schema = schema
+			serviceName = name
+			localService.Schema.Name = serviceName
+		} else {
+			if err := json.Unmarshal(data, &localService); err != nil {
+				return "", fmt.Errorf("invalid file format: %w", err)
+			}
+			serviceName = localService.Schema.Name
+		}
+		if serviceName == "" {
+			return "", fmt.Errorf("service name is missing in JSON schema")
+		}
+		if exec != "" {
+			localService.Exec = exec
+		}
+		if serviceType != "exec" && localService.Type == "" {
+			localService.Type = serviceType
+		}
+	} else {
+		serviceName = name
+		schema := protocol.ServiceSchema{
+			Name:        serviceName,
+			Description: desc,
+			Parameters:  make(map[string]protocol.ServiceParameter),
+		}
+
+		noReqMap := make(map[string]bool)
+		if noRequired != "" {
+			for _, p := range strings.Split(noRequired, ",") {
+				noReqMap[strings.TrimSpace(p)] = true
+			}
+		}
+
+		if param != "" {
+			for _, p := range strings.Split(param, ",") {
+				parts := strings.Split(p, ":")
+				if len(parts) < 2 {
+					return "", fmt.Errorf("invalid parameter format '%s'. Use name:type", p)
+				}
+
+				paramName := strings.TrimSpace(parts[0])
+				paramType := strings.TrimSpace(parts[1])
+
+				isRequired := true
+				if strings.HasSuffix(paramName, "?") {
+					paramName = strings.TrimSuffix(paramName, "?")
+					isRequired = false
+				} else if noReqMap[paramName] {
+					isRequired = false
+				}
+
+				schema.Parameters[paramName] = protocol.ServiceParameter{
+					Type:     paramType,
+					Required: isRequired,
+				}
+			}
+		}
+
+		localService = LocalService{
+			Type:   serviceType,
+			Exec:   exec,
+			Schema: schema,
+		}
+	}
+
+	services[serviceName] = localService
+
+	newData, _ := json.MarshalIndent(services, "", "  ")
+	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
+		return "", fmt.Errorf("error saving services file: %w", err)
+	}
+
+	s.LoadLocalServices()
+
+	return fmt.Sprintf("Service '%s' added successfully.", serviceName), nil
+}
+
+func (s *Server) LocalServiceRemove(name string) (string, error) {
+	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
+	services := make(map[string]LocalService)
+
+	if data, err := os.ReadFile(servicesFile); err == nil {
+		_ = json.Unmarshal(data, &services)
+	}
+
+	if _, exists := services[name]; !exists {
+		return "", fmt.Errorf("service '%s' not found", name)
+	}
+
+	delete(services, name)
+
+	newData, _ := json.MarshalIndent(services, "", "  ")
+	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
+		return "", fmt.Errorf("error saving services file: %w", err)
+	}
+
+	s.LoadLocalServices()
+
+	return fmt.Sprintf("Service '%s' removed successfully.", name), nil
+}

@@ -1,7 +1,6 @@
 package com.proxyma.android.ui.screens
 
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -23,81 +22,38 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.VfsFile
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import java.io.File
-import java.io.FileOutputStream
-import kotlin.concurrent.fixedRateTimer
 import kotlin.concurrent.thread
 
 @Composable
-fun VFSScreen() {
-    var vfsFilesJson by remember { mutableStateOf("[]") }
+fun VFSScreen(storageDomain: Map<String, Any>?) {
+    val filesList by rememberPolledParsedState(2000, emptyList<VfsFile>()) {
+        proxyma_bind.Proxyma_bind.getVFSFilesJson()
+    }
     var isSyncing by remember { mutableStateOf(false) }
-
-    DisposableEffect(Unit) {
-        val timer = fixedRateTimer(period = 2000) {
-            try {
-                if (proxyma_bind.Proxyma_bind.isNodeRunning()) {
-                    vfsFilesJson = proxyma_bind.Proxyma_bind.getVFSFilesJson()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        onDispose {
-            timer.cancel()
-        }
-    }
-
-    val gson = remember { Gson() }
-    val filesList: List<VfsFile> = remember(vfsFilesJson) {
-        try {
-            gson.fromJson<List<VfsFile>>(vfsFilesJson, object : TypeToken<List<VfsFile>>() {}.type) ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
     val context = LocalContext.current
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            isSyncing = true
-            thread {
-                try {
-                    val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
-                    val tempFile = File(context.cacheDir, name)
-                    val input = context.contentResolver.openInputStream(uri)
-                    val output = FileOutputStream(tempFile)
-                    input?.use { inStream ->
-                        output.use { outStream ->
-                            inStream.copyTo(outStream)
-                        }
+            uploadUriToVfs(
+                context = context,
+                uri = uri,
+                onStart = { isSyncing = true },
+                onComplete = { result ->
+                    isSyncing = false
+                    result.onSuccess { msg ->
+                        context.toast(msg)
                     }
-                    val err = proxyma_bind.Proxyma_bind.uploadFile(name, tempFile.absolutePath)
-                    isRunningOnMainThread {
-                        isSyncing = false
-                        tempFile.delete()
-                        if (err.isNotEmpty()) {
-                            Toast.makeText(context, "Upload failed: $err", Toast.LENGTH_LONG).show()
-                        } else {
-                            Toast.makeText(context, "File uploaded successfully!", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                } catch (e: Exception) {
-                    isRunningOnMainThread {
-                        isSyncing = false
-                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    result.onFailure { err ->
+                        context.toast("Upload failed: ${err.message}", long = true)
                     }
                 }
-            }
+            )
         }
     }
 
@@ -112,7 +68,7 @@ fun VFSScreen() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "VFS File Manager",
+                text = (storageDomain?.get("title") as? String) ?: "VFS File Manager",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
@@ -121,17 +77,13 @@ fun VFSScreen() {
             Row {
                 IconButton(
                     onClick = {
-                        isSyncing = true
-                        thread {
-                            val err = proxyma_bind.Proxyma_bind.syncVFS()
-                            isRunningOnMainThread {
-                                isSyncing = false
-                                if (err.isNotEmpty()) {
-                                    Toast.makeText(context, "Sync failed: $err", Toast.LENGTH_LONG).show()
-                                } else {
-                                    Toast.makeText(context, "Sync complete!", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                        executeGoCall(
+                            context = context,
+                            onStart = { isSyncing = true },
+                            onComplete = { isSyncing = false },
+                            action = { proxyma_bind.Proxyma_bind.syncVFS() }
+                        ) {
+                            context.toast("Synchronization triggered successfully.")
                         }
                     },
                     enabled = !isSyncing
@@ -229,11 +181,12 @@ fun VFSFileCard(file: VfsFile) {
             ) {
                 Button(
                     onClick = {
-                        isActionRunning = true
-                        thread {
-                            proxyma_bind.Proxyma_bind.setSubscription(file.name, !file.subscribed)
-                            isRunningOnMainThread { isActionRunning = false }
-                        }
+                        executeGoCall(
+                            context = context,
+                            onStart = { isActionRunning = true },
+                            onComplete = { isActionRunning = false },
+                            action = { proxyma_bind.Proxyma_bind.setSubscription(file.name, !file.subscribed) }
+                        )
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (file.subscribed) Color.DarkGray else VioletPrimary
@@ -247,12 +200,12 @@ fun VFSFileCard(file: VfsFile) {
                 Button(
                     onClick = {
                         if (!file.hasLocal) {
-                            Toast.makeText(context, "Subscribe first to download file locally.", Toast.LENGTH_SHORT).show()
+                            context.toast("Subscribe first to download file locally.")
                             return@Button
                         }
                         val localPath = proxyma_bind.Proxyma_bind.getLocalBlobPath(file.hash)
                         if (localPath.isEmpty()) {
-                            Toast.makeText(context, "Local file not found.", Toast.LENGTH_SHORT).show()
+                            context.toast("Local file not found.")
                             return@Button
                         }
                         openFileNatively(context, localPath, file.name)
@@ -267,16 +220,12 @@ fun VFSFileCard(file: VfsFile) {
                 if (file.hasLocal) {
                     IconButton(
                         onClick = {
-                            isActionRunning = true
-                            thread {
-                                val err = proxyma_bind.Proxyma_bind.deleteLocalCache(file.name)
-                                isRunningOnMainThread {
-                                    isActionRunning = false
-                                    if (err.isNotEmpty()) {
-                                        Toast.makeText(context, "Delete failed: $err", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
+                            executeGoCall(
+                                context = context,
+                                onStart = { isActionRunning = true },
+                                onComplete = { isActionRunning = false },
+                                action = { proxyma_bind.Proxyma_bind.deleteLocalCache(file.name) }
+                            )
                         },
                         enabled = !isActionRunning
                     ) {

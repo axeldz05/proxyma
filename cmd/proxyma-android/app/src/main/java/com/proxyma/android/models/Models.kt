@@ -25,9 +25,9 @@ data class ParameterDetail(
 
 data class ServiceDetail(
     val name: String,
-    val description: String,
-    val providerAddress: String,
-    val requiredPermissions: List<String>,
-    val parameters: List<ParameterDetail>,
+    val description: String?,
+    val providerAddress: String?,
+    val requiredPermissions: List<String>?,
+    val parameters: List<ParameterDetail>?,
     val error: String? = null
 )

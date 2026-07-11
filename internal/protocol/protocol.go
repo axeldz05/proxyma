@@ -22,10 +22,11 @@ func NewLogger(w io.Writer, debug bool) *slog.Logger {
 }
 
 type TaskRequest struct {
-	TaskID  string         `json:"task_id"`
-	Service string         `json:"service"`
-	ReplyTo string         `json:"reply_to"`
-	Payload map[string]any `json:"payload"`
+	TaskID          string         `json:"task_id"`
+	Service         string         `json:"service"`
+	RequesterNodeID string         `json:"requester_node_id"`
+	ReplyTo         string         `json:"reply_to"`
+	Payload         map[string]any `json:"payload"`
 }
 
 type DiscoveryQuery struct {

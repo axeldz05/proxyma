@@ -10,6 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type LocalService struct {
+	Type   string                 `json:"type"`
+	Exec   string                 `json:"exec,omitempty"`
+	Schema protocol.ServiceSchema `json:"schema"`
+}
+
 func TestServiceAddCmd(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -23,12 +29,13 @@ func TestServiceAddCmd(t *testing.T) {
 
 	t.Run("Add service with explicit params", func(t *testing.T) {
 		rootCmd.SetArgs([]string{
-			"service", "add", "my-script",
+			"service", "add",
+			"--name", "my-script",
 			"--storage", tempDir,
 			"--type", "script",
 			"--exec", "python3 main.py",
 			"--desc", "My test script",
-			"--param", "param1: string, param2: bool",
+			"--param", "param1:string, param2:bool",
 			"--no-required", "param2",
 		})
 
@@ -75,7 +82,8 @@ func TestServiceAddCmd(t *testing.T) {
 		require.NoError(t, err)
 
 		rootCmd.SetArgs([]string{
-			"service", "add", "my-grpc",
+			"service", "add",
+			"--name", "my-grpc",
 			"--storage", tempDir,
 			"--type", "grpc", // Even if schema is provided, type/exec are outside schema
 			"--schema-file", schemaPath,
@@ -104,7 +112,8 @@ func TestServiceAddCmd(t *testing.T) {
 
 	t.Run("Remove service", func(t *testing.T) {
 		rootCmd.SetArgs([]string{
-			"service", "remove", "my-script",
+			"service", "remove",
+			"--name", "my-script",
 			"--storage", tempDir,
 		})
 
@@ -160,7 +169,7 @@ func TestServiceDaemonCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"service", "run", "hello-service", `{"x":1}`, "--storage", tempDir})
+		rootCmd.SetArgs([]string{"service", "run", "--name", "hello-service", "--payload", `{"x":1}`, "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
@@ -178,7 +187,7 @@ func TestServiceDaemonCmds(t *testing.T) {
 		})
 		defer func() { _ = l.Close() }()
 
-		rootCmd.SetArgs([]string{"service", "status", "task_123", "--storage", tempDir})
+		rootCmd.SetArgs([]string{"service", "status", "--task_id", "task_123", "--storage", tempDir})
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})

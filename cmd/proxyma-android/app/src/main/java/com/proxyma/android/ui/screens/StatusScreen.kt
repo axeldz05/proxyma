@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,16 +18,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.Peer
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.theme.*
-import com.proxyma.android.utils.formatBytes
-import kotlin.concurrent.fixedRateTimer
+import com.proxyma.android.utils.*
 
+@Suppress("UNCHECKED_CAST")
 @Composable
-fun StatusScreen() {
+fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, Any>?) {
     var isRunning by remember { mutableStateOf(false) }
     var nodeId by remember { mutableStateOf("-") }
     var address by remember { mutableStateOf("-") }
@@ -36,44 +33,27 @@ fun StatusScreen() {
     var downSpeed by remember { mutableLongStateOf(0L) }
     var totalSent by remember { mutableLongStateOf(0L) }
     var totalRecv by remember { mutableLongStateOf(0L) }
-    var peersJson by remember { mutableStateOf("[]") }
-
-    DisposableEffect(Unit) {
-        val timer = fixedRateTimer(period = 2000) {
-            try {
-                isRunning = proxyma_bind.Proxyma_bind.isNodeRunning()
-                if (isRunning) {
-                    nodeId = proxyma_bind.Proxyma_bind.getNodeID()
-                    address = proxyma_bind.Proxyma_bind.getNodeAddress()
-                    upSpeed = proxyma_bind.Proxyma_bind.getUploadSpeed()
-                    downSpeed = proxyma_bind.Proxyma_bind.getDownloadSpeed()
-                    totalSent = proxyma_bind.Proxyma_bind.getTotalSent()
-                    totalRecv = proxyma_bind.Proxyma_bind.getTotalReceived()
-                    peersJson = proxyma_bind.Proxyma_bind.getPeersJson()
-                } else {
-                    nodeId = "-"
-                    address = "-"
-                    upSpeed = 0
-                    downSpeed = 0
-                    totalSent = 0
-                    totalRecv = 0
-                    peersJson = "[]"
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        onDispose {
-            timer.cancel()
-        }
+    
+    val peerList by rememberPolledParsedState(2000, emptyList<Peer>()) {
+        proxyma_bind.Proxyma_bind.getPeersJson()
     }
 
-    val gson = remember { Gson() }
-    val peerList: List<Peer> = remember(peersJson) {
-        try {
-            gson.fromJson<List<Peer>>(peersJson, object : TypeToken<List<Peer>>() {}.type) ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
+    PollState(period = 2000) {
+        isRunning = proxyma_bind.Proxyma_bind.isNodeRunning()
+        if (isRunning) {
+            nodeId = proxyma_bind.Proxyma_bind.getNodeID()
+            address = proxyma_bind.Proxyma_bind.getNodeAddress()
+            upSpeed = proxyma_bind.Proxyma_bind.getUploadSpeed()
+            downSpeed = proxyma_bind.Proxyma_bind.getDownloadSpeed()
+            totalSent = proxyma_bind.Proxyma_bind.getTotalSent()
+            totalRecv = proxyma_bind.Proxyma_bind.getTotalReceived()
+        } else {
+            nodeId = "-"
+            address = "-"
+            upSpeed = 0
+            downSpeed = 0
+            totalSent = 0
+            totalRecv = 0
         }
     }
 
@@ -85,7 +65,7 @@ fun StatusScreen() {
     ) {
         item {
             Text(
-                text = "Node Overview",
+                text = (telemetryDomain?.get("title") as? String) ?: "Node Overview",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
@@ -111,7 +91,7 @@ fun StatusScreen() {
                                     .size(10.dp)
                                     .clip(RoundedCornerShape(5.dp))
                                     .background(if (isRunning) MintGreen else ErrorRed)
-                            )
+                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 if (isRunning) "ONLINE" else "OFFLINE",
@@ -173,7 +153,7 @@ fun StatusScreen() {
 
         item {
             Text(
-                text = "Active Peers (${peerList.size})",
+                text = "${(peersDomain?.get("title") as? String) ?: "Active Peers"} (${peerList.size})",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White

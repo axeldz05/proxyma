@@ -230,6 +230,27 @@ func (se *StorageEngine) GetLocalBlobPath(hash string) string {
 	return se.physical.GetBlobPath(hash)
 }
 
+func (se *StorageEngine) SaveLocalFileWithoutNotification(fileName string, content io.Reader) (string, int64, error) {
+	hash, fileSize, err := se.physical.SaveBlob(content)
+	if err != nil {
+		return "", 0, fmt.Errorf("error saving the blob %s: %w", fileName, err)
+	}
+
+	newVersion := 1
+	if existingMeta, exists := se.vfs.Get(fileName); exists {
+		newVersion = existingMeta.Version + 1
+	}
+	fileMeta := protocol.IndexEntry{
+		Name:    fileName,
+		Size:    fileSize,
+		Hash:    hash,
+		Version: newVersion,
+	}
+	se.vfs.Upsert(fileMeta)
+	se.SetSubscription(fileName, true)
+	return hash, fileSize, nil
+}
+
 func (se *StorageEngine) CleanupTempFiles() {
 	se.physical.CleanupTempFiles()
 }

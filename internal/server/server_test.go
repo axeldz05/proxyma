@@ -222,7 +222,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		PayloadSizeBytes: 1024 * 1024 * 5,
 	}
 
-	targetPeerAddr, serviceSchema, err := svDemandingService.RequestServiceToCluster(query)
+	_, targetPeerAddr, serviceSchema, err := svDemandingService.RequestServiceToCluster(query)
 	require.NoError(t, err)
 	require.Equal(t, svWithService.Config.Address, targetPeerAddr, "Debería haber elegido al nodo 1")
 	require.Equal(t, "Standard Optical Character Recognition", serviceSchema.Description)

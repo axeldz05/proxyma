@@ -27,7 +27,13 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 		cmd.Stderr = &stderr
 
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("external script failed: %v, stderr: %s", err, stderr.String())
+			var result map[string]any
+			if json.Unmarshal(stdout.Bytes(), &result) == nil {
+				if errMsg, ok := result["error"].(string); ok && errMsg != "" {
+					return nil, fmt.Errorf("%s", errMsg)
+				}
+			}
+			return nil, fmt.Errorf("external script failed: %v, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 		}
 
 		var result map[string]any

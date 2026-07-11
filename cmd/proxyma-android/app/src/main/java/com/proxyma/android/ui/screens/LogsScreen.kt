@@ -14,42 +14,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.LogRecord
 import com.proxyma.android.ui.theme.*
-import kotlin.concurrent.fixedRateTimer
+import com.proxyma.android.utils.*
 
 @Composable
-fun LogsScreen() {
-    var logsJson by remember { mutableStateOf("[]") }
+fun LogsScreen(telemetryDomain: Map<String, Any>?) {
+    val fullLogs by rememberPolledParsedState(1000, emptyList<LogRecord>()) {
+        proxyma_bind.Proxyma_bind.getLogsJson()
+    }
     var showInfo by remember { mutableStateOf(true) }
     var showWarn by remember { mutableStateOf(true) }
     var showError by remember { mutableStateOf(true) }
-
-    DisposableEffect(Unit) {
-        val timer = fixedRateTimer(period = 1000) {
-            try {
-                if (proxyma_bind.Proxyma_bind.isNodeRunning()) {
-                    logsJson = proxyma_bind.Proxyma_bind.getLogsJson()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        onDispose {
-            timer.cancel()
-        }
-    }
-
-    val gson = remember { Gson() }
-    val fullLogs: List<LogRecord> = remember(logsJson) {
-        try {
-            gson.fromJson<List<LogRecord>>(logsJson, object : TypeToken<List<LogRecord>>() {}.type) ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
 
     val filteredLogs = remember(fullLogs, showInfo, showWarn, showError) {
         fullLogs.filter { log ->
@@ -68,7 +44,7 @@ fun LogsScreen() {
             .padding(16.dp)
     ) {
         Text(
-            text = "Node System Logs",
+            text = (telemetryDomain?.get("title") as? String) ?: "Node System Logs",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White
