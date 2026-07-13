@@ -97,9 +97,9 @@ class MainActivity : ComponentActivity() {
 fun MainLayout(service: ProxymaService?) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    val ssotDomains = remember {
+    val uiDomains = remember {
         try {
-            val json = proxyma_bind.Proxyma_bind.getSSOTSchemaJSON()
+            val json = proxyma_bind.Proxyma_bind.getUISchemaJSON()
             Gson().fromJson<List<Map<String, Any>>>(json, object : TypeToken<List<Map<String, Any>>>() {}.type) ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -107,11 +107,11 @@ fun MainLayout(service: ProxymaService?) {
         }
     }
 
-    val telemetryDomain = ssotDomains.find { domain -> domain["name"] == "telemetry" }
-    val clusterDomain = ssotDomains.find { domain -> domain["name"] == "cluster" }
-    val storageDomain = ssotDomains.find { domain -> domain["name"] == "storage" }
-    val serviceDomain = ssotDomains.find { domain -> domain["name"] == "service" }
-    val peersDomain = ssotDomains.find { domain -> domain["name"] == "peers" }
+    val telemetryDomain = uiDomains.find { domain -> domain["name"] == "telemetry" }
+    val clusterDomain = uiDomains.find { domain -> domain["name"] == "cluster" }
+    val storageDomain = uiDomains.find { domain -> domain["name"] == "storage" }
+    val serviceDomain = uiDomains.find { domain -> domain["name"] == "service" }
+    val peersDomain = uiDomains.find { domain -> domain["name"] == "peers" }
 
     Scaffold(
         bottomBar = {

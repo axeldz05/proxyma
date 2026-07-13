@@ -18,7 +18,7 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 	"proxyma/internal/utils"
-	"proxyma/shared/ssot"
+	"proxyma/shared/uischema"
 )
 
 var (
@@ -348,9 +348,9 @@ func copyDir(src string, dst string) error {
 	return nil
 }
 
-// GetSSOTSchemaJSON serializes the global SSOT domains to JSON.
-func GetSSOTSchemaJSON() string {
-	b, err := json.Marshal(ssot.Registry)
+// GetUISchemaJSON serializes the global UI schema domains to JSON.
+func GetUISchemaJSON() string {
+	b, err := json.Marshal(uischema.Registry)
 	if err != nil {
 		return fmt.Sprintf(`{"error": %q}`, err.Error())
 	}

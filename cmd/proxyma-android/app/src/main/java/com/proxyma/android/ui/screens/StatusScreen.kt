@@ -118,34 +118,24 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                     Text("Bandwidth Traffic", fontWeight = FontWeight.Bold, color = Color.Gray)
                     Spacer(Modifier.height(12.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "Upload", tint = VioletPrimary, size = 18.dp)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Upload Speed", color = Color.Gray)
-                            }
-                            Text(
-                                formatBytes(upSpeed) + "/s",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text("Total sent: " + formatBytes(totalSent), fontSize = 12.sp, color = Color.Gray)
-                        }
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = "Download", tint = MintGreen, size = 18.dp)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Download Speed", color = Color.Gray)
-                            }
-                            Text(
-                                formatBytes(downSpeed) + "/s",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text("Total received: " + formatBytes(totalRecv), fontSize = 12.sp, color = Color.Gray)
-                        }
+                        TrafficStatColumn(
+                            title = "Upload Speed",
+                            speed = upSpeed,
+                            total = totalSent,
+                            totalPrefix = "Total sent: ",
+                            icon = Icons.Default.ArrowUpward,
+                            iconColor = VioletPrimary,
+                            contentDescription = "Upload"
+                        )
+                        TrafficStatColumn(
+                            title = "Download Speed",
+                            speed = downSpeed,
+                            total = totalRecv,
+                            totalPrefix = "Total received: ",
+                            icon = Icons.Default.ArrowDownward,
+                            iconColor = MintGreen,
+                            contentDescription = "Download"
+                        )
                     }
                 }
             }
@@ -205,5 +195,40 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TrafficStatColumn(
+    title: String,
+    speed: Long,
+    total: Long,
+    totalPrefix: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconColor: Color,
+    contentDescription: String
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = iconColor,
+                size = 18.dp
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(title, color = Color.Gray)
+        }
+        Text(
+            text = formatBytes(speed) + "/s",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Text(
+            text = totalPrefix + formatBytes(total),
+            fontSize = 12.sp,
+            color = Color.Gray
+        )
     }
 }

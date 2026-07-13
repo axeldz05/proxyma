@@ -1,4 +1,4 @@
-package ssot
+package uischema
 
 // ParameterDetail defines a parameter for an action
 type ParameterDetail struct {

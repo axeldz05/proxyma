@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
-	"proxyma/shared/ssot"
+	"proxyma/shared/uischema"
 
 	"github.com/spf13/cobra"
 )
@@ -51,7 +51,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cliStorage, "storage", defaultStorage, "Path to the local node's directory")
 
 	// Dynamically register Cobra commands from SSOT Registry
-	for _, domain := range ssot.Registry {
+	for _, domain := range uischema.Registry {
 		domainCopy := domain
 		domainCmd := &cobra.Command{
 			Use:   domainCopy.Name,
