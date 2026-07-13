@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
@@ -33,6 +34,27 @@ func (s *Server) determineSponsorAndNATStatus() {
 	}
 
 	s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
+
+	// Try UPnP/NAT-PMP mapping if enabled (default)
+	if !s.Config.DisableUPnP {
+		tcpPortStr := utils.ExtractPort(s.Config.Address)
+		tcpPort := 8443
+		if tcpPortStr != "" {
+			_, _ = fmt.Sscanf(tcpPortStr, "%d", &tcpPort)
+		}
+		udpPort := conn.LocalAddr().(*net.UDPAddr).Port
+
+		s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
+		s.natMapper.Start()
+
+		mappedTCP, mappedUDP := s.natMapper.GetMappedPorts()
+		if mappedTCP > 0 {
+			tcpPort = mappedTCP
+		}
+		if mappedUDP > 0 {
+			extPort = mappedUDP
+		}
+	}
 
 	// Initialize QUIC Manager with the socket used for STUN query
 	s.tlsMutex.RLock()
@@ -71,6 +93,12 @@ func (s *Server) determineSponsorAndNATStatus() {
 		ownPort := utils.ExtractPort(s.Config.Address)
 		if ownPort == "" {
 			ownPort = "8443"
+		}
+		if s.natMapper != nil {
+			mappedTCP, _ := s.natMapper.GetMappedPorts()
+			if mappedTCP > 0 {
+				ownPort = fmt.Sprintf("%d", mappedTCP)
+			}
 		}
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
