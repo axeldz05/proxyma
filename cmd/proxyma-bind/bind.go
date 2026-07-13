@@ -24,12 +24,18 @@ import (
 var (
 	srv        *server.Server
 	srvTLS     *tls.Config
-	srvMutex   sync.Mutex
+	srvMutex   sync.RWMutex
 	appStorage string
 	appLogger  *slog.Logger
 	appCtx     context.Context
 	appCancel  context.CancelFunc
 )
+
+func getSrv() *server.Server {
+	srvMutex.RLock()
+	defer srvMutex.RUnlock()
+	return srv
+}
 
 // SetStoragePath configures the active storage path for the out-of-process CLI fallback.
 func SetStoragePath(path string) {
@@ -40,8 +46,8 @@ func SetStoragePath(path string) {
 
 // GetStoragePath returns the currently configured storage path.
 func GetStoragePath() string {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
+	srvMutex.RLock()
+	defer srvMutex.RUnlock()
 	return appStorage
 }
 
@@ -115,7 +121,7 @@ func StartNode(storagePath string, debug bool) string {
 		if os.IsNotExist(err) {
 			// Auto initialize configuration with default port 8080 if not found
 			nid := utils.GenerateDefaultNodeID()
-			localAddr := fmt.Sprintf("https://127.0.0.1:8080")
+			localAddr := "https://127.0.0.1:8080"
 			if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
 				return fmt.Sprintf("failed to setup initial node: %v", err)
 			}
@@ -195,78 +201,67 @@ func StopNode() {
 
 // IsNodeRunning returns true if the server is instantiated.
 func IsNodeRunning() bool {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	return srv != nil
+	return getSrv() != nil
 }
 
 // GetNodeID returns the active node's ID, or empty string.
 func GetNodeID() string {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return ""
 	}
-	return srv.Config.ID
+	return s.Config.ID
 }
 
 // GetNodeAddress returns the active node's URL, or empty string.
 func GetNodeAddress() string {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return ""
 	}
-	return srv.Config.Address
+	return s.Config.Address
 }
 
 // Bandwidth stats
 func GetUploadSpeed() int64 {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return 0
 	}
-	upSpeed, _ := srv.GetCurrentBandwidth()
+	upSpeed, _ := s.GetCurrentBandwidth()
 	return int64(upSpeed)
 }
 
 func GetDownloadSpeed() int64 {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return 0
 	}
-	_, downSpeed := srv.GetCurrentBandwidth()
+	_, downSpeed := s.GetCurrentBandwidth()
 	return int64(downSpeed)
 }
 
 func GetTotalSent() int64 {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return 0
 	}
-	totalSent, _ := srv.GetTotalBandwidth()
+	totalSent, _ := s.GetTotalBandwidth()
 	return totalSent
 }
 
 func GetTotalReceived() int64 {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-	if srv == nil {
+	s := getSrv()
+	if s == nil {
 		return 0
 	}
-	_, totalRecv := srv.GetTotalBandwidth()
+	_, totalRecv := s.GetTotalBandwidth()
 	return totalRecv
 }
 
 // ChangeStorageLocation stops node, copies directory, updates configs and restarts node.
 func ChangeStorageLocation(newPath string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
-
+	s := getSrv()
 	if s == nil {
 		return "Node is not running"
 	}
@@ -303,13 +298,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, in)
 	if err != nil {

@@ -33,7 +33,7 @@ sleep 2
 
 # Initialize and join node-low-spec
 bootstrap_node node-low-spec 8082
-join_cluster node-low-spec node-1 8081
+join_cluster node-low-spec node-1 8081 8082
 
 # Bring up node-low-spec
 $COMPOSE_CMD up -d node-low-spec

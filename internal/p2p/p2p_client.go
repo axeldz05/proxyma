@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"proxyma/internal/protocol"
 	"strings"
+	"time"
 )
 
 type PeerClient interface {
@@ -71,6 +72,14 @@ func (c *HTTPPeerClient) UpdateSponsorAddress(addr string) {
 	c.router.UpdateSponsorAddress(addr)
 }
 
+func (c *HTTPPeerClient) SetQUICManager(qm *QUICManager) {
+	c.router.QM = qm
+}
+
+func (c *HTTPPeerClient) CloseIdleConnections() {
+	c.client.CloseIdleConnections()
+}
+
 func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerID string) (map[string]protocol.IndexEntry, error) {
 	return doJSON[map[string]protocol.IndexEntry](ctx, c, "GET", peerID, "manifest", nil)
 }
@@ -124,11 +133,15 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, que
 }
 
 func (c *HTTPPeerClient) AddPeer(peerID string, payload *bytes.Buffer) error {
-	return doVoid(context.Background(), c, "POST", peerID, "peers/add", payload, http.StatusOK)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return doVoid(ctx, c, "POST", peerID, "peers/add", payload, http.StatusOK)
 }
 
 func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
-	return doJSON[map[string]protocol.AddressRecord](context.Background(), c, "POST", sponsorAddres, "peers/announce", peerRequest)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return doJSON[map[string]protocol.AddressRecord](ctx, c, "POST", sponsorAddres, "peers/announce", peerRequest)
 }
 
 func (c *HTTPPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {

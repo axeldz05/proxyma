@@ -8,9 +8,7 @@ import (
 )
 
 func GetVFSFilesJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "vfs_list", nil)
 		if err != nil {
@@ -26,9 +24,7 @@ func GetVFSFilesJson() string {
 
 // SyncVFS triggers VFS synchronization.
 func SyncVFS() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		_, err := sendUnixSocketCommand(appStorage, "sync", nil)
@@ -47,9 +43,7 @@ func SyncVFS() string {
 
 // UploadFile uploads a local file to the node's VFS.
 func UploadFile(name string, filePath string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		_, err := sendUnixSocketCommand(appStorage, "vfs_upload", map[string]string{
@@ -66,7 +60,7 @@ func UploadFile(name string, filePath string) string {
 	if err != nil {
 		return fmt.Sprintf("failed to open file %s: %v", filePath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	err = s.Storage.SaveLocalFile(name, f)
 	if err != nil {
@@ -77,9 +71,7 @@ func UploadFile(name string, filePath string) string {
 
 // SetSubscription enables/disables subscription for a VFS file.
 func SetSubscription(name string, subscribe bool) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		action := "vfs_subscribe"
@@ -106,9 +98,7 @@ func SetSubscription(name string, subscribe bool) string {
 
 // DeleteLocalCache deletes the local blob copy of a VFS file.
 func DeleteLocalCache(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		_, err := sendUnixSocketCommand(appStorage, "vfs_purge", map[string]string{
@@ -129,9 +119,7 @@ func DeleteLocalCache(name string) string {
 
 // DeleteFile marks a VFS file as deleted in the registry.
 func DeleteFile(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		_, err := sendUnixSocketCommand(appStorage, "vfs_delete", map[string]string{
@@ -152,9 +140,7 @@ func DeleteFile(name string) string {
 
 // GetLocalBlobPath returns absolute local file path for open operations.
 func GetLocalBlobPath(hash string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		return filepath.Join(appStorage, "blobs", hash)

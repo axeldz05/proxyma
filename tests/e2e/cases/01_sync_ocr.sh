@@ -48,7 +48,8 @@ bootstrap_node node-2 8082
 bootstrap_node node-3 8083
 
 # Register OCR service on node-2 using CLI
-run_node node-2 service add ocr \
+run_node node-2 service add \
+    --name "ocr" \
     --storage "/app/data" \
     --type "script" \
     --exec "python3 /app/data/scripts/ocr_service.py" \
@@ -73,7 +74,7 @@ call_api node-1 POST 8081 upload -F "file=@/app/data/test_e2e.txt" > /dev/null
 call_api node-1 POST 8081 upload -F "file=@/app/data/test_e2e.pdf" > /dev/null
 
 # Trigger manual sync on node-3
-exec_node node-3 ./proxyma sync > /dev/null
+exec_node node-3 ./proxyma storage sync > /dev/null
 
 # Verify metadata sync on node-3 VFS
 echo "🔍 Checking metadata replication on node-3..."
@@ -114,7 +115,7 @@ if [[ -z "$SUB_RES" || "$SUB_RES" == *"error"* ]]; then
 fi
 
 # Sync again to force physical download
-exec_node node-3 ./proxyma sync > /dev/null
+exec_node node-3 ./proxyma storage sync > /dev/null
 
 # Verify download and check hash
 call_api node-3 GET 8083 "download/$FILE_HASH" > "$E2E_DATA_DIR/node-3/downloaded_test.txt"
@@ -130,7 +131,7 @@ MANIFEST_N1=$(call_api node-1 GET 8081 manifest)
 PDF_HASH=$(echo "$MANIFEST_N1" | grep -o '"test_e2e.pdf":{"name":"test_e2e.pdf","size":[^,]*,"hash":"[^"]*"' | grep -o '"hash":"[^"]*"' | cut -d'"' -f4)
 
 call_api node-2 POST 8082 "subscribe?name=test_e2e.pdf" > /dev/null
-exec_node node-2 ./proxyma sync > /dev/null
+exec_node node-2 ./proxyma storage sync > /dev/null
 
 # Send OCR task to node-2
 call_api node-2 POST 8082 "services/submit" -d "{\"service\":\"ocr\", \"task_id\":\"ocr_job_1\", \"requester_node_id\":\"host-test\", \"payload\":{\"file_hash\":\"$PDF_HASH\"}}" > /dev/null

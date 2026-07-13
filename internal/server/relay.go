@@ -220,14 +220,29 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		if err != nil {
 			s.Config.Logger.Debug("Relay poll failed, trying to failover", "error", err)
 
+			if idler, ok := s.peerClient.(interface{ CloseIdleConnections() }); ok {
+				idler.CloseIdleConnections()
+			}
+
 			// Try to find another sponsor from GetSponsorPeers()
 			sponsors := s.GetSponsorPeers()
 			if len(sponsors) > 0 {
+				found := false
 				for id, addr := range sponsors {
 					if addr != sponsorAddr && s.IsPeerOnline(id) {
 						s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", addr)
 						sponsorAddr = addr
+						found = true
 						break
+					}
+				}
+				if !found {
+					for _, addr := range sponsors {
+						if addr != sponsorAddr {
+							s.Config.Logger.Info("Switching relay sponsor (fallback to offline/any)", "old", sponsorAddr, "new", addr)
+							sponsorAddr = addr
+							break
+						}
 					}
 				}
 			}

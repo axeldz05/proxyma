@@ -40,8 +40,8 @@ echo "Writing initial file to verify initial state..."
 echo "base_state" > "$E2E_DATA_DIR/node-1/base.txt"
 call_api node-1 POST 8081 upload -F "file=@/app/data/base.txt" > /dev/null
 
-exec_node node-2 ./proxyma sync > /dev/null
-exec_node node-3 ./proxyma sync > /dev/null
+exec_node node-2 ./proxyma storage sync > /dev/null
+exec_node node-3 ./proxyma storage sync > /dev/null
 
 # Confirm base state
 MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
@@ -67,7 +67,7 @@ call_api node-3 POST 8083 upload -F "file=@/app/data/partition_b.txt" > /dev/nul
 
 # 4. Sync and verify that information does NOT propagate
 echo "Attempting to sync while the partition exists..."
-exec_node node-2 ./proxyma sync > /dev/null || true
+exec_node node-2 ./proxyma storage sync > /dev/null || true
 # Note: This may fail or pass without error but without updating node-3, which is correct.
 
 # Verify that node-1/2 do not know about partition_b.txt
@@ -92,8 +92,8 @@ sleep 2
 
 # 6. Sync healed cluster
 echo "Triggering synchronization after reconnection..."
-exec_node node-3 ./proxyma sync > /dev/null
-exec_node node-1 ./proxyma sync > /dev/null
+exec_node node-3 ./proxyma storage sync > /dev/null
+exec_node node-1 ./proxyma storage sync > /dev/null
 
 # 7. Verify convergence
 echo "🔍 Verifying metadata convergence on node-1..."

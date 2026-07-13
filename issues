@@ -12,7 +12,8 @@ Cambiar el BuildGRPCHandler para aceptar tres tipos de conexiones (Stubs creados
 3. Caso donde no se usa ni gRPC ni HTTP: WebRTC (UDP). Para el input considerar usar WebSockets o canales de datos de WebRTC (DataChannels).
 
 Próximas características y problemas de red (según README.md):
-- Implementación de NAT Traversal completo usando STUN/TURN Hole Punching (o AutoNAT con libp2p) para permitir conexiones directas y evitar el tráfico redundante a través del Sponsor de Relay.
+- ~~Implementación de NAT Traversal completo usando STUN/TURN Hole Punching (o AutoNAT con libp2p) para permitir conexiones directas y evitar el tráfico redundante a través del Sponsor de Relay.~~
+- ~~Refactorización y simplificación de código: Reemplazar Mutex en cmd/proxyma-bind con getSrv() RWMutex, aplanar ifs anidados en RoundTrip y ExecuteSync mediante helpers dedicados, y limpiar advertencias del linter golangci-lint.~~
 - Migración de BoltDB a BadgerDB (LSM-based/WiscKey) para optimizar el I/O en SSDs y manejar grandes conjuntos de metadatos del VFS de forma eficiente.
 - Consistencia Distribuida: Integrar un modelo de consenso distribuido (como Raft) para la unificación del estado global de la red.
 - Reducción del overhead de serialización: Adoptar gRPC (y grpc-gateway) para comunicación entre nodos y streaming, reemplazando el protocolo JSON actual.

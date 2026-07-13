@@ -33,9 +33,7 @@ type LocalService struct {
 
 // DiscoverServices returns active cluster services.
 func DiscoverServices() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_discover", nil)
@@ -55,9 +53,7 @@ func DiscoverServices() string {
 
 // GetServiceDetails gets metadata for a given service.
 func GetServiceDetails(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		return `{"error": "Node is not running"}`
@@ -126,9 +122,7 @@ func GetServiceDetails(name string) string {
 
 // AddService registers a new service configuration locally.
 func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_add", map[string]string{
@@ -257,9 +251,7 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 
 // RemoveService deletes a service configuration locally.
 func RemoveService(name string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_remove", map[string]string{
@@ -300,9 +292,7 @@ func RemoveService(name string) string {
 
 // RunService runs a task and waits up to 30s.
 func RunService(name string, payloadJson string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_run", map[string]string{
@@ -325,9 +315,7 @@ func RunService(name string, payloadJson string) string {
 
 // GetTaskStatus queries the status of a specific task.
 func GetTaskStatus(taskID string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_status", map[string]string{
@@ -349,9 +337,7 @@ func GetTaskStatus(taskID string) string {
 
 // RunFileService uploads the local input file if necessary, runs the generic file service, and returns the result.
 func RunFileService(serviceName string, inputPath string, outputName string, paramJson string) string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "service_run_file", map[string]string{

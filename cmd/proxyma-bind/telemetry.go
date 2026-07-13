@@ -9,9 +9,7 @@ import (
 
 // GetBandwidthStatsJson returns real-time bandwidth statistics.
 func GetBandwidthStatsJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "bandwidth", nil)
@@ -28,9 +26,7 @@ func GetBandwidthStatsJson() string {
 
 // GetLogsJson returns JSON logs.
 func GetLogsJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "logs", nil)
@@ -40,8 +36,8 @@ func GetLogsJson() string {
 		return string(data)
 	}
 
-	protocol.LogBufferMu.Lock()
-	defer protocol.LogBufferMu.Unlock()
+	protocol.LogBufferMu.RLock()
+	defer protocol.LogBufferMu.RUnlock()
 	if protocol.LogBuffer == nil {
 		return "[]"
 	}

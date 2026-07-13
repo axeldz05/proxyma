@@ -16,9 +16,7 @@ import (
 
 // GenerateInviteToken creates an invite token valid for 15 minutes.
 func GenerateInviteToken() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
@@ -107,11 +105,16 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	_ = os.WriteFile(certPath, []byte(cert), 0644)
 	_ = os.WriteFile(keyPath, privKeyPEM, 0600)
 
+	workersCount := cfg.Workers
+	if workersCount <= 0 {
+		workersCount = 4
+	}
+
 	newCfg := protocol.NodeConfig{
 		ID:            nodeID,
 		Address:       localAddr,
 		StoragePath:   appStorage,
-		Workers:       cfg.Workers,
+		Workers:       workersCount,
 		CAPath:        caPath,
 		BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
 	}
@@ -130,9 +133,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 
 	go func() {
 		time.Sleep(1 * time.Second)
-		srvMutex.Lock()
-		s := srv
-		srvMutex.Unlock()
+		s := getSrv()
 		if s != nil {
 			_ = s.ExecuteSync()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

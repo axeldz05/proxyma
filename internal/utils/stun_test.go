@@ -35,68 +35,65 @@ func TestIsPrivateOrCGNATIP(t *testing.T) {
 	}
 }
 
+// mockSTUNResponder runs a goroutine that handles one STUN binding request
+// and replies with an XOR-MAPPED-ADDRESS reflecting the sender's IP/port.
+func mockSTUNResponder(conn *net.UDPConn) {
+	buf := make([]byte, 1024)
+	n, raddr, err := conn.ReadFromUDP(buf)
+	if err != nil || n < 20 {
+		return
+	}
+
+	if binary.BigEndian.Uint32(buf[4:8]) != 0x2112A442 {
+		return
+	}
+
+	resp := make([]byte, 32)
+	binary.BigEndian.PutUint16(resp[0:2], 0x0101)     // Success Response
+	binary.BigEndian.PutUint16(resp[2:4], 12)          // Attribute length (4 header + 8 value)
+	binary.BigEndian.PutUint32(resp[4:8], 0x2112A442)  // Magic Cookie
+	copy(resp[8:20], buf[8:20])                        // Transaction ID
+
+	// XOR-MAPPED-ADDRESS attribute
+	binary.BigEndian.PutUint16(resp[20:22], 0x0020) // Type
+	binary.BigEndian.PutUint16(resp[22:24], 8)      // Length
+	resp[24] = 0x00                                 // Reserved
+	resp[25] = 0x01                                 // IPv4 Family
+
+	senderIP := raddr.IP.To4()
+	binary.BigEndian.PutUint16(resp[26:28], uint16(raddr.Port)^0x2112)
+	binary.BigEndian.PutUint32(resp[28:32], binary.BigEndian.Uint32(senderIP)^0x2112A442)
+
+	_, _ = conn.WriteToUDP(resp, raddr)
+}
+
 func TestSTUNClient(t *testing.T) {
-	// Start a local mock STUN server
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	addr := conn.LocalAddr().String()
+	go mockSTUNResponder(conn)
 
-	// Run mock STUN responder in goroutine
-	go func() {
-		buf := make([]byte, 1024)
-		n, raddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			return
-		}
-		if n < 20 {
-			return
-		}
-
-		// Verify Magic Cookie
-		magicCookie := binary.BigEndian.Uint32(buf[4:8])
-		if magicCookie != 0x2112A442 {
-			return
-		}
-
-		// Transaction ID
-		txID := buf[8:20]
-
-		// Construct response with XOR-MAPPED-ADDRESS
-		resp := make([]byte, 32)
-		// Header (20 bytes)
-		binary.BigEndian.PutUint16(resp[0:2], 0x0101)  // Success Response
-		binary.BigEndian.PutUint16(resp[2:4], 12)      // Length of attributes (12 bytes: 4 bytes attr header + 8 bytes value)
-		binary.BigEndian.PutUint32(resp[4:8], 0x2112A442)
-		copy(resp[8:20], txID)
-
-		// Attribute: XOR-MAPPED-ADDRESS (12 bytes)
-		binary.BigEndian.PutUint16(resp[20:22], 0x0020) // Type
-		binary.BigEndian.PutUint16(resp[22:24], 8)      // Length
-		resp[24] = 0x00                                 // Reserved
-		resp[25] = 0x01                                 // IPv4 Family
-
-		// Sender IP and port
-		senderIP := raddr.IP.To4()
-		senderPort := uint16(raddr.Port)
-
-		// XOR Port: port ^ (MagicCookie >> 16) = port ^ 0x2112
-		xPort := senderPort ^ 0x2112
-		binary.BigEndian.PutUint16(resp[26:28], xPort)
-
-		// XOR Address: IP ^ MagicCookie = IP ^ 0x2112A442
-		xAddress := binary.BigEndian.Uint32(senderIP) ^ 0x2112A442
-		binary.BigEndian.PutUint32(resp[28:32], xAddress)
-
-		_, _ = conn.WriteToUDP(resp[:32], raddr)
-	}()
-
-	// Query STUN
-	extIP, extPort, err := GetExternalIPPort(addr, 2*time.Second)
+	extIP, extPort, err := GetExternalIPPort(conn.LocalAddr().String(), 2*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", extIP)
 	require.True(t, extPort > 0)
+}
+
+func TestGetExternalUDPListener(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	go mockSTUNResponder(conn)
+
+	extIP, extPort, uconn, err := GetExternalUDPListener(conn.LocalAddr().String(), 2*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = uconn.Close() }()
+
+	require.Equal(t, "127.0.0.1", extIP)
+	require.True(t, extPort > 0)
+	require.NotNil(t, uconn)
 }
 
 func TestExtractPort(t *testing.T) {
@@ -117,3 +114,4 @@ func TestExtractPort(t *testing.T) {
 		})
 	}
 }
+

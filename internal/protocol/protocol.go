@@ -235,7 +235,7 @@ type LogRecord struct {
 
 var (
 	LogBuffer   []LogRecord
-	LogBufferMu sync.Mutex
+	LogBufferMu sync.RWMutex
 )
 
 type LogWriter struct {

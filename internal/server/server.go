@@ -45,6 +45,10 @@ type Server struct {
 	serverTLSConfig *tls.Config
 	clientTLSConfig *tls.Config
 	tlsMutex        sync.RWMutex
+
+	udpConn         *net.UDPConn
+	publicUDPAddr   string
+	quicMgr         *p2p.QUICManager
 }
 
 type DownloadJob struct {
@@ -55,6 +59,9 @@ type DownloadJob struct {
 func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	if cfg.Logger == nil {
 		panic("server.New: cfg.Logger must not be nil — use protocol.NewLogger to create it")
+	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = 4
 	}
 	s := &Server{
 		Config:        cfg,
@@ -128,7 +135,20 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
 	mux := s.wrapWithBandwidthCounting(s.handler)
-	addr := ":" + utils.ExtractPort(s.Config.Address)
+	rawAddr := s.Config.Address
+	rawAddr = strings.TrimPrefix(rawAddr, "https://")
+	rawAddr = strings.TrimPrefix(rawAddr, "http://")
+	host, port, err := net.SplitHostPort(rawAddr)
+	var addr string
+	if err == nil {
+		if host == "127.0.0.1" || host == "localhost" {
+			addr = "127.0.0.1:" + port
+		} else {
+			addr = "0.0.0.0:" + port
+		}
+	} else {
+		addr = ":" + utils.ExtractPort(s.Config.Address)
+	}
 
 	hs := &http.Server{
 		Addr:      addr,
@@ -164,6 +184,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.Compute != nil {
 		s.Compute.Close()
 		s.Config.Logger.Info("Compute Engine closed.")
+	}
+
+	if s.quicMgr != nil {
+		s.quicMgr.Close()
+		s.Config.Logger.Info("QUIC Manager closed.")
 	}
 
 	if s.unixListener != nil {
@@ -205,6 +230,9 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 	// Legacy 1-byte command compat
 	if buf[0] == 1 {
 		s.Config.Logger.Info("Sync triggered via legacy unix socket command")
+		if s.Config.BootstrapNode != "" {
+			_ = s.AnnouncePresence(s.Config.BootstrapNode)
+		}
 		err = s.ExecuteSync()
 		if err != nil {
 			s.Config.Logger.Error("Sync via legacy unix socket failed", "error", err)
@@ -230,6 +258,9 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 
 		switch req.Action {
 		case "sync":
+			if s.Config.BootstrapNode != "" {
+				_ = s.AnnouncePresence(s.Config.BootstrapNode)
+			}
 			actionErr = s.ExecuteSync()
 
 		case "vfs_list":
@@ -257,7 +288,12 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 				break
 			}
 			s.Storage.SetSubscription(fileName, true)
-			go func() { _ = s.ExecuteSync() }()
+			go func() {
+				if s.Config.BootstrapNode != "" {
+					_ = s.AnnouncePresence(s.Config.BootstrapNode)
+				}
+				_ = s.ExecuteSync()
+			}()
 
 		case "vfs_unsubscribe":
 			fileName := req.Args["name"]
@@ -323,10 +359,10 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			respData, actionErr = s.LocalInviteGenerate(15)
 
 		case "logs":
-			protocol.LogBufferMu.Lock()
+			protocol.LogBufferMu.RLock()
 			logsCopy := make([]protocol.LogRecord, len(protocol.LogBuffer))
 			copy(logsCopy, protocol.LogBuffer)
-			protocol.LogBufferMu.Unlock()
+			protocol.LogBufferMu.RUnlock()
 			respData = logsCopy
 
 		case "bandwidth":
@@ -643,9 +679,57 @@ func (s *Server) GetSponsorPeers() map[string]string {
 	return s.Peers.GetSponsorPeers()
 }
 
+func (s *Server) ensureQUICSession(peerID string) {
+	if s.quicMgr == nil {
+		return
+	}
+	record, ok := s.Peers.GetPeerRecord(peerID)
+	if !ok {
+		return
+	}
+	hasQuic := false
+	for _, addr := range record.Addresses {
+		if strings.HasPrefix(addr, "quic://") {
+			hasQuic = true
+			break
+		}
+	}
+	if !hasQuic {
+		return
+	}
+	if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
+		return
+	}
+
+	if updater, ok := s.peerClient.(interface {
+		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	}); ok {
+		updater.UpdatePeerRoute(peerID, record)
+	}
+
+	// Wait for the session to be established
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer waitCancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return
+		case <-ticker.C:
+			if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
+				return
+			}
+		}
+	}
+}
+
 func (s *Server) ExecuteSync() error {
 	for peerID := range s.GetPeersCopy() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		s.ensureQUICSession(peerID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx = context.WithValue(ctx, p2p.BypassHolePunchKey{}, true)
 		manifest, err := s.peerClient.FetchManifest(ctx, peerID)
 		cancel()
 		if err != nil {
@@ -667,10 +751,14 @@ func (s *Server) ExecuteSync() error {
 
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	s.CheckNAT()
+	addresses := []string{s.Config.Address}
+	if s.publicUDPAddr != "" {
+		addresses = append(addresses, "quic://"+s.publicUDPAddr)
+	}
 	payload := protocol.AddPeerRequest{
 		ID: s.Config.ID,
 		Address: protocol.AddressRecord{
-			Addresses: []string{s.Config.Address},
+			Addresses: addresses,
 			IsSponsor: s.isSponsor,
 		},
 	}
@@ -1066,7 +1154,7 @@ func (s *Server) LocalServiceRunFile(serviceName, inputPath, outputName, paramSt
 		if err != nil {
 			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to open local input file: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		tempInputName = "temp_ocr_" + filepath.Base(inputPath)
 		hashVal, sizeVal, err := s.Storage.SaveLocalFileWithoutNotification(tempInputName, f)

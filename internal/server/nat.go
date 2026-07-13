@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"time"
@@ -24,14 +25,38 @@ func (s *Server) determineSponsorAndNATStatus() {
 		stunServer = "stun.l.google.com:19302"
 	}
 
-	extIP, _, err := utils.GetExternalIPPort(stunServer, 5*time.Second)
+	extIP, extPort, conn, err := utils.GetExternalUDPListener(stunServer, 5*time.Second)
 	if err != nil {
 		s.Config.Logger.Warn("STUN check failed, assuming private/CGNAT network", "error", err)
 		s.isSponsor = false
 		return
 	}
 
-	s.Config.Logger.Debug("STUN public IP detected", "ip", extIP)
+	s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
+
+	// Initialize QUIC Manager with the socket used for STUN query
+	s.tlsMutex.RLock()
+	stls := s.serverTLSConfig
+	ctls := s.clientTLSConfig
+	s.tlsMutex.RUnlock()
+
+	if stls == nil || ctls == nil {
+		_ = conn.Close()
+	} else {
+		s.udpConn = conn
+		s.publicUDPAddr = fmt.Sprintf("%s:%d", extIP, extPort)
+		s.quicMgr = p2p.NewQUICManager(s.Config.ID, conn, ctls, stls, s.handler, s.Config.Logger)
+		s.quicMgr.PublicUDPAddr = s.publicUDPAddr
+
+		if err := s.quicMgr.StartListener(); err != nil {
+			s.Config.Logger.Error("Failed to start QUIC listener", "error", err)
+		} else {
+			s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", s.publicUDPAddr)
+			if httpClient, ok := s.peerClient.(*p2p.HTTPPeerClient); ok {
+				httpClient.SetQUICManager(s.quicMgr)
+			}
+		}
+	}
 
 	// Check if the IP is private or CGNAT
 	if utils.IsPrivateOrCGNATIP(extIP) {

@@ -1,5 +1,11 @@
 # Changelog - Proxyma P2P Dynamic Clustering Update
 
+## 13-07-2026
+### NAT Traversal (UDP Hole Punching & QUIC)
+* **QUICManager & Hole Punching**: Implementación de `QUICManager` en `internal/p2p/holepunch.go` que maneja el ciclo de vida de sesiones directas QUIC sobre UDP.
+* **Agujereado de NAT por Señalización**: Intercambio de IPs públicas obtenidas vía STUN por el canal de Relay del Sponsor (`/holepunch/init`), seguido de un ping UDP directo bidireccional para abrir las ranuras del NAT.
+* **Enrutamiento Inteligente**: Refactorización de `P2PRoundTripper` en `internal/p2p/router.go` para enrutar tráfico directamente sobre sesiones QUIC abiertas por Hole Punching de forma transparente antes de recurrir a la cola de Relay lento.
+
 ## 20-06-2026
 ### Refactorización del Servidor (Granularidad Continua)
 * **Subcomponentes del Servidor**: Se dividió el struct monolítico `Server` en cuatro administradores independientes: `PeerRegistry` (contactos y servicios), `InviteManager` (tokens de emparejamiento), `BandwidthTracker` (telemetría de red) y `RelayManager` (colas y canales de relay). Se mantuvieron métodos delegadores en `Server` para preservar la compatibilidad con el resto del código y los tests.

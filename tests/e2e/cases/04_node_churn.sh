@@ -54,7 +54,7 @@ echo "📤 Uploading file to node-2..."
 call_api node-2 POST 8082 upload -F "file=@/app/data/churn_test.txt" > /dev/null
 
 # Force sync on node-2 to announce the file to the Sponsor
-exec_node node-2 ./proxyma sync > /dev/null
+exec_node node-2 ./proxyma storage sync > /dev/null
 
 # Wait for the file to reach the VFS of node-1 and be downloaded
 echo "🔍 Waiting for node-1 to detect and download the file..."
@@ -64,7 +64,7 @@ if ! wait_for_condition 15 2 "churn_test.txt" call_api node-1 GET 8081 manifest;
 fi
 
 # Force sync on node-1 to physically download the file
-exec_node node-1 ./proxyma sync > /dev/null
+exec_node node-1 ./proxyma storage sync > /dev/null
 
 # Get file hash
 MANIFEST_N1=$(call_api node-1 GET 8081 manifest)
@@ -89,7 +89,7 @@ call_api node-3 POST 8083 "subscribe?name=churn_test.txt" > /dev/null
 
 # Start synchronization on node-3 in the background (to interrupt it mid-download)
 echo "⚡ Starting synchronization on node-3 in the background..."
-exec_node node-3 ./proxyma sync > /dev/null &
+exec_node node-3 ./proxyma storage sync > /dev/null &
 SYNC_PID=$!
 
 # Wait a brief moment for the download to start from node-2
@@ -106,7 +106,7 @@ wait $SYNC_PID || true
 # or remained incomplete. Let's force another synchronization on node-3.
 # With node-2 gone, node-3 should only be able to download the rest/all from node-1 (the Sponsor).
 echo "🔄 Forcing recovery synchronization on node-3..."
-exec_node node-3 ./proxyma sync > /dev/null || true
+exec_node node-3 ./proxyma storage sync > /dev/null || true
 
 # Wait for node-3 to finish download and verify physical integrity
 echo "🔍 Waiting for node-3 to complete the download from node-1..."

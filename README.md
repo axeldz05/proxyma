@@ -5,7 +5,7 @@ It acts as a connective tissue that allows the hardware capabilities of one node
 The goal is to eliminate hardware boundaries, integrating multiple custom services.
 
 ### **Issues in mind**
-* NAT Traversal: A secure, push-based Relay Fallback mechanism with mTLS identity validation is implemented. However, direct STUN/TURN hole punching is still required to allow direct connectivity between nodes behind restrictive firewalls (avoiding relay overhead). Consider AutoNAT with libp2p.
+* NAT Traversal: Implemented a robust UDP NAT Hole Punching mechanism using STUN for public IP/port discovery, signaling via the Sponsor relay, and establishing direct secure QUIC sessions for direct inter-node communication. If hole punching is not supported or fails, it falls back to the secure push-based Relay Fallback tunnel.
 * Currently, the system uses BoltDB for subscriptions of files and Virtual File System (VFS). Considering the transition to BadgerDB (which implements a WiscKey LSM-based) or a customized 
 implementation to optimize I/O on SSDs and handle larger metadata sets efficiently.
 * Distributed Consistency: Moving beyond local ACID compliance towards a distributed consensus model (e.g., Raft) for unified network state.
@@ -26,6 +26,7 @@ with grpc-gateway for particular cases where a JSON will work just fine.
 - [x] Implement global discovery using a secure pairing.
 - [x] End-to-end TLS encryption.
 - [x] Secure "Handshake" and pairing system for new devices.
+- [x] Implement UDP NAT Hole Punching and direct QUIC connectivity.
 
 ### Phase 2: Orchestration & Services
 - [ ] **Custom services** engine.

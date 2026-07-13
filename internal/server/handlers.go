@@ -73,6 +73,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /relay/forward", s.HandleRelayForward)
 	mux.HandleFunc("POST /relay/reply", s.HandleRelayReply)
 	mux.HandleFunc("GET /telemetry", s.HandleTelemetry)
+	mux.HandleFunc("POST /holepunch/init", s.HandleHolePunchInit)
 	return s.mTLSGuard(mux)
 }
 
@@ -426,5 +427,38 @@ func isLoopbackOrLocalHost(addr string) bool {
 	}
 	host := parsed.Hostname()
 	return host == "localhost" || host == "127.0.0.1" || host == "::1" || !strings.Contains(host, ".")
+}
+
+func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
+	var msg p2p.HolePunchMessage
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	s.Config.Logger.Info("Received hole punch initialization request", "sender", msg.SenderID, "senderUDP", msg.PublicUDP)
+
+	// Respond with our own public UDP address
+	resp := p2p.HolePunchMessage{
+		SenderID:  s.Config.ID,
+		PublicUDP: s.publicUDPAddr,
+	}
+
+	utils.RespondJSON(w, http.StatusOK, resp)
+
+	// Start pinging A in a background goroutine
+	if s.quicMgr != nil && msg.PublicUDP != "" {
+		rUDPAddr, err := net.ResolveUDPAddr("udp", msg.PublicUDP)
+		if err == nil {
+			go func() {
+				pingPayload := append([]byte{0xff, 0xff, 0xff, 0xff}, []byte("ping:"+s.Config.ID)...)
+				// Send 20 pings, 150ms apart
+				for i := 0; i < 20; i++ {
+					_, _ = s.quicMgr.PacketConn.WriteTo(pingPayload, rUDPAddr)
+					time.Sleep(150 * time.Millisecond)
+				}
+			}()
+		}
+	}
 }
 

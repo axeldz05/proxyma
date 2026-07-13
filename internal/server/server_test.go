@@ -322,7 +322,7 @@ func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(5 * time.Second):
+			case <-time.After(20 * time.Second):
 				return map[string]protocol.IndexEntry{}, nil
 			}
 		},
@@ -337,8 +337,8 @@ func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
 
 	duration := time.Since(start)
 
-	require.GreaterOrEqual(t, duration, 2*time.Second, "Exited too early, didn't wait for timeout")
-	require.Less(t, duration, 3*time.Second, "Hung too long, failed to respect context timeout")
+	require.GreaterOrEqual(t, duration, 10*time.Second, "Exited too early, didn't wait for timeout")
+	require.Less(t, duration, 11*time.Second, "Hung too long, failed to respect context timeout")
 }
 
 func TestUnauthorizedAccessIsRejectedAndPairingIsAllowed(t *testing.T) {

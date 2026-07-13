@@ -20,14 +20,14 @@ func (s *Server) GetHTTPServerAddr() string {
 }
 
 func (s *Server) ServerTLSConfig() *tls.Config {
-	s.tlsMutex.Lock()
-	defer s.tlsMutex.Unlock()
+	s.tlsMutex.RLock()
+	defer s.tlsMutex.RUnlock()
 	return s.serverTLSConfig
 }
 
 func (s *Server) ClientTLSConfig() *tls.Config {
-	s.tlsMutex.Lock()
-	defer s.tlsMutex.Unlock()
+	s.tlsMutex.RLock()
+	defer s.tlsMutex.RUnlock()
 	return s.clientTLSConfig
 }
 

@@ -7,9 +7,7 @@ import (
 
 // GetPeersJson returns active peers.
 func GetPeersJson() string {
-	srvMutex.Lock()
-	s := srv
-	srvMutex.Unlock()
+	s := getSrv()
 
 	if s == nil {
 		data, err := sendUnixSocketCommand(appStorage, "peers", nil)

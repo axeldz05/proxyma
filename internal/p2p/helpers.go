@@ -163,3 +163,9 @@ func (b *BandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	return resp, nil
 }
 
+func (b *BandwidthRoundTripper) CloseIdleConnections() {
+	if idler, ok := b.Base.(interface{ CloseIdleConnections() }); ok {
+		idler.CloseIdleConnections()
+	}
+}
+
