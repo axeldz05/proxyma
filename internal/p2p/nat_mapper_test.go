@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fd/go-nat"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -67,15 +68,18 @@ func TestNATMapperLifecycle(t *testing.T) {
 		internalAddr: net.ParseIP("192.168.1.10"),
 		mappings:     make(map[string]int),
 	}
-	nm.natDev = m
+	nm.discoverGateway = func() (nat.NAT, error) {
+		return m, nil
+	}
 
-	// Test refresh mappings
-	nm.refreshMappings()
+	// Start mapping process
+	nm.Start()
 
-	assert.Equal(t, 2, m.addCalls)
-	tcpExt, udpExt := nm.GetMappedPorts()
-	assert.Equal(t, 9100, tcpExt)
-	assert.Equal(t, 9101, udpExt)
+	// Wait for mapping to happen on background goroutine
+	assert.Eventually(t, func() bool {
+		tcpExt, udpExt := nm.GetMappedPorts()
+		return tcpExt == 9100 && udpExt == 9101
+	}, 1*time.Second, 10*time.Millisecond)
 
 	// Verify GetExternalAddress
 	extIP, err := nm.GetExternalAddress()
@@ -84,6 +88,11 @@ func TestNATMapperLifecycle(t *testing.T) {
 
 	// Test Stop cleans up
 	nm.Stop()
-	assert.Equal(t, 2, m.delCalls)
+
+	// Verify deletions were executed
+	assert.Eventually(t, func() bool {
+		return m.delCalls == 2
+	}, 1*time.Second, 10*time.Millisecond)
+
 	assert.Empty(t, m.mappings)
 }

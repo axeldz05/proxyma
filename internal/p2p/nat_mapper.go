@@ -4,27 +4,31 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/fd/go-nat"
 )
 
 type NATMapper struct {
-	logger        *slog.Logger
-	ctx           context.Context
-	cancel        context.CancelFunc
-	tcpPort       int
-	udpPort       int
-	tcpMappedPort int
-	udpMappedPort int
-	natDev        nat.NAT
+	mu              sync.RWMutex
+	logger          *slog.Logger
+	ctx             context.Context
+	cancel          context.CancelFunc
+	tcpPort         int
+	udpPort         int
+	tcpMappedPort   int
+	udpMappedPort   int
+	natDev          nat.NAT
+	discoverGateway func() (nat.NAT, error)
 }
 
 func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
 	return &NATMapper{
-		logger:  logger,
-		tcpPort: tcpPort,
-		udpPort: udpPort,
+		logger:          logger,
+		tcpPort:         tcpPort,
+		udpPort:         udpPort,
+		discoverGateway: nat.DiscoverGateway,
 	}
 }
 
@@ -40,14 +44,17 @@ func (nm *NATMapper) Start() {
 }
 
 func (nm *NATMapper) runMapper() {
-	dev, err := nat.DiscoverGateway()
+	dev, err := nm.discoverGateway()
 	if err != nil {
 		if nm.logger != nil {
 			nm.logger.Warn("Failed to discover NAT gateway (UPnP/NAT-PMP might be disabled on your router)", "error", err)
 		}
 		return
 	}
+
+	nm.mu.Lock()
 	nm.natDev = dev
+	nm.mu.Unlock()
 
 	if nm.logger != nil {
 		nm.logger.Info("NAT gateway discovered", "type", dev.Type())
@@ -69,34 +76,44 @@ func (nm *NATMapper) runMapper() {
 }
 
 func (nm *NATMapper) refreshMappings() {
-	if nm.natDev == nil {
+	nm.mu.RLock()
+	dev := nm.natDev
+	tcpPort := nm.tcpPort
+	udpPort := nm.udpPort
+	nm.mu.RUnlock()
+
+	if dev == nil {
 		return
 	}
 
-	if nm.tcpPort > 0 {
-		extPort, err := nm.natDev.AddPortMapping("tcp", nm.tcpPort, "proxyma-tcp", 30*time.Minute)
+	if tcpPort > 0 {
+		extPort, err := dev.AddPortMapping("tcp", tcpPort, "proxyma-tcp", 30*time.Minute)
 		if err != nil {
 			if nm.logger != nil {
-				nm.logger.Warn("Failed to map TCP port", "internalPort", nm.tcpPort, "error", err)
+				nm.logger.Warn("Failed to map TCP port", "internalPort", tcpPort, "error", err)
 			}
 		} else {
+			nm.mu.Lock()
 			nm.tcpMappedPort = extPort
+			nm.mu.Unlock()
 			if nm.logger != nil {
-				nm.logger.Info("TCP port mapped successfully", "internal", nm.tcpPort, "external", extPort)
+				nm.logger.Info("TCP port mapped successfully", "internal", tcpPort, "external", extPort)
 			}
 		}
 	}
 
-	if nm.udpPort > 0 {
-		extPort, err := nm.natDev.AddPortMapping("udp", nm.udpPort, "proxyma-udp", 30*time.Minute)
+	if udpPort > 0 {
+		extPort, err := dev.AddPortMapping("udp", udpPort, "proxyma-udp", 30*time.Minute)
 		if err != nil {
 			if nm.logger != nil {
-				nm.logger.Warn("Failed to map UDP port", "internalPort", nm.udpPort, "error", err)
+				nm.logger.Warn("Failed to map UDP port", "internalPort", udpPort, "error", err)
 			}
 		} else {
+			nm.mu.Lock()
 			nm.udpMappedPort = extPort
+			nm.mu.Unlock()
 			if nm.logger != nil {
-				nm.logger.Info("UDP port mapped successfully", "internal", nm.udpPort, "external", extPort)
+				nm.logger.Info("UDP port mapped successfully", "internal", udpPort, "external", extPort)
 			}
 		}
 	}
@@ -107,32 +124,44 @@ func (nm *NATMapper) Stop() {
 		nm.cancel()
 	}
 
-	if nm.natDev == nil {
+	nm.mu.Lock()
+	dev := nm.natDev
+	tcpPort, tcpMapped := nm.tcpPort, nm.tcpMappedPort
+	udpPort, udpMapped := nm.udpPort, nm.udpMappedPort
+	nm.mu.Unlock()
+
+	if dev == nil {
 		return
 	}
 
-	if nm.tcpMappedPort > 0 {
+	if tcpMapped > 0 {
 		if nm.logger != nil {
-			nm.logger.Info("Removing TCP port mapping", "port", nm.tcpPort)
+			nm.logger.Info("Removing TCP port mapping", "port", tcpPort)
 		}
-		_ = nm.natDev.DeletePortMapping("tcp", nm.tcpPort)
+		_ = dev.DeletePortMapping("tcp", tcpPort)
 	}
 
-	if nm.udpMappedPort > 0 {
+	if udpMapped > 0 {
 		if nm.logger != nil {
-			nm.logger.Info("Removing UDP port mapping", "port", nm.udpPort)
+			nm.logger.Info("Removing UDP port mapping", "port", udpPort)
 		}
-		_ = nm.natDev.DeletePortMapping("udp", nm.udpPort)
+		_ = dev.DeletePortMapping("udp", udpPort)
 	}
 }
 
 func (nm *NATMapper) GetMappedPorts() (int, int) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
 	return nm.tcpMappedPort, nm.udpMappedPort
 }
 
 func (nm *NATMapper) GetExternalAddress() (net.IP, error) {
-	if nm.natDev == nil {
+	nm.mu.RLock()
+	dev := nm.natDev
+	nm.mu.RUnlock()
+
+	if dev == nil {
 		return nil, nat.ErrNoNATFound
 	}
-	return nm.natDev.GetExternalAddress()
+	return dev.GetExternalAddress()
 }
