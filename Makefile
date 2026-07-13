@@ -7,7 +7,7 @@ TEMP_DIR=/tmp/proxyma-dev
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test lint clean help init-cluster issue-cert
+.PHONY: all build test lint clean help init-cluster issue-cert test-e2e test-all coverage
 
 all: lint test build
 
@@ -43,3 +43,14 @@ issue-cert: build
 help:
 	@echo "Available commands:"
 	@sed -n 's/^##//p' $< | column -t -s ':' |  sed -e 's/^/ /'
+
+test-e2e:
+	@echo "$(BLUE)Running E2E integration tests...$(NC)"
+	./tests/e2e/run.sh
+
+test-all: test test-e2e
+
+coverage:
+	@echo "$(BLUE)Generating unified coverage report...$(NC)"
+	chmod +x ./scripts/coverage.sh
+	./scripts/coverage.sh

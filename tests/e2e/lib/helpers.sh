@@ -28,7 +28,9 @@ COMPOSE_CMD="docker compose -p $E2E_PROJECT_NAME -f $COMPOSE_FILE"
 cleanup_e2e() {
     echo -e "${YELLOW}[$E2E_PROJECT_NAME] Cleaning up containers and directories...${NC}"
     $COMPOSE_CMD down -v --remove-orphans >/dev/null 2>&1 || true
-    rm -rf "$E2E_DATA_DIR" || true
+    if [ "$KEEP_E2E_DATA" != "true" ]; then
+        rm -rf "$E2E_DATA_DIR" || true
+    fi
     # Clean up dynamically created orphan networks if any
     docker network rm "${E2E_PROJECT_NAME}-net-b" >/dev/null 2>&1 || true
 }

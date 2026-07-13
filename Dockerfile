@@ -7,7 +7,12 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o proxyma ./cmd/proxyma
+ARG COVER=false
+RUN if [ "$COVER" = "true" ]; then \
+      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -cover -o proxyma ./cmd/proxyma; \
+    else \
+      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o proxyma ./cmd/proxyma; \
+    fi
 
 # ==========================================
 # Fase 2: Runner
