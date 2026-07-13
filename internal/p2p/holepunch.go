@@ -379,9 +379,17 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 			return nil, fmt.Errorf("failed to dial direct QUIC session: %w", err)
 		}
 
+		tlsState := qconn.ConnectionState().TLS
+		if len(tlsState.PeerCertificates) > 0 {
+			cert := tlsState.PeerCertificates[0]
+			if cert.Subject.CommonName != peerID {
+				_ = qconn.CloseWithError(0, "peer identity mismatch")
+				return nil, fmt.Errorf("peer identity mismatch in QUIC: expected %s, got %s", peerID, cert.Subject.CommonName)
+			}
+		}
+
 		qm.SetSession(peerID, qconn)
 
-		tlsState := qconn.ConnectionState().TLS
 		if qm.Logger != nil {
 			qm.Logger.Debug("Outbound QUIC session accept loop starting", "peer", peerID)
 		}

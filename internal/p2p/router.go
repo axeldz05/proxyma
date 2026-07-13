@@ -216,6 +216,16 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		directReq := clone.Clone(dCtx)
 		resp, err := r.Base.RoundTrip(directReq)
 		if err == nil {
+			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+				cert := resp.TLS.PeerCertificates[0]
+				if cert.Subject.CommonName != peerID {
+					_ = resp.Body.Close()
+					dCancel()
+					r.logDebug("Rejecting direct connection: peer identity mismatch", "expected", peerID, "got", cert.Subject.CommonName)
+					lastErr = fmt.Errorf("peer identity mismatch: expected %s, got %s", peerID, cert.Subject.CommonName)
+					continue
+				}
+			}
 			resp.Body = NewCancelReadCloser(resp.Body, dCancel)
 			return resp, nil
 		}
