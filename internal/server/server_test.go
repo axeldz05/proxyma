@@ -1136,4 +1136,159 @@ func TestAnnounceEndpointEnforcesMTLS(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
+func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-sweep"), nil)
+
+	// 1. Generate an invite
+	bodyBytes, _ := json.Marshal(map[string]interface{}{"role": "node"})
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := sponsor.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var inviteResp server.InviteResponse
+	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
+	require.NoError(t, err)
+	require.NotEmpty(t, inviteResp.Token)
+
+	// Parse the smart token to get the secretHex
+	_, secretHex1, err := p2p.ParseSmartToken(inviteResp.Token)
+	require.NoError(t, err)
+
+	// Verify the invite is active initially
+	_, validBeforeExpire := sponsor.Invites.CheckAndConsume(secretHex1)
+	require.True(t, validBeforeExpire, "Invite token should be valid before expiration")
+
+	// 2. Generate another invite and force it to be expired
+	req2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := sponsor.Client().Do(req2)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp2.StatusCode)
+
+	var inviteResp2 server.InviteResponse
+	err = json.NewDecoder(resp2.Body).Decode(&inviteResp2)
+	require.NoError(t, err)
+	require.NotEmpty(t, inviteResp2.Token)
+
+	_, secretHex2, err := p2p.ParseSmartToken(inviteResp2.Token)
+	require.NoError(t, err)
+
+	// Expire the second invite using the TestServer helper
+	sponsor.ExpireInvite(secretHex2)
+
+	// 3. Run Sweep manually to cleanup expired invites
+	sponsor.Invites.Sweep()
+
+	// Verify the expired invite is gone/invalid
+	_, validAfterExpire := sponsor.Invites.CheckAndConsume(secretHex2)
+	require.False(t, validAfterExpire, "Expired invite token should have been removed by Sweep")
+}
+
+func TestPeerLeavesClusterGracefullyAndNotifiesOthers(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-leave"), nil)
+	peer1 := NewServer(t, testutil.DefaultConfig(t, "peer-1"), nil)
+	peer2 := NewServer(t, testutil.DefaultConfig(t, "peer-2"), nil)
+
+	// Interconnect Peer 1 with Sponsor
+	sponsor.AddPeer(peer1.Config.ID, protocol.AddressRecord{
+		Addresses: []string{peer1.Config.Address},
+		IsSponsor: false,
+	})
+	peer1.AddPeer(sponsor.Config.ID, protocol.AddressRecord{
+		Addresses: []string{sponsor.Config.Address},
+		IsSponsor: true,
+	})
+
+	// Verify Peer 1 is in active registry on Sponsor
+	require.Contains(t, sponsor.GetPeersCopy(), peer1.Config.ID)
+
+	// 1. Peer 2 announces to Sponsor, then goes offline (before CA rotation occurs)
+	sponsor.AddPeer(peer2.Config.ID, protocol.AddressRecord{
+		Addresses: []string{peer2.Config.Address},
+		IsSponsor: false,
+	})
+	require.Contains(t, sponsor.GetPeersCopy(), peer2.Config.ID)
+	require.True(t, sponsor.IsPeerOnline(peer2.Config.ID))
+
+	offlineReq := struct {
+		ID string `json:"id"`
+	}{ID: peer2.Config.ID}
+	bodyBytesOffline, _ := json.Marshal(offlineReq)
+	reqOffline, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/offline", bytes.NewBuffer(bodyBytesOffline))
+	reqOffline.Header.Set("Content-Type", "application/json")
+	respOffline, err := sponsor.Client().Do(reqOffline)
+	require.NoError(t, err)
+	defer func() { _ = respOffline.Body.Close() }()
+	require.Equal(t, http.StatusOK, respOffline.StatusCode)
+
+	// Verify Peer 2 is marked as offline on Sponsor
+	require.False(t, sponsor.IsPeerOnline(peer2.Config.ID))
+
+	// 2. Peer 1 requests graceful leave from Sponsor (which triggers async CA rotation)
+	leaveReq := struct {
+		ID string `json:"id"`
+	}{ID: peer1.Config.ID}
+	bodyBytes, _ := json.Marshal(leaveReq)
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/leave", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := sponsor.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Verify Peer 1 is removed from Sponsor's registry
+	require.NotContains(t, sponsor.GetPeersCopy(), peer1.Config.ID)
+}
+
+func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-telemetry"), nil)
+
+	// 1. Record some bandwidth activity
+	sponsor.Bandwidth.RecordBytesSent(1024, "/download/somehash")
+	sponsor.Bandwidth.RecordBytesReceived(2048, "/upload")
+
+	// Verify categories are populated
+	categorySent := sponsor.Bandwidth.CategorizePath("/download/somehash")
+	require.Equal(t, "vfs:somehash", categorySent)
+
+	upSpeed, downSpeed := sponsor.GetCurrentBandwidth()
+	require.Equal(t, 1024.0/5.0, upSpeed)
+	require.Equal(t, 2048.0/5.0, downSpeed)
+
+	totalSent, totalRecv := sponsor.GetTotalBandwidth()
+	require.Equal(t, int64(1024), totalSent)
+	require.Equal(t, int64(2048), totalRecv)
+
+	// Verify Category Bandwidth
+	vfsSentSpeed, _ := sponsor.Bandwidth.GetCategoryBandwidth("vfs:somehash")
+	require.Equal(t, 1024.0/5.0, vfsSentSpeed)
+
+	// 2. Query the HTTP /telemetry endpoint
+	req, _ := http.NewRequest(http.MethodGet, sponsor.Config.Address+"/telemetry", nil)
+	resp, err := sponsor.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var telemetryResp map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&telemetryResp)
+	require.NoError(t, err)
+
+	require.Equal(t, sponsor.Config.ID, telemetryResp["node_id"])
+	require.Contains(t, telemetryResp, "cpu_limit")
+	require.Contains(t, telemetryResp, "memory_limit")
+
+	// 3. Verify LocalBandwidthStats used by local Unix socket calls
+	stats := sponsor.LocalBandwidthStats()
+	require.Equal(t, int64(1024), stats.TotalSent)
+	require.Equal(t, int64(2048), stats.TotalReceived)
+}
+
 
