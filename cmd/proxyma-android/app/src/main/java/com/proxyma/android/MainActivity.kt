@@ -113,39 +113,27 @@ fun MainLayout(service: ProxymaService?) {
     val serviceDomain = uiDomains.find { domain -> domain["name"] == "service" }
     val peersDomain = uiDomains.find { domain -> domain["name"] == "peers" }
 
+    val tabs = remember {
+        listOf(
+            NavigationTab(0, "Status", Icons.Default.Dns, "Status"),
+            NavigationTab(1, "Pairing", Icons.Default.Link, "Pairing"),
+            NavigationTab(2, "VFS", Icons.Default.FolderOpen, "VFS"),
+            NavigationTab(3, "Services", Icons.Default.Terminal, "Services"),
+            NavigationTab(4, "Logs", Icons.Default.Notes, "Logs")
+        )
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar(containerColor = DeepGray) {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Dns, contentDescription = "Status") },
-                    label = { Text("Status") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Default.Link, contentDescription = "Pairing") },
-                    label = { Text("Pairing") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.FolderOpen, contentDescription = "VFS") },
-                    label = { Text("VFS") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
-                    icon = { Icon(Icons.Default.Terminal, contentDescription = "Services") },
-                    label = { Text("Services") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
-                    icon = { Icon(Icons.Default.Notes, contentDescription = "Logs") },
-                    label = { Text("Logs") }
-                )
+                tabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = selectedTab == tab.index,
+                        onClick = { selectedTab = tab.index },
+                        icon = { Icon(tab.icon, contentDescription = tab.contentDescription) },
+                        label = { Text(tab.label) }
+                    )
+                }
             }
         }
     ) { paddingValues ->
@@ -165,3 +153,10 @@ fun MainLayout(service: ProxymaService?) {
         }
     }
 }
+
+private data class NavigationTab(
+    val index: Int,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val contentDescription: String
+)
