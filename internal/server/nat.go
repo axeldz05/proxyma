@@ -85,7 +85,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 
 	// If we still don't have a valid STUN/UPnP external IP, we cannot act as a Sponsor
 	if !stunSuccess {
-		s.Config.Logger.Warn("Could not determine public IP (both STUN and UPnP failed), assuming private/CGNAT network")
+		s.Config.Logger.Warn("Could not determine public IP, assuming private/CGNAT network")
 		_ = conn.Close()
 		s.isSponsor = false
 		return
@@ -137,14 +137,14 @@ func (s *Server) determineSponsorAndNATStatus() {
 		}
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
-		
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		probeReq := protocol.ProbeRequest{
 			Address: fmt.Sprintf("https://%s:%s", extIP, ownPort),
 		}
-		
+
 		probeResp, err := s.peerClient.RequestProbe(ctx, s.Config.BootstrapNode, probeReq)
 		if err != nil {
 			s.Config.Logger.Warn("Probe request to Bootstrap Node failed, assuming firewalled", "error", err)

@@ -5,6 +5,10 @@
 * **QUICManager & Hole Punching**: Implementación de `QUICManager` en `internal/p2p/holepunch.go` que maneja el ciclo de vida de sesiones directas QUIC sobre UDP.
 * **Agujereado de NAT por Señalización**: Intercambio de IPs públicas obtenidas vía STUN por el canal de Relay del Sponsor (`/holepunch/init`), seguido de un ping UDP directo bidireccional para abrir las ranuras del NAT.
 * **Enrutamiento Inteligente**: Refactorización de `P2PRoundTripper` en `internal/p2p/router.go` para enrutar tráfico directamente sobre sesiones QUIC abiertas por Hole Punching de forma transparente antes de recurrir a la cola de Relay lento.
+* **Mapeo Automático UPnP / NAT-PMP**: Integración de `NATMapper` en `internal/p2p/nat_mapper.go` utilizando la librería `github.com/fd/go-nat`. Permite abrir puertos TCP y UDP automáticamente en routers residenciales, habilitado por defecto y configurable mediante `"disable_upnp"`.
+* **Mantenedor de Mapeo y Cleanup**: Loop asíncrono de refresco de mapeo en segundo plano ejecutándose cada 15 minutos, con borrado limpio de las reglas del router en el apagado del nodo.
+* **Fallback ante falla de STUN**: Si la consulta STUN externa falla, el nodo autodescubre su IP externa preguntando directamente al gateway router tras realizar el mapeo UPnP, permitiendo al nodo actuar como Sponsor de forma autónoma.
+
 
 ## 20-06-2026
 ### Refactorización del Servidor (Granularidad Continua)
