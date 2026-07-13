@@ -99,19 +99,14 @@ fun isRunningOnMainThread(action: () -> Unit) {
     android.os.Handler(android.os.Looper.getMainLooper()).post(action)
 }
 
-fun getActionError(res: String): String {
-    return try {
-        val map = Gson().fromJson<Map<String, Any>>(res, object : TypeToken<Map<String, Any>>() {}.type)
-        (map["error"] as? String) ?: ""
-    } catch (e: Exception) {
-        ""
-    }
-}
+fun getActionError(res: String): String = parseJSONField(res, "error")
 
-fun getActionMessage(res: String): String {
+fun getActionMessage(res: String): String = parseJSONField(res, "message")
+
+private fun parseJSONField(json: String, key: String): String {
     return try {
-        val map = Gson().fromJson<Map<String, Any>>(res, object : TypeToken<Map<String, Any>>() {}.type)
-        (map["message"] as? String) ?: ""
+        val map = Gson().fromJson<Map<String, Any>>(json, object : TypeToken<Map<String, Any>>() {}.type)
+        (map[key] as? String) ?: ""
     } catch (e: Exception) {
         ""
     }
