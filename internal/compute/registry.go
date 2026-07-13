@@ -82,7 +82,7 @@ func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
 
 func validateType(paramName string, value any, expectedType string) error {
 	switch expectedType {
-	case "string":
+	case "string", "file":
 		if _, ok := value.(string); !ok {
 			return fmt.Errorf("invalid type for parameter '%s': expected string", paramName)
 		}

@@ -22,16 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.ui.theme.CardGray
 import com.proxyma.android.ui.theme.VioletPrimary
+import com.proxyma.android.models.FormParameter
 import com.proxyma.android.utils.*
-
-data class FormParameter(
-    val name: String,
-    val type: String,
-    val required: Boolean,
-    val description: String,
-    val uiHint: String? = null,
-    val defaultValue: String? = null
-)
 
 @Composable
 fun DynamicActionForm(
@@ -124,18 +116,13 @@ fun ParameterInput(
     val boolValue = value as? Boolean ?: false
 
     val isFilePicker = remember(param) {
-        param.uiHint == "file_picker" || 
-        param.uiHint == "image_picker" ||
-        param.name.lowercase().let { 
-            it.contains("image") || it.contains("img") || it.contains("photo") || it.contains("file") || it.contains("path")
-        }
+        param.type == "file" || param.uiHint == "file_picker" || param.uiHint == "image_picker"
     }
 
     val isImagePicker = remember(param) {
-        param.uiHint == "image_picker" || 
-        param.name.lowercase().let { 
+        param.uiHint == "image_picker" || (param.type == "file" && param.name.lowercase().let { 
             it.contains("image") || it.contains("img") || it.contains("photo")
-        }
+        })
     }
 
     var isFileUploading by remember { mutableStateOf(false) }

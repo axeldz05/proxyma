@@ -65,31 +65,26 @@ func GetServiceDetails(name string) string {
 	}
 
 	var reqPermissions []string
-	hasImageParam := false
 	hasFileParam := false
+	hasImageParam := false
 
 	var params []ParameterDetail
 	for pName, rules := range schema.Parameters {
-		lower := strings.ToLower(pName)
-		isImg := strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo")
-		isFil := strings.Contains(lower, "file") || strings.Contains(lower, "path")
-
-		if isImg {
-			hasImageParam = true
-		}
-		if isFil {
-			hasFileParam = true
-		}
-
 		desc := fmt.Sprintf("Provide a text value for %s.", pName)
 		switch rules.Type {
 		case "bool":
 			desc = fmt.Sprintf("Toggle to enable or disable the %s option.", pName)
 		case "int", "float":
 			desc = fmt.Sprintf("Enter a numerical value for %s.", pName)
-		default:
+		case "file":
+			hasFileParam = true
+			lower := strings.ToLower(pName)
+			isImg := strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo")
 			if isImg {
+				hasImageParam = true
 				desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", pName)
+			} else {
+				desc = fmt.Sprintf("Provide a file path or select a file for %s.", pName)
 			}
 		}
 

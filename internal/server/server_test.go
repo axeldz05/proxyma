@@ -197,7 +197,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 	svDemandingService := NewServer(t, testutil.DefaultConfig(t, "2"), nil)
 
 	savedParameters := map[string]protocol.ServiceParameter{
-		"image":    {Type: "string", Required: true},
+		"image":    {Type: "file", Required: true},
 		"language": {Type: "string", Required: false},
 		"output":   {Type: "string", Required: false},
 	}
@@ -247,6 +247,74 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		taskResult, exists := svWithService.Compute.GetTaskResponse(taskID)
 		return exists && taskResult.Status == "completed"
 	}, 2*time.Second, 100*time.Millisecond, "The completion Webhook never arrived")
+}
+
+func TestFileParameterTypePropagatesThroughDiscovery(t *testing.T) {
+	t.Parallel()
+	provider := NewServer(t, testutil.DefaultConfig(t, "file-provider"), nil)
+	consumer := NewServer(t, testutil.DefaultConfig(t, "file-consumer"), nil)
+
+	schema := protocol.ServiceSchema{
+		Name:        "pdf-converter",
+		Description: "Converts documents to PDF format",
+		Parameters: map[string]protocol.ServiceParameter{
+			"input":   {Type: "file", Required: true},
+			"quality": {Type: "int", Required: false},
+		},
+	}
+	handler := func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"status": "ok"}, nil
+	}
+	require.NoError(t, provider.Compute.RegisterNewService(schema, handler))
+
+	consumer.AddPeer(provider.Config.ID, protocol.AddressRecord{Addresses: []string{provider.Config.Address}})
+	provider.AddPeer(consumer.Config.ID, protocol.AddressRecord{Addresses: []string{consumer.Config.Address}})
+
+	query := protocol.DiscoveryQuery{
+		Service:      "pdf-converter",
+		SortStrategy: protocol.StrategyFastest,
+	}
+
+	_, _, discovered, err := consumer.RequestServiceToCluster(query)
+	require.NoError(t, err)
+	require.Equal(t, "file", discovered.Parameters["input"].Type, "file type must propagate through discovery")
+	require.True(t, discovered.Parameters["input"].Required)
+	require.Equal(t, "int", discovered.Parameters["quality"].Type, "non-file params must remain unchanged")
+}
+
+func TestFileParameterTypeValidatesAsString(t *testing.T) {
+	t.Parallel()
+	provider := NewServer(t, testutil.DefaultConfig(t, "file-validator"), nil)
+
+	schema := protocol.ServiceSchema{
+		Name: "compressor",
+		Parameters: map[string]protocol.ServiceParameter{
+			"input": {Type: "file", Required: true},
+		},
+	}
+	handler := func(_ context.Context, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"received": payload["input"]}, nil
+	}
+	require.NoError(t, provider.Compute.RegisterNewService(schema, handler))
+
+	// Valid: string path should pass validation (DispatchTask returns nil)
+	validTask := protocol.TaskRequest{
+		TaskID:  "file-valid",
+		Service: "compressor",
+		Payload: map[string]any{"input": "/vfs/document.pdf"},
+	}
+	err := provider.DispatchTask(provider.Config.Address, validTask)
+	require.NoError(t, err, "file param with valid string path should pass validation")
+
+	// Invalid: non-string value should be rejected by parameter validation
+	invalidTask := protocol.TaskRequest{
+		TaskID:  "file-invalid",
+		Service: "compressor",
+		Payload: map[string]any{"input": 12345},
+	}
+	err = provider.DispatchTask(provider.Config.Address, invalidTask)
+	require.Error(t, err, "file param with non-string value should be rejected at validation")
+	require.Contains(t, err.Error(), "400", "validation should return a 400 bad request")
 }
 
 func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {

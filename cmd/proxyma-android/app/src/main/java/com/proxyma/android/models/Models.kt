@@ -16,11 +16,13 @@ data class VfsFile(
 
 data class LogRecord(val timestamp: String, val level: String, val message: String)
 
-data class ParameterDetail(
+data class FormParameter(
     val name: String,
     val type: String,
     val required: Boolean,
-    val description: String
+    val description: String,
+    val uiHint: String? = null,
+    val defaultValue: String? = null
 )
 
 data class ServiceDetail(
@@ -28,6 +30,16 @@ data class ServiceDetail(
     val description: String?,
     val providerAddress: String?,
     val requiredPermissions: List<String>?,
-    val parameters: List<ParameterDetail>?,
+    val parameters: List<FormParameter>?,
+    val error: String? = null
+)
+
+data class FileTask(
+    val taskId: String,
+    val service: String,
+    val input: String,
+    val output: String,
+    val status: String, // "running", "completed", "failed"
+    val resultPath: String? = null,
     val error: String? = null
 )
