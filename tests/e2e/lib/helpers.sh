@@ -21,6 +21,9 @@ if [ -z "$E2E_DATA_DIR" ]; then
     exit 1
 fi
 
+# Always clean any stale directories on startup to ensure a clean state
+rm -rf "$E2E_DATA_DIR" || true
+
 # Path to the E2E compose file relative to the helper's location
 COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.e2e.yml"
 COMPOSE_CMD="docker compose -p $E2E_PROJECT_NAME -f $COMPOSE_FILE"

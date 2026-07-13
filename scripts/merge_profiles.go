@@ -38,11 +38,11 @@ func main() {
 				continue
 			}
 			parts := strings.Fields(line)
-			if len(parts) != 2 {
+			if len(parts) != 3 {
 				continue
 			}
-			block := parts[0]
-			count, err := strconv.Atoi(parts[1])
+			block := parts[0] + " " + parts[1]
+			count, err := strconv.Atoi(parts[2])
 			if err != nil {
 				continue
 			}
