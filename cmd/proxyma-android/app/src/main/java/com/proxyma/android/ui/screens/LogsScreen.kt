@@ -55,18 +55,9 @@ fun LogsScreen(telemetryDomain: Map<String, Any>?) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showInfo, onCheckedChange = { showInfo = it })
-                Text("Info", color = Color.White)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showWarn, onCheckedChange = { showWarn = it })
-                Text("Warning", color = AmberWarning)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showError, onCheckedChange = { showError = it })
-                Text("Error", color = ErrorRed)
-            }
+            LogFilterCheckbox("Info", showInfo, Color.White) { showInfo = it }
+            LogFilterCheckbox("Warning", showWarn, AmberWarning) { showWarn = it }
+            LogFilterCheckbox("Error", showError, ErrorRed) { showError = it }
         }
 
         Spacer(Modifier.height(12.dp))
@@ -113,5 +104,18 @@ fun LogsScreen(telemetryDomain: Map<String, Any>?) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LogFilterCheckbox(
+    label: String,
+    checked: Boolean,
+    tint: Color,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Text(label, color = tint)
     }
 }

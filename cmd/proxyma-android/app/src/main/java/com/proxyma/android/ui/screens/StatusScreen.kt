@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.models.Peer
 import com.proxyma.android.ui.components.Icon
+import com.proxyma.android.ui.components.StatusIndicator
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 
@@ -85,20 +86,15 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Daemon Status", fontWeight = FontWeight.Bold, color = Color.Gray)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(RoundedCornerShape(5.dp))
-                                    .background(if (isRunning) MintGreen else ErrorRed)
-                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (isRunning) "ONLINE" else "OFFLINE",
-                                color = if (isRunning) MintGreen else ErrorRed,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
+                        StatusIndicator(
+                            active = isRunning,
+                            activeLabel = "ONLINE",
+                            inactiveLabel = "OFFLINE",
+                            activeColor = MintGreen,
+                            inactiveColor = ErrorRed,
+                            dotSize = 10.dp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
                     }
                     Spacer(Modifier.height(12.dp))
                     Text("Node ID: $nodeId", color = Color.White, fontSize = 15.sp)
@@ -177,20 +173,15 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                             Text(peer.id, fontWeight = FontWeight.Bold, color = Color.White)
                             Text(peer.address, fontSize = 12.sp, color = Color.Gray)
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(if (peer.online) MintGreen else Color.Gray)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (peer.online) "Active" else "Offline",
-                                color = if (peer.online) MintGreen else Color.Gray,
-                                fontSize = 12.sp
-                            )
-                        }
+                        StatusIndicator(
+                            active = peer.online,
+                            activeLabel = "Active",
+                            inactiveLabel = "Offline",
+                            activeColor = MintGreen,
+                            inactiveColor = Color.Gray,
+                            dotSize = 8.dp,
+                            fontSize = 12.sp
+                        )
                     }
                 }
             }
