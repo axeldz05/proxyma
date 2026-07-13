@@ -115,6 +115,7 @@ type NodeConfig struct {
 	IsSponsorOverride    *bool  `json:"is_sponsor_override,omitempty"`
 	MinRelayPollInterval int    `json:"min_relay_poll_interval,omitempty"`
 	MaxRelayPollInterval int    `json:"max_relay_poll_interval,omitempty"`
+	DisableUPnP          bool   `json:"disable_upnp,omitempty"`
 	Logger               *slog.Logger
 }
 

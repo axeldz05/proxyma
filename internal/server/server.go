@@ -49,6 +49,7 @@ type Server struct {
 	udpConn         *net.UDPConn
 	publicUDPAddr   string
 	quicMgr         *p2p.QUICManager
+	natMapper       *p2p.NATMapper
 }
 
 type DownloadJob struct {
@@ -173,6 +174,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.Config.Logger.Info("Initiating shutdown...")
 	close(s.done)
 	s.announceOffline(ctx)
+	if s.natMapper != nil {
+		s.natMapper.Stop()
+	}
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			s.Config.Logger.Error("HTTP server shutdown failed", "error", err)
@@ -752,6 +756,19 @@ func (s *Server) ExecuteSync() error {
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	s.CheckNAT()
 	addresses := []string{s.Config.Address}
+	if s.isSponsor && s.publicUDPAddr != "" {
+		host, _, err := net.SplitHostPort(s.publicUDPAddr)
+		if err == nil {
+			tcpPortStr := utils.ExtractPort(s.Config.Address)
+			if s.natMapper != nil {
+				if mappedTCP, _ := s.natMapper.GetMappedPorts(); mappedTCP > 0 {
+					tcpPortStr = fmt.Sprintf("%d", mappedTCP)
+				}
+			}
+			publicTCPAddr := fmt.Sprintf("https://%s:%s", host, tcpPortStr)
+			addresses = append(addresses, publicTCPAddr)
+		}
+	}
 	if s.publicUDPAddr != "" {
 		addresses = append(addresses, "quic://"+s.publicUDPAddr)
 	}
