@@ -1112,4 +1112,28 @@ func TestDetermineSponsorAndNATStatus(t *testing.T) {
 	})
 }
 
+func TestAnnounceEndpointEnforcesMTLS(t *testing.T) {
+	srv := NewServer(t, testutil.DefaultConfig(t, "sponsor-node"), nil)
+
+	// Make an HTTP POST request to /peers/announce WITHOUT client certificates
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr}
+
+	reqBody := protocol.AddPeerRequest{
+		ID: "malicious-node",
+		Address: protocol.AddressRecord{
+			Addresses: []string{"https://127.0.0.1:9999"},
+		},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	resp, err := client.Post(srv.Config.Address+"/peers/announce", "application/json", bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	// Verify that it was rejected with StatusForbidden (403)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
 

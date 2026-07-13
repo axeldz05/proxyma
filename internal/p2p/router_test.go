@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"testing"
@@ -102,4 +103,54 @@ func TestP2PRoundTripperRelayFallback(t *testing.T) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "Relay OK", string(bodyBytes))
+}
+
+func TestP2PRoundTripperPeerIdentityMismatch(t *testing.T) {
+	// 1. Generate CA and certificates for 'bob'
+	caPath := t.TempDir()
+	err := p2p.InitCluster(caPath)
+	require.NoError(t, err)
+
+	err = p2p.IssueNodeCertificate(caPath, caPath, "bob")
+	require.NoError(t, err)
+
+	caCertFile := filepath.Join(caPath, "ca.crt")
+	nodeCertFile := filepath.Join(caPath, "bob.crt")
+	nodeKeyFile := filepath.Join(caPath, "bob.key")
+
+	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+	require.NoError(t, err)
+
+	// 2. Start a secure TLS server presenting 'bob''s certificate
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hijacked-response"))
+	}))
+	server.TLS = serverTLS
+	server.StartTLS()
+	defer server.Close()
+
+	// 3. Configure the router to dial 'alice' at 'bob''s server URL
+	router := &p2p.P2PRoundTripper{
+		Base: &http.Transport{
+			TLSClientConfig: clientTLS,
+		},
+	}
+	router.UpdatePeerRoute("alice", protocol.AddressRecord{
+		Addresses: []string{server.URL},
+		Sequence:  1,
+	})
+
+	client := &http.Client{
+		Transport: router,
+	}
+
+	// 4. Request 'alice'
+	req, err := http.NewRequest(http.MethodGet, "http://alice.proxyma.local/some/path", nil)
+	require.NoError(t, err)
+
+	// This should fail because the direct connection will reject 'bob''s certificate for 'alice'
+	_, err = client.Do(req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "peer identity mismatch")
 }
