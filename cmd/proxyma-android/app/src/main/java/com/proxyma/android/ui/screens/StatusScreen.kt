@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.models.Peer
 import com.proxyma.android.ui.components.Icon
+import com.proxyma.android.ui.components.ProxymaCard
+import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.components.StatusIndicator
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
@@ -65,20 +67,11 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Text(
-                text = (telemetryDomain?.get("title") as? String) ?: "Node Overview",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+            ScreenTitle((telemetryDomain?.get("title") as? String) ?: "Node Overview")
         }
 
         item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = CardGray),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            ProxymaCard {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -105,11 +98,7 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
         }
 
         item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = CardGray),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            ProxymaCard {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Bandwidth Traffic", fontWeight = FontWeight.Bold, color = Color.Gray)
                     Spacer(Modifier.height(12.dp))
@@ -157,11 +146,7 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
             }
         } else {
             items(peerList) { peer ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = CardGray),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                ProxymaCard(shape = RoundedCornerShape(8.dp)) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

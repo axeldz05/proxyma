@@ -26,6 +26,8 @@ import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.DynamicActionForm
 import com.proxyma.android.ui.components.FormParameter
+import com.proxyma.android.ui.components.ProxymaCard
+import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 import kotlin.concurrent.thread
@@ -61,12 +63,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text(
-                    text = (serviceDomain?.get("title") as? String) ?: "Cluster Services",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                ScreenTitle((serviceDomain?.get("title") as? String) ?: "Cluster Services")
             }
 
             // 1. Horizontal list of file task executions
@@ -84,8 +81,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         items(fileTasks) { task ->
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = CardGray),
+                            ProxymaCard(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
                                     .width(260.dp)
@@ -161,20 +157,19 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 }
             } else {
                 items(serviceNames) { svcName ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = CardGray),
+                    ProxymaCard(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
                                 selectedService = svcName
-                                isLoading = true
-                                thread {
-                                    val details = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
-                                    isRunningOnMainThread {
-                                        serviceDetailJson = details
-                                        isLoading = false
-                                    }
+                                executeGoCall(
+                                    context = context,
+                                    onStart = { isLoading = true },
+                                    onComplete = { isLoading = false },
+                                    action = { proxyma_bind.Proxyma_bind.getServiceDetails(svcName) }
+                                ) { details ->
+                                    serviceDetailJson = details
                                 }
                             }
                     ) {
@@ -303,11 +298,7 @@ fun ServiceDetailLayout(details: ServiceDetail, onBack: () -> Unit) {
         }
 
         item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = CardGray),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            ProxymaCard {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Description", fontWeight = FontWeight.Bold, color = Color.Gray)
                     Spacer(Modifier.height(4.dp))
@@ -323,11 +314,7 @@ fun ServiceDetailLayout(details: ServiceDetail, onBack: () -> Unit) {
         val permissions = details.requiredPermissions ?: emptyList()
         if (permissions.isNotEmpty()) {
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = CardGray),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                ProxymaCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Required Permissions", fontWeight = FontWeight.Bold, color = Color.Gray)
                         Spacer(Modifier.height(6.dp))

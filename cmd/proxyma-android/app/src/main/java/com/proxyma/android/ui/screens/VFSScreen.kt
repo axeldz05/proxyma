@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.models.VfsFile
 import com.proxyma.android.ui.components.Icon
+import com.proxyma.android.ui.components.ProxymaCard
+import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 import kotlin.concurrent.thread
@@ -67,12 +69,7 @@ fun VFSScreen(storageDomain: Map<String, Any>?) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = (storageDomain?.get("title") as? String) ?: "VFS File Manager",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+            ScreenTitle((storageDomain?.get("title") as? String) ?: "VFS File Manager")
 
             Row {
                 IconButton(
@@ -126,11 +123,7 @@ fun VFSFileCard(file: VfsFile) {
     val context = LocalContext.current
     var isActionRunning by remember { mutableStateOf(false) }
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = CardGray),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    ProxymaCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

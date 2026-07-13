@@ -34,12 +34,7 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Text(
-                text = title,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+            ScreenTitle(title)
         }
 
         actions?.forEach { action ->

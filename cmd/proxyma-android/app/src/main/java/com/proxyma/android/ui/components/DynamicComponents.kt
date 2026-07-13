@@ -269,11 +269,7 @@ fun DynamicActionCard(
     submitButtonText: String,
     onSubmit: (inputs: Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = CardGray),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    ProxymaCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
             if (!description.isNullOrEmpty()) {

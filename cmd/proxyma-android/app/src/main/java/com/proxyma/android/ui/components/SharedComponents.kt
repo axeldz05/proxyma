@@ -3,6 +3,8 @@ package com.proxyma.android.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,6 +17,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.proxyma.android.ui.theme.CardGray
 import com.proxyma.android.ui.theme.MintGreen
 
 @Composable
@@ -58,4 +61,32 @@ fun StatusIndicator(
             fontWeight = fontWeight
         )
     }
+}
+
+@Composable
+fun ScreenTitle(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = text,
+        fontSize = 24.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color.White,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun ProxymaCard(
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = CardGray),
+        shape = shape,
+        modifier = modifier.fillMaxWidth(),
+        content = content
+    )
 }

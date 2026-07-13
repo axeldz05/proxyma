@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.models.LogRecord
+import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 
@@ -43,12 +44,7 @@ fun LogsScreen(telemetryDomain: Map<String, Any>?) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = (telemetryDomain?.get("title") as? String) ?: "Node System Logs",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
+        ScreenTitle((telemetryDomain?.get("title") as? String) ?: "Node System Logs")
         Spacer(Modifier.height(12.dp))
 
         Row(
