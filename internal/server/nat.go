@@ -26,14 +26,31 @@ func (s *Server) determineSponsorAndNATStatus() {
 		stunServer = "stun.l.google.com:19302"
 	}
 
-	extIP, extPort, conn, err := utils.GetExternalUDPListener(stunServer, 5*time.Second)
-	if err != nil {
-		s.Config.Logger.Warn("STUN check failed, assuming private/CGNAT network", "error", err)
-		s.isSponsor = false
-		return
-	}
+	var extIP string
+	var extPort int
+	var conn *net.UDPConn
+	var err error
 
-	s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
+	extIP, extPort, conn, err = utils.GetExternalUDPListener(stunServer, 5*time.Second)
+	stunSuccess := err == nil
+
+	if !stunSuccess {
+		s.Config.Logger.Warn("STUN check failed, trying UPnP fallback to discover gateway", "error", err)
+		if s.Config.DisableUPnP {
+			s.isSponsor = false
+			return
+		}
+		// Bind a local UDP socket to use for QUIC
+		var listenErr error
+		conn, listenErr = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if listenErr != nil {
+			s.Config.Logger.Warn("Could not bind local UDP socket after STUN failure", "error", listenErr)
+			s.isSponsor = false
+			return
+		}
+	} else {
+		s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
+	}
 
 	// Try UPnP/NAT-PMP mapping if enabled (default)
 	if !s.Config.DisableUPnP {
@@ -54,6 +71,24 @@ func (s *Server) determineSponsorAndNATStatus() {
 		if mappedUDP > 0 {
 			extPort = mappedUDP
 		}
+
+		// If STUN failed but UPnP succeeded, query router for our external IP
+		if !stunSuccess && mappedTCP > 0 {
+			routerIP, routerErr := s.natMapper.GetExternalAddress()
+			if routerErr == nil && routerIP != nil {
+				extIP = routerIP.String()
+				stunSuccess = true // We have a valid public IP now!
+				s.Config.Logger.Info("UPnP successfully mapped ports and retrieved public IP from gateway", "ip", extIP, "tcpPort", tcpPort, "udpPort", extPort)
+			}
+		}
+	}
+
+	// If we still don't have a valid STUN/UPnP external IP, we cannot act as a Sponsor
+	if !stunSuccess {
+		s.Config.Logger.Warn("Could not determine public IP (both STUN and UPnP failed), assuming private/CGNAT network")
+		_ = conn.Close()
+		s.isSponsor = false
+		return
 	}
 
 	// Initialize QUIC Manager with the socket used for STUN query
