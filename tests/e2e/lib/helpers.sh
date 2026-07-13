@@ -50,6 +50,7 @@ run_node() {
 bootstrap_node() {
     local node_id=$1
     local port=$2
+    mkdir -p "$E2E_DATA_DIR/$node_id/coverage"
     echo -e "🏗️ Initializing node '$node_id' on port $port..."
     run_node "$node_id" init --id "$node_id" --port "$port" --storage "/app/data" >/dev/null
 }
@@ -59,6 +60,8 @@ join_cluster() {
     local sponsor_id=$2
     local sponsor_port=$3
     local local_port=$4
+
+    mkdir -p "$E2E_DATA_DIR/$node_id/coverage"
 
     if [ -z "$local_port" ]; then
         if [[ "$node_id" == *"node-1"* ]]; then

@@ -49,7 +49,7 @@ fi
 
 # 4. Run Go unit tests and generate unit coverage profile
 echo -e "\n${BLUE}🧪 [4/5] Running Go unit tests...${NC}"
-if ! go test -coverprofile=coverage-unit.out ./...; then
+if ! go test -count=1 -coverprofile=coverage-unit.out ./...; then
     echo -e "${RED}❌ Unit tests failed. Unified coverage canceled.${NC}"
     exit 1
 fi
