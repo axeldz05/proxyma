@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +36,10 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 	if err = db.Update(func(tx *bolt.Tx) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte("subscriptions")); err != nil {
 			logger.Error("Failed to create bucket for subscriptions", "error", err)
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte("peers")); err != nil {
+			logger.Error("Failed to create bucket for peers", "error", err)
 			return err
 		}
 		_, err := tx.CreateBucketIfNotExists([]byte("vfs_index"))
@@ -276,4 +281,54 @@ func (se *StorageEngine) countSubscribedHashReferences(hash string) int {
 	}
 	return refCount
 }
+
+func (se *StorageEngine) SavePeer(peerID string, record protocol.AddressRecord) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("peers"))
+		if b == nil {
+			return fmt.Errorf("peers bucket not found")
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(peerID), data)
+	})
+}
+
+func (se *StorageEngine) DeletePeer(peerID string) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("peers"))
+		if b == nil {
+			return fmt.Errorf("peers bucket not found")
+		}
+		return b.Delete([]byte(peerID))
+	})
+}
+
+func (se *StorageEngine) LoadPeers() (map[string]protocol.AddressRecord, error) {
+	peers := make(map[string]protocol.AddressRecord)
+	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("peers"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var record protocol.AddressRecord
+			if err := json.Unmarshal(v, &record); err == nil {
+				peers[string(k)] = record
+			}
+			return nil
+		})
+	})
+	return peers, err
+}
+
+func (se *StorageEngine) Close() error {
+	if se.subscriptions != nil {
+		return se.subscriptions.Close()
+	}
+	return nil
+}
+
 

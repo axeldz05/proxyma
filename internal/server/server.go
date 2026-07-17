@@ -39,6 +39,7 @@ type Server struct {
 	downloadQueue chan DownloadJob
 	unixListener  net.Listener
 	done          chan struct{}
+	shutdownOnce  sync.Once
 
 	isSponsor       bool
 	checkNATOnce    sync.Once
@@ -109,6 +110,21 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		return fmt.Errorf("peer of address %s not found", rawSource)
 	})
 
+	// Load persisted peers from DB and populate registry
+	if peers, err := s.Storage.LoadPeers(); err == nil {
+		for peerID, record := range peers {
+			s.Peers.AddPeer(peerID, record)
+			s.Peers.SetPeerOffline(peerID, fmt.Errorf("not contacted yet"))
+			if updater, ok := s.peerClient.(interface {
+				UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+			}); ok {
+				updater.UpdatePeerRoute(peerID, record)
+			}
+		}
+	} else {
+		cfg.Logger.Error("Failed to load persisted peers", "error", err)
+	}
+
 	s.handler = s.MountHandlers()
 
 	for range cfg.Workers {
@@ -171,36 +187,45 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.Config.Logger.Info("Initiating shutdown...")
-	close(s.done)
-	s.announceOffline(ctx)
-	if s.natMapper != nil {
-		s.natMapper.Stop()
-	}
-	if s.httpServer != nil {
-		if err := s.httpServer.Shutdown(ctx); err != nil {
-			s.Config.Logger.Error("HTTP server shutdown failed", "error", err)
-			return err
+	var err error
+	s.shutdownOnce.Do(func() {
+		s.Config.Logger.Info("Initiating shutdown...")
+		close(s.done)
+		s.announceOffline(ctx)
+		if s.natMapper != nil {
+			s.natMapper.Stop()
 		}
-	}
-	s.Config.Logger.Info("HTTP server stopped accepting connections.")
+		if s.httpServer != nil {
+			if hsErr := s.httpServer.Shutdown(ctx); hsErr != nil {
+				s.Config.Logger.Error("HTTP server shutdown failed", "error", hsErr)
+				err = hsErr
+				return
+			}
+		}
+		s.Config.Logger.Info("HTTP server stopped accepting connections.")
 
-	if s.Compute != nil {
-		s.Compute.Close()
-		s.Config.Logger.Info("Compute Engine closed.")
-	}
+		if s.Compute != nil {
+			s.Compute.Close()
+			s.Config.Logger.Info("Compute Engine closed.")
+		}
 
-	if s.quicMgr != nil {
-		s.quicMgr.Close()
-		s.Config.Logger.Info("QUIC Manager closed.")
-	}
+		if s.quicMgr != nil {
+			s.quicMgr.Close()
+			s.Config.Logger.Info("QUIC Manager closed.")
+		}
 
-	if s.unixListener != nil {
-		_ = s.unixListener.Close()
-	}
+		if s.unixListener != nil {
+			_ = s.unixListener.Close()
+		}
 
-	s.Config.Logger.Info("Node shutdown complete.")
-	return nil
+		if s.Storage != nil {
+			_ = s.Storage.Close()
+			s.Config.Logger.Info("Storage Engine closed.")
+		}
+
+		s.Config.Logger.Info("Node shutdown complete.")
+	})
+	return err
 }
 
 func (s *Server) listenUnixSocket() {
@@ -565,6 +590,14 @@ func (s *Server) IsPeerOnline(peerID string) bool {
 
 func (s *Server) RemovePeer(peerID string) {
 	s.Peers.RemovePeer(peerID)
+	if s.Storage != nil {
+		_ = s.Storage.DeletePeer(peerID)
+	}
+	if updater, ok := s.peerClient.(interface {
+		RemovePeerRoute(peerID string)
+	}); ok {
+		updater.RemovePeerRoute(peerID)
+	}
 }
 
 func (s *Server) announceOffline(ctx context.Context) {
@@ -586,6 +619,11 @@ func (s *Server) SetAddress(addr string) {
 
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	if s.Peers.AddPeer(peerID, addressRecord) {
+		if s.Storage != nil {
+			if err := s.Storage.SavePeer(peerID, addressRecord); err != nil {
+				s.Config.Logger.Error("Failed to save peer to DB", "peerID", peerID, "error", err)
+			}
+		}
 		if updater, ok := s.peerClient.(interface {
 			UpdatePeerRoute(peerID string, record protocol.AddressRecord)
 		}); ok {

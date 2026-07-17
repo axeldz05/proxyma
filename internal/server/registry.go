@@ -152,6 +152,10 @@ func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
 		pr.peerErrorsMu.Lock()
 		delete(pr.peerErrors, peerID)
 		pr.peerErrorsMu.Unlock()
+	} else {
+		pr.peerErrorsMu.Lock()
+		pr.peerErrors[peerID] = "offline"
+		pr.peerErrorsMu.Unlock()
 	}
 }
 
@@ -163,9 +167,9 @@ func (pr *PeerRegistry) SetPeerOffline(peerID string, err error) {
 
 	pr.peerErrorsMu.Lock()
 	if err != nil {
-		pr.peerErrors[peerID] = err.Error()
+		pr.peerErrors[peerID] = "offline or could not reach: " + err.Error()
 	} else {
-		pr.peerErrors[peerID] = "unknown connection error"
+		pr.peerErrors[peerID] = "offline or could not reach"
 	}
 	pr.peerErrorsMu.Unlock()
 }

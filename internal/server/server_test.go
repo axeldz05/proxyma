@@ -10,8 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"proxyma/internal/compute"
@@ -1043,7 +1043,7 @@ func TestOfflineNotificationAndSelfHealing(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.False(t, srv1.IsPeerOnline(srv2.Config.ID), "Node2 should be marked offline")
-	
+
 	peersRecord := srv1.GetPeersCopy()
 	_, exists := peersRecord[srv2.Config.ID]
 	require.True(t, exists, "Node2 should not be deleted from the peer registry")
@@ -1155,8 +1155,8 @@ func TestDetermineSponsorAndNATStatus(t *testing.T) {
 
 			// Respond with loopback IP (127.0.0.1) as mapped address
 			resp := make([]byte, 32)
-			binary.BigEndian.PutUint16(resp[0:2], 0x0101)  // Success Response
-			binary.BigEndian.PutUint16(resp[2:4], 12)      // Length
+			binary.BigEndian.PutUint16(resp[0:2], 0x0101) // Success Response
+			binary.BigEndian.PutUint16(resp[2:4], 12)     // Length
 			binary.BigEndian.PutUint32(resp[4:8], 0x2112A442)
 			copy(resp[8:20], buf[8:20])
 
@@ -1359,4 +1359,65 @@ func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
 	require.Equal(t, int64(2048), stats.TotalReceived)
 }
 
+func TestPeerPersistenceAndStatus(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "persisted_node")
 
+	// Create a new server instance. It will initialize BoltDB.
+	srv1 := NewServer(t, cfg, nil)
+
+	peerID := "some-peer"
+	addrRec := protocol.AddressRecord{
+		Addresses: []string{"https://127.0.0.1:9090"},
+		IsSponsor: false,
+		Sequence:  12345,
+	}
+
+	// Add peer. This should automatically save the peer to BoltDB.
+	srv1.AddPeer(peerID, addrRec)
+
+	// Verify it's online initially in srv1
+	require.True(t, srv1.IsPeerOnline(peerID))
+
+	// Simulate connection failure (marking peer offline with an error)
+	srv1.SetPeerOffline(peerID, fmt.Errorf("connection refused"))
+	require.False(t, srv1.IsPeerOnline(peerID))
+	require.Equal(t, "offline or could not reach: connection refused", srv1.Peers.GetPeerError(peerID))
+
+	// Simulate peer sending offline signal
+	srv1.SetPeerOnline(peerID, false)
+	require.False(t, srv1.IsPeerOnline(peerID))
+	require.Equal(t, "offline", srv1.Peers.GetPeerError(peerID))
+
+	// Shutdown srv1 so we can start srv2 using the same directory
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := srv1.Shutdown(ctx)
+	require.NoError(t, err)
+	srv1.httpTestSrv.Close()
+
+	// Now start a second server from the same directory
+	// It should load the peer from BoltDB.
+	cfg2 := cfg
+	cfg2.ID = "persisted_node"
+	srv2 := NewServer(t, cfg2, nil)
+
+	// Check if peer list has been successfully reloaded from DB
+	peersList := srv2.LocalPeersList()
+	require.Len(t, peersList, 1)
+	require.Equal(t, peerID, peersList[0].ID)
+	require.False(t, peersList[0].Online)
+	require.Equal(t, "offline or could not reach: not contacted yet", peersList[0].Error)
+
+	// Verify removing peer deletes it from DB as well
+	srv2.RemovePeer(peerID)
+
+	// Shutdown srv2
+	err = srv2.Shutdown(ctx)
+	require.NoError(t, err)
+	srv2.httpTestSrv.Close()
+
+	// Start a third server and verify the peer is gone
+	srv3 := NewServer(t, cfg2, nil)
+	require.Len(t, srv3.LocalPeersList(), 0)
+}
