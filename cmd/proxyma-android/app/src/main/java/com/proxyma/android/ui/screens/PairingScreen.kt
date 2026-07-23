@@ -14,6 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.ProxymaService
+import com.proxyma.android.models.FormParameter
 import com.proxyma.android.ui.components.*
 import com.proxyma.android.utils.*
 import kotlin.concurrent.thread

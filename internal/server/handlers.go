@@ -59,6 +59,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST /services/callback", s.Compute.HandleServiceCallback)
 	mux.HandleFunc("POST /services/notify", s.HandleServiceNotify)
 	mux.HandleFunc("GET /services", s.HandleGetServices)
+	mux.HandleFunc("POST /schemas/notify", s.HandleSchemaNotify)
 
 	mux.HandleFunc("GET /peers", s.GetPeers)
 	mux.HandleFunc("POST /peers/announce", s.HandleAnnounce)
@@ -282,6 +283,29 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
+	req, ok := utils.DecodeJSONOrError[protocol.PipelineNotification](w, r)
+	if !ok {
+		return
+	}
+
+	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
+
+	if req.Action == "add" {
+		if s.Storage != nil {
+			_ = s.Storage.SavePipelineSchema(req.Schema)
+		}
+		s.Compute.RegisterPipeline(req.Schema)
+	} else if req.Action == "remove" {
+		if s.Storage != nil {
+			_ = s.Storage.DeletePipelineSchema(req.Schema.ID)
+		}
+		s.Compute.UnregisterPipeline(req.Schema.ID)
+	}
 
 	w.WriteHeader(http.StatusOK)
 }

@@ -257,3 +257,75 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 		}, 2*time.Second, 100*time.Millisecond, "Expected task to fail due to unmarshallable response")
 	})
 }
+
+func TestPipelineStepInputValidation(t *testing.T) {
+	logger := protocol.NewLogger(os.Stdout, false)
+	mockPeerClient := &testutil.MockPeerClient{}
+	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node")
+	defer engine.Close()
+
+	// Register a service with required parameters
+	schema := protocol.ServiceSchema{
+		Name: "strictService",
+		Parameters: map[string]protocol.ServiceParameter{
+			"required_str": {Type: "string", Required: true},
+			"required_int": {Type: "int", Required: true},
+		},
+	}
+
+	handler := func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"status": "ok"}, nil
+	}
+	err := engine.RegisterNewService(schema, handler)
+	require.NoError(t, err)
+
+	t.Run("Fails validation when parameter is missing", func(t *testing.T) {
+		taskID := "strict-job-fail-missing"
+		taskReq := protocol.TaskRequest{
+			TaskID:  taskID,
+			Service: "strictService",
+			Payload: map[string]any{
+				"required_str": "hello",
+				// missing required_int
+			},
+		}
+
+		err = engine.SubmitTask(taskReq)
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			resp, exists := engine.GetTaskResponse(taskID)
+			if !exists {
+				return false
+			}
+			require.Equal(t, "failed", resp.Status)
+			require.Contains(t, resp.Error, "missing required parameter: 'required_int'")
+			return true
+		}, 2*time.Second, 100*time.Millisecond)
+	})
+
+	t.Run("Fails validation when parameter type is invalid", func(t *testing.T) {
+		taskID := "strict-job-fail-type"
+		taskReq := protocol.TaskRequest{
+			TaskID:  taskID,
+			Service: "strictService",
+			Payload: map[string]any{
+				"required_str": "hello",
+				"required_int": "not-an-int",
+			},
+		}
+
+		err = engine.SubmitTask(taskReq)
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			resp, exists := engine.GetTaskResponse(taskID)
+			if !exists {
+				return false
+			}
+			require.Equal(t, "failed", resp.Status)
+			require.Contains(t, resp.Error, "invalid type for parameter 'required_int'")
+			return true
+		}, 2*time.Second, 100*time.Millisecond)
+	})
+}

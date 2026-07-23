@@ -19,3 +19,5 @@ Próximas características y problemas de red (según README.md):
 - Consistencia Distribuida: Integrar un modelo de consenso distribuido (como Raft) para la unificación del estado global de la red.
 - Reducción del overhead de serialización: Adoptar gRPC (y grpc-gateway) para comunicación entre nodos y streaming, reemplazando el protocolo JSON actual.
 - Buscar la posibilidad de permitir subscribcion de servicios. Posiblemente relacionado con refactorear a una arquitectura estilo microkernel centralizado en servicios.
+- Buscar centralizar el encolamiento de procesos o llamados pendientes que no se pudieron enviar debido a falta de conexion u otros problemas.
+- Autostager del VFS es abusado en varias situaciones. Posiblemente haga falta alguna solucion mas simple.

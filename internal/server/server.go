@@ -18,6 +18,7 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/utils"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -125,6 +126,60 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		cfg.Logger.Error("Failed to load persisted peers", "error", err)
 	}
 
+	// Configure compute callbacks
+	s.Compute.SetServiceFinder(s.RequestServiceToCluster)
+	s.Compute.SetTaskDispatcher(s.DispatchTask)
+	s.Compute.SetVFSBlobResolver(func(ctx context.Context, requesterNodeID, hash string) (string, error) {
+		hasLocal, _ := s.Storage.HasPhysicalBlob(hash)
+		if !hasLocal {
+			if requesterNodeID != "" && requesterNodeID != s.Config.ID {
+				dlCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+				defer cancel()
+				body, err := s.peerClient.DownloadBlob(dlCtx, requesterNodeID, hash)
+				if err != nil {
+					return "", fmt.Errorf("failed to download VFS blob %s from %s: %w", hash, requesterNodeID, err)
+				}
+				defer func() { _ = body.Close() }()
+				_, _, err = s.Storage.SavePhysicalBlob(body)
+				if err != nil {
+					return "", fmt.Errorf("failed to store downloaded VFS blob: %w", err)
+				}
+			}
+		}
+		return s.Storage.GetBlobPath(hash), nil
+	})
+	s.Compute.SetVFSBlobStager(func(pathStr string) (string, int64, error) {
+		if _, err := os.Stat(pathStr); err != nil {
+			return "", 0, err
+		}
+		f, err := os.Open(pathStr)
+		if err != nil {
+			return "", 0, err
+		}
+		defer func() { _ = f.Close() }()
+		hash, size, err := s.Storage.SavePhysicalBlob(f)
+		if err != nil {
+			return "", 0, err
+		}
+		s.Storage.Upsert(protocol.IndexEntry{
+			Name:    filepath.Base(pathStr),
+			Hash:    hash,
+			Size:    size,
+			Version: 1,
+		})
+		s.Storage.SetSubscription(filepath.Base(pathStr), true)
+		return hash, size, nil
+	})
+
+	// Load persisted pipeline schemas
+	if schemas, err := s.Storage.LoadPipelineSchemas(); err == nil {
+		for _, schema := range schemas {
+			s.Compute.RegisterPipeline(schema)
+		}
+	} else {
+		cfg.Logger.Error("Failed to load persisted pipeline schemas", "error", err)
+	}
+
 	s.handler = s.MountHandlers()
 
 	for range cfg.Workers {
@@ -155,16 +210,16 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	rawAddr := s.Config.Address
 	rawAddr = strings.TrimPrefix(rawAddr, "https://")
 	rawAddr = strings.TrimPrefix(rawAddr, "http://")
-	host, port, err := net.SplitHostPort(rawAddr)
+	_, port, err := net.SplitHostPort(rawAddr)
 	var addr string
 	if err == nil {
-		if host == "127.0.0.1" || host == "localhost" {
-			addr = "127.0.0.1:" + port
-		} else {
-			addr = "0.0.0.0:" + port
-		}
+		addr = "0.0.0.0:" + port
 	} else {
-		addr = ":" + utils.ExtractPort(s.Config.Address)
+		extractedPort := utils.ExtractPort(s.Config.Address)
+		if extractedPort == "" {
+			extractedPort = "8080"
+		}
+		addr = "0.0.0.0:" + extractedPort
 	}
 
 	hs := &http.Server{
@@ -348,8 +403,34 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			}
 			actionErr = s.Storage.DeleteLocalCache(fileName)
 
+		case "vfs_fetch":
+			fileName := req.Args["name"]
+			if fileName == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			actionErr = s.FetchFileOnDemand(fileName)
+
 		case "service_discover":
 			respData, actionErr = s.LocalServiceDiscover()
+
+		case "service_detail":
+			name := req.Args["name"]
+			if name == "" {
+				actionErr = fmt.Errorf("missing name parameter")
+				break
+			}
+			schema, exists := s.Compute.GetService(name)
+			if exists {
+				respData = schema
+				break
+			}
+			_, _, schema2, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
+			if err != nil {
+				actionErr = err
+				break
+			}
+			respData = schema2
 
 		case "service_add":
 			respData, actionErr = s.LocalServiceAdd(
@@ -400,6 +481,24 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		case "peers":
 			respData = s.LocalPeersList()
 
+		case "pipeline_add":
+			actionErr = s.LocalPipelineAdd(req.Args["schema"])
+
+		case "pipeline_validate":
+			actionErr = s.LocalPipelineValidate(req.Args["schema"])
+
+		case "pipeline_remove":
+			actionErr = s.LocalPipelineRemove(req.Args["id"])
+
+		case "pipeline_list":
+			respData = s.LocalPipelineList()
+
+		case "pipeline_get":
+			respData, actionErr = s.LocalPipelineGet(req.Args["id"])
+
+		case "pipeline_clone":
+			respData, actionErr = s.LocalPipelineClone(req.Args["id"], req.Args["new_id"], req.Args["target_node"])
+
 		default:
 			actionErr = fmt.Errorf("unknown action: %s", req.Action)
 		}
@@ -449,116 +548,7 @@ func (s *Server) LoadLocalServices() {
 		var handler compute.ServiceHandler
 		switch svc.Type {
 		case "script", "exec":
-			baseHandler := compute.BuildScriptHandler(svc.Exec)
-			handler = func(ctx context.Context, payload map[string]any) (map[string]any, error) {
-				inputHash, hasHash := payload["input_hash"].(string)
-				inputName, hasName := payload["input_name"].(string)
-				requesterNodeID, hasReq := payload["requester_node_id"].(string)
-
-				var inputSizeVal int64
-				var hasSize bool
-				if rawSize, ok := payload["input_size"]; ok {
-					if fv, ok := rawSize.(float64); ok {
-						inputSizeVal = int64(fv)
-						hasSize = true
-					} else if iv, ok := rawSize.(int64); ok {
-						inputSizeVal = iv
-						hasSize = true
-					} else if iv, ok := rawSize.(int); ok {
-						inputSizeVal = int64(iv)
-						hasSize = true
-					}
-				}
-
-				var localInputPath string
-				var cleanInputOnExit bool
-
-				if hasHash && hasName && inputHash != "" {
-					hasLocal, _ := s.Storage.HasPhysicalBlob(inputHash)
-					if hasLocal {
-						localInputPath = s.Storage.GetLocalBlobPath(inputHash)
-						payload["input_path"] = localInputPath
-					} else if hasSize && hasReq && requesterNodeID != "" {
-						s.Config.Logger.Info("File input detected in payload. Downloading P2P from requester...", "requester", requesterNodeID, "file", inputName, "hash", inputHash)
-
-						inputMeta := protocol.IndexEntry{
-							Name:    inputName,
-							Hash:    inputHash,
-							Size:    inputSizeVal,
-							Version: 1,
-						}
-						s.Storage.Upsert(inputMeta)
-						s.Storage.SetSubscription(inputName, true)
-
-						dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
-						body, err := s.peerClient.DownloadBlob(dlCtx, requesterNodeID, inputHash)
-						if err != nil {
-							dlCancel()
-							return nil, fmt.Errorf("failed to download input file P2P: %w", err)
-						}
-						err = s.Storage.StoreRemoteBlob(inputMeta, body)
-						_ = body.Close()
-						dlCancel()
-						if err != nil {
-							return nil, fmt.Errorf("failed to save input blob: %w", err)
-						}
-
-						localInputPath = s.Storage.GetLocalBlobPath(inputHash)
-						payload["input_path"] = localInputPath
-						cleanInputOnExit = true
-					}
-				}
-
-				outputName, hasOutName := payload["output_name"].(string)
-				if !hasOutName || outputName == "" {
-					if inputName != "" {
-						outputName = "output_" + inputName
-					} else {
-						outputName = "output_result"
-					}
-					payload["output_name"] = outputName
-				}
-				localOutputPath := filepath.Join(os.TempDir(), fmt.Sprintf("service_out_%d_%s", time.Now().UnixNano(), filepath.Base(outputName)))
-				payload["output_path"] = localOutputPath
-
-				outputs, err := baseHandler(ctx, payload)
-				if cleanInputOnExit && localInputPath != "" {
-					_ = s.Storage.DeleteLocalCache(inputName)
-				}
-				if err != nil {
-					if localOutputPath != "" {
-						_ = os.Remove(localOutputPath)
-					}
-					return nil, err
-				}
-
-				if localOutputPath != "" {
-					if _, statErr := os.Stat(localOutputPath); statErr == nil {
-						f, openErr := os.Open(localOutputPath)
-						if openErr != nil {
-							_ = os.Remove(localOutputPath)
-							return nil, fmt.Errorf("failed to open output file: %w", openErr)
-						}
-						outHash, outSize, uploadErr := s.Storage.SaveLocalFileWithoutNotification(outputName, f)
-						_ = f.Close()
-						_ = os.Remove(localOutputPath)
-						if uploadErr != nil {
-							return nil, fmt.Errorf("failed to upload output file: %w", uploadErr)
-						}
-
-						if outputs == nil {
-							outputs = make(map[string]any)
-						}
-						outputs["output_hash"] = outHash
-						outputs["output_size"] = outSize
-						outputs["output_name"] = outputName
-					} else {
-						s.Config.Logger.Warn("Service completed successfully but output file was not created by the script", "expected_path", localOutputPath)
-					}
-				}
-
-				return outputs, nil
-			}
+			handler = compute.BuildScriptHandler(svc.Exec)
 		case "grpc":
 			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
 		default:
@@ -629,6 +619,11 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 		}); ok {
 			updater.UpdatePeerRoute(peerID, addressRecord)
 		}
+		go func(targetPeer string) {
+			for _, schema := range s.Compute.ListPipelines() {
+				s.NotifySchemaToPeer(targetPeer, schema, "add")
+			}
+		}(peerID)
 	}
 }
 
@@ -698,6 +693,29 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 }
 
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
+	if req.Payload != nil {
+		for k, v := range req.Payload {
+			if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
+				if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
+					f, err := os.Open(pathStr)
+					if err == nil {
+						hash, _, err := s.Storage.SavePhysicalBlob(f)
+						_ = f.Close()
+						if err == nil {
+							s.Storage.Upsert(protocol.IndexEntry{
+								Name:    filepath.Base(pathStr),
+								Hash:    hash,
+								Size:    fi.Size(),
+								Version: 1,
+							})
+							req.Payload[k] = "vfs://" + hash
+						}
+					}
+				}
+			}
+		}
+	}
+
 	s.Compute.RegisterOutgoingTask(req)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1083,7 +1101,49 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 			DownSpeed:  recvSpeed,
 		})
 	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Name < list[j].Name
+	})
 	return list
+}
+
+func (s *Server) FetchFileOnDemand(name string) error {
+	entry, ok := s.Storage.GetFileMeta(name)
+	if !ok {
+		return fmt.Errorf("file '%s' not found in VFS metadata", name)
+	}
+	hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
+	if hasLocal {
+		return nil
+	}
+
+	peersSnapshot := s.GetPeersRecordCopy()
+	var downloadErr error
+	for peerID, addrRec := range peersSnapshot {
+		if peerID == s.Config.ID || len(addrRec.Addresses) == 0 {
+			continue
+		}
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		body, err := s.peerClient.DownloadBlob(ctxTimeout, peerID, entry.Hash)
+		if err != nil {
+			cancel()
+			downloadErr = err
+			continue
+		}
+		err = s.Storage.StoreRemoteBlob(entry, body)
+		_ = body.Close()
+		cancel()
+		if err == nil {
+			s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
+			return nil
+		}
+		downloadErr = err
+	}
+
+	if downloadErr != nil {
+		return fmt.Errorf("failed to fetch file '%s' from cluster peers: %v", name, downloadErr)
+	}
+	return fmt.Errorf("no peer holds physical replica for file '%s'", name)
 }
 
 func (s *Server) LocalServiceDiscover() ([]string, error) {
@@ -1091,20 +1151,27 @@ func (s *Server) LocalServiceDiscover() ([]string, error) {
 	for _, name := range s.Compute.ListServices() {
 		names[name] = true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	for peerID := range s.GetPeersCopy() {
+	peers := s.GetPeersCopy()
+	var discoveryErr error
+	for peerID := range peers {
 		peerSvc, err := s.DiscoverServices(ctx, peerID)
 		if err == nil {
 			for _, name := range peerSvc {
 				names[name] = true
 			}
+		} else {
+			discoveryErr = err
+			s.Config.Logger.Warn("Service discovery from cluster peer failed", "peerID", peerID, "error", err)
 		}
 	}
 	var result []string
 	for name := range names {
 		result = append(result, name)
 	}
+	sort.Strings(result)
+	s.Config.Logger.Info("Service discovery scan completed", "peers_scanned", len(peers), "services_found", len(result), "last_err", discoveryErr)
 	return result, nil
 }
 
@@ -1114,9 +1181,16 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 		_ = json.Unmarshal([]byte(payloadStr), &payload)
 	}
 
-	targetPeerID, _, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
-	if err != nil {
-		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
+	var targetPeerID string
+	var err error
+
+	if _, isPipeline := s.Compute.GetPipeline(serviceName); isPipeline {
+		targetPeerID = s.Config.ID
+	} else {
+		targetPeerID, _, _, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+		if err != nil {
+			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
+		}
 	}
 
 	taskID := fmt.Sprintf("task_kt_%d", time.Now().UnixNano())
@@ -1162,33 +1236,59 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 	}
 
 	if completed && resp.Status == "completed" && resp.Outputs != nil {
-		if outputHash, ok := resp.Outputs["output_hash"].(string); ok && outputHash != "" {
-			outputName, _ := resp.Outputs["output_name"].(string)
-			outputSizeVal, _ := resp.Outputs["output_size"].(float64)
-			if outputName != "" {
-				nextVersion := 1
-				if existing, exists := s.Storage.GetFileMeta(outputName); exists {
-					nextVersion = existing.Version + 1
-				}
-				outputMeta := protocol.IndexEntry{
-					Name:    outputName,
-					Hash:    outputHash,
-					Size:    int64(outputSizeVal),
-					Version: nextVersion,
-				}
-				s.Storage.Upsert(outputMeta)
-				s.Storage.SetSubscription(outputName, true)
+		var outputHash string
+		var outputName string
+		var outputSize int64
 
-				dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
-				if err == nil {
-					_ = s.Storage.StoreRemoteBlob(outputMeta, body)
-					_ = body.Close()
-				} else {
-					s.Config.Logger.Error("Failed to auto-download output blob", "error", err)
-				}
-				dlCancel()
+		if h, ok := resp.Outputs["output_hash"].(string); ok && h != "" {
+			outputHash = h
+			outputName, _ = resp.Outputs["output_name"].(string)
+			if sz, ok := resp.Outputs["output_size"].(float64); ok {
+				outputSize = int64(sz)
 			}
+		} else {
+			for k, v := range resp.Outputs {
+				if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
+					outputHash = filepath.Base(strings.TrimPrefix(pathStr, "vfs://"))
+					outputName = k
+					break
+				}
+			}
+		}
+
+		if outputHash != "" {
+			if outputName == "" {
+				outputName = outputHash + ".pdf"
+			}
+			nextVersion := 1
+			if existing, exists := s.Storage.GetFileMeta(outputName); exists {
+				nextVersion = existing.Version + 1
+			}
+			outputMeta := protocol.IndexEntry{
+				Name:    outputName,
+				Hash:    outputHash,
+				Size:    outputSize,
+				Version: nextVersion,
+			}
+			s.Storage.Upsert(outputMeta)
+			s.Storage.SetSubscription(outputName, true)
+
+			dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
+			if err == nil {
+				_ = s.Storage.StoreRemoteBlob(outputMeta, body)
+				_ = body.Close()
+				localPath := s.Storage.GetBlobPath(outputHash)
+				resp.Outputs["result_path"] = localPath
+				for k, v := range resp.Outputs {
+					if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
+						resp.Outputs[k] = localPath
+					}
+				}
+			} else {
+				s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
+			}
+			dlCancel()
 		}
 	}
 
@@ -1472,4 +1572,241 @@ func (s *Server) LocalServiceRemove(name string) (string, error) {
 	s.LoadLocalServices()
 
 	return fmt.Sprintf("Service '%s' removed successfully.", name), nil
+}
+
+func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
+	if schema.ID == "" {
+		return fmt.Errorf("pipeline ID cannot be empty")
+	}
+	if len(schema.Steps) == 0 {
+		return fmt.Errorf("pipeline must have at least one step")
+	}
+
+	// 1. Verify unique step IDs and collect them
+	stepServices := make(map[string]string) // stepID -> serviceName
+	stepNodes := make(map[string]string)    // stepID -> targetNodeID
+	var stepIDs []string
+	for _, step := range schema.Steps {
+		if step.ID == "" {
+			return fmt.Errorf("step ID cannot be empty")
+		}
+		if step.Service == "" {
+			return fmt.Errorf("step '%s' service name cannot be empty", step.ID)
+		}
+		if _, exists := stepServices[step.ID]; exists {
+			return fmt.Errorf("duplicate step ID found: '%s'. Each step in a pipeline must have a unique ID", step.ID)
+		}
+		stepServices[step.ID] = step.Service
+		stepNodes[step.ID] = step.TargetNodeID
+		stepIDs = append(stepIDs, step.ID)
+	}
+
+	// Helper to lookup service schema locally or from peers
+	getSchema := func(serviceName string) (protocol.ServiceSchema, bool) {
+		if sc, ok := s.Compute.GetService(serviceName); ok {
+			return sc, true
+		}
+		if s.Peers != nil {
+			if sc, ok := s.Peers.GetServiceSchema(serviceName); ok {
+				return sc, true
+			}
+		}
+		return protocol.ServiceSchema{}, false
+	}
+
+	// Helper to format available parameters
+	formatParams := func(params map[string]protocol.ServiceParameter) string {
+		if len(params) == 0 {
+			return "none"
+		}
+		var list []string
+		for k, p := range params {
+			list = append(list, fmt.Sprintf("%s (%s)", k, p.Type))
+		}
+		sort.Strings(list)
+		return strings.Join(list, ", ")
+	}
+
+	// 2. Validate connections
+	for _, conn := range schema.Connections {
+		fromStr := conn.FromStep
+		toStr := conn.ToStep
+		toNodeStr := ""
+		if nodeID, ok := stepNodes[toStr]; ok && nodeID != "" {
+			toNodeStr = fmt.Sprintf(" on node '%s'", nodeID)
+		}
+
+		// Validate FromStep
+		if conn.FromStep != "$initial" {
+			if _, exists := stepServices[conn.FromStep]; !exists {
+				return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: source step '%s' is not defined in pipeline steps %v",
+					conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.FromStep, stepIDs)
+			}
+		}
+
+		// Validate ToStep
+		toService, exists := stepServices[conn.ToStep]
+		if !exists {
+			return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: target step '%s' is not defined in pipeline steps %v",
+				conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.ToStep, stepIDs)
+		}
+
+		// Look up ToStep service schema
+		toSchema, toSchemaExists := getSchema(toService)
+		if toSchemaExists {
+			// Check if ToPort is a valid parameter in the Target Service
+			param, hasParam := toSchema.Parameters[conn.ToPort]
+			if !hasParam {
+				validParams := formatParams(toSchema.Parameters)
+				extraNote := ""
+				if _, isOutput := toSchema.Outputs[conn.ToPort]; isOutput {
+					extraNote = fmt.Sprintf(" (Note: '%s' is defined as an OUTPUT port for service '%s', not an input parameter!)", conn.ToPort, toService)
+				}
+				return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: port '%s' is not a valid input parameter for step '%s' (running service '%s'%s). Expected input parameters for service '%s': [%s]%s",
+					fromStr, conn.FromPort, toStr, conn.ToPort, conn.ToPort, toStr, toService, toNodeStr, toService, validParams, extraNote)
+			}
+
+			// If FromStep is not initial, and we can resolve its schema, check type compatibility
+			if conn.FromStep != "$initial" {
+				fromService := stepServices[conn.FromStep]
+				fromNodeStr := ""
+				if nodeID, ok := stepNodes[conn.FromStep]; ok && nodeID != "" {
+					fromNodeStr = fmt.Sprintf(" on node '%s'", nodeID)
+				}
+				fromSchema, fromSchemaExists := getSchema(fromService)
+				if fromSchemaExists {
+					// Check if FromPort is a valid output in the Source Service
+					outParam, hasOutParam := fromSchema.Outputs[conn.FromPort]
+					if !hasOutParam {
+						if len(fromSchema.Outputs) > 0 {
+							validOutputs := formatParams(fromSchema.Outputs)
+							return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: port '%s' is not a valid output for step '%s' (running service '%s'%s). Available output ports for service '%s': [%s]",
+								fromStr, conn.FromPort, toStr, conn.ToPort, conn.FromPort, conn.FromStep, fromService, fromNodeStr, fromService, validOutputs)
+						}
+					} else {
+						// Verify type compatibility
+						if outParam.Type != param.Type {
+							return fmt.Errorf("type mismatch on connection link [%s].%s ──► [%s].%s: source port '%s' outputs type '%s' (service '%s'%s, step '%s'), but target port '%s' requires type '%s' (service '%s'%s, step '%s')",
+								fromStr, conn.FromPort, toStr, conn.ToPort, conn.FromPort, outParam.Type, fromService, fromNodeStr, conn.FromStep, conn.ToPort, param.Type, toService, toNodeStr, conn.ToStep)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) LocalPipelineValidate(schemaJSON string) error {
+	var schema protocol.PipelineSchema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
+	}
+
+	if err := s.ValidatePipelineSchema(schema); err != nil {
+		return fmt.Errorf("pipeline validation failed: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) LocalPipelineAdd(schemaJSON string) error {
+	var schema protocol.PipelineSchema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
+	}
+
+	if err := s.ValidatePipelineSchema(schema); err != nil {
+		return fmt.Errorf("pipeline validation failed: %w", err)
+	}
+
+	// Save to DB
+	if s.Storage != nil {
+		if err := s.Storage.SavePipelineSchema(schema); err != nil {
+			return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
+		}
+	}
+
+	// Register in Compute
+	s.Compute.RegisterPipeline(schema)
+
+	// Gossip update
+	go s.NotifySchema(schema, "add")
+
+	return nil
+}
+
+func (s *Server) LocalPipelineRemove(id string) error {
+	if id == "" {
+		return fmt.Errorf("pipeline ID cannot be empty")
+	}
+
+	// Delete from DB
+	if s.Storage != nil {
+		if err := s.Storage.DeletePipelineSchema(id); err != nil {
+			return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
+		}
+	}
+
+	// Unregister from Compute
+	s.Compute.UnregisterPipeline(id)
+
+	// Gossip update
+	go s.NotifySchema(protocol.PipelineSchema{ID: id}, "remove")
+
+	return nil
+}
+
+func (s *Server) LocalPipelineList() []protocol.PipelineSchema {
+	return s.Compute.ListPipelines()
+}
+
+func (s *Server) LocalPipelineGet(id string) (protocol.PipelineSchema, error) {
+	if id == "" {
+		return protocol.PipelineSchema{}, fmt.Errorf("pipeline ID cannot be empty")
+	}
+	if schema, ok := s.Compute.GetPipeline(id); ok {
+		return schema, nil
+	}
+	return protocol.PipelineSchema{}, fmt.Errorf("pipeline schema '%s' not found in cluster", id)
+}
+
+func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string) (protocol.PipelineSchema, error) {
+	schema, err := s.LocalPipelineGet(id)
+	if err != nil {
+		return protocol.PipelineSchema{}, err
+	}
+	if newID != "" {
+		schema.ID = newID
+	} else {
+		schema.ID = schema.ID + "-custom"
+	}
+	if targetNodeID == "$local" || targetNodeID == "local" {
+		targetNodeID = s.Config.ID
+	}
+	if targetNodeID != "" {
+		for i := range schema.Steps {
+			schema.Steps[i].TargetNodeID = targetNodeID
+		}
+	}
+	return schema, nil
+}
+
+func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {
+	payload := protocol.PipelineNotification{
+		Schema: schema,
+		Action: action,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
+	if err != nil {
+		s.Config.Logger.Debug("Failed to notify peer about schema update", "peerID", peerID, "pipelineID", schema.ID, "error", err)
+	}
+}
+
+func (s *Server) NotifySchema(schema protocol.PipelineSchema, action string) {
+	for peerID := range s.GetPeersCopy() {
+		s.NotifySchemaToPeer(peerID, schema, action)
+	}
 }

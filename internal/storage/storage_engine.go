@@ -42,6 +42,10 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 			logger.Error("Failed to create bucket for peers", "error", err)
 			return err
 		}
+		if _, err := tx.CreateBucketIfNotExists([]byte("pipeline_schemas")); err != nil {
+			logger.Error("Failed to create bucket for pipeline_schemas", "error", err)
+			return err
+		}
 		_, err := tx.CreateBucketIfNotExists([]byte("vfs_index"))
 		return err
 	}); err != nil {
@@ -68,6 +72,14 @@ func (se *StorageEngine) GetFileMeta(logicalName string) (protocol.IndexEntry, b
 
 func (se *StorageEngine) HasPhysicalBlob(hash string) (bool, error) {
 	return se.physical.BlobExists(hash)
+}
+
+func (se *StorageEngine) GetBlobPath(hash string) string {
+	return se.physical.GetBlobPath(hash)
+}
+
+func (se *StorageEngine) SavePhysicalBlob(content io.Reader) (string, int64, error) {
+	return se.physical.SaveBlob(content)
 }
 
 func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
@@ -329,6 +341,48 @@ func (se *StorageEngine) Close() error {
 		return se.subscriptions.Close()
 	}
 	return nil
+}
+
+func (se *StorageEngine) SavePipelineSchema(schema protocol.PipelineSchema) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("pipeline_schemas"))
+		if b == nil {
+			return fmt.Errorf("pipeline_schemas bucket not found")
+		}
+		data, err := json.Marshal(schema)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(schema.ID), data)
+	})
+}
+
+func (se *StorageEngine) DeletePipelineSchema(id string) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("pipeline_schemas"))
+		if b == nil {
+			return fmt.Errorf("pipeline_schemas bucket not found")
+		}
+		return b.Delete([]byte(id))
+	})
+}
+
+func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
+	schemas := make(map[string]protocol.PipelineSchema)
+	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("pipeline_schemas"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var schema protocol.PipelineSchema
+			if err := json.Unmarshal(v, &schema); err == nil {
+				schemas[string(k)] = schema
+			}
+			return nil
+		})
+	})
+	return schemas, err
 }
 
 

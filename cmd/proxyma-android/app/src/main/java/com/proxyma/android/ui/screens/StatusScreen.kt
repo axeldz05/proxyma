@@ -145,7 +145,7 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                 )
             }
         } else {
-            items(peerList) { peer ->
+            items(peerList, key = { it.id }) { peer ->
                 ProxymaCard(shape = RoundedCornerShape(8.dp)) {
                     Row(
                         modifier = Modifier

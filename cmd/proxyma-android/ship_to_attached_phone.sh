@@ -9,7 +9,7 @@ echo -e "${INFO}[1/5] Asegurando variables de entorno para Android...${NC}"
 export ANDROID_HOME=/opt/android-sdk
 export ANDROID_NDK_HOME=/opt/android-ndk
 export JAVA_HOME=/usr/lib/jvm/default
-export PATH=$PATH:$ANDROID_HOME/build-tools/35.0.0:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin
+export PATH=$PATH:$ANDROID_HOME/build-tools/35.0.0:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin:$HOME/go/bin
 
 echo -e "${INFO}[2/5] Buscando dispositivo físico conectado por USB...${NC}"
 DEVICE_SERIAL=$(adb devices -l | grep -v -E "emulator-|List of" | grep "device" | awk '{print $1}' | head -n 1)
@@ -20,7 +20,15 @@ if [ -z "$DEVICE_SERIAL" ]; then
 fi
 echo -e "${BOLD}✔ Dispositivo detectado correctamente (Serial: $DEVICE_SERIAL).${NC}"
 
-echo -e "${INFO}[3/5] Compilando APK de Debug con Gradle...${NC}"
+echo -e "${INFO}[3/5] Recompilando biblioteca Go-mobile (proxyma.aar)...${NC}"
+gomobile bind -o app/libs/proxyma.aar -target=android -androidapi=21 ../proxyma-bind
+
+if [ $? -ne 0 ]; then
+    echo -e "${ERROR}❌ ERROR: Falló la compilación de la biblioteca Go-mobile.${NC}"
+    exit 1
+fi
+
+echo -e "${INFO}[3.5/5] Compilando APK de Debug con Gradle...${NC}"
 gradle assembleDebug
 
 if [ $? -ne 0 ]; then

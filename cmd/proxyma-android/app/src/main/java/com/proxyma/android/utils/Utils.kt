@@ -95,6 +95,24 @@ fun getFileName(context: Context, uri: Uri): String? {
     return result
 }
 
+fun copyUriToCache(context: Context, uri: Uri): String {
+    val name = getFileName(context, uri) ?: "input_${System.currentTimeMillis()}"
+    val cacheFile = File(context.cacheDir, name)
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        FileOutputStream(cacheFile).use { output ->
+            input.copyTo(output)
+        }
+    }
+    return cacheFile.absolutePath
+}
+
+fun createTempCameraFile(context: Context): Pair<Uri, File> {
+    val photoFile = File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
+    val authority = "${context.packageName}.fileprovider"
+    val uri = FileProvider.getUriForFile(context, authority, photoFile)
+    return Pair(uri, photoFile)
+}
+
 fun isRunningOnMainThread(action: () -> Unit) {
     android.os.Handler(android.os.Looper.getMainLooper()).post(action)
 }
@@ -102,6 +120,25 @@ fun isRunningOnMainThread(action: () -> Unit) {
 fun getActionError(res: String): String = parseJSONField(res, "error")
 
 fun getActionMessage(res: String): String = parseJSONField(res, "message")
+
+fun getResultPath(res: String): String {
+    return try {
+        val map = Gson().fromJson<Map<String, Any>>(res, object : TypeToken<Map<String, Any>>() {}.type)
+        val outputs = map["outputs"] as? Map<String, Any>
+        if (outputs != null) {
+            val resultPath = outputs["result_path"] as? String
+                ?: outputs["output_path"] as? String
+                ?: outputs["note_path"] as? String
+                ?: outputs["path"] as? String
+            if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
+                return resultPath
+            }
+        }
+        ""
+    } catch (e: Exception) {
+        ""
+    }
+}
 
 private fun parseJSONField(json: String, key: String): String {
     return try {

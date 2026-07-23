@@ -53,9 +53,11 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if err := s.registry.ValidateRequest(taskReq); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Validation failed: "+err.Error())
-		return
+	if _, isPipeline := s.GetPipeline(taskReq.Service); !isPipeline {
+		if err := s.registry.ValidateRequest(taskReq); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "Validation failed: "+err.Error())
+			return
+		}
 	}
 	if err := s.SubmitTask(taskReq); err != nil {
 		utils.RespondError(w, http.StatusServiceUnavailable, err.Error())

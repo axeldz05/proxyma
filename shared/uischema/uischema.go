@@ -2,12 +2,13 @@ package uischema
 
 // ParameterDetail defines a parameter for an action
 type ParameterDetail struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"` // "string", "int", "bool", "file"
-	Required     bool   `json:"required"`
-	Description  string `json:"description"`
-	UIHint       string `json:"uiHint,omitempty"` // "file_picker", "image_picker", "text", "password"
-	DefaultValue string `json:"defaultValue,omitempty"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"` // "string", "int", "bool", "file"
+	Required     bool     `json:"required"`
+	Description  string   `json:"description"`
+	UIHint       string   `json:"uiHint,omitempty"` // "file_picker", "image_picker", "text", "password", "dropdown"
+	DefaultValue string   `json:"defaultValue,omitempty"`
+	Options      []string `json:"options,omitempty"`
 }
 
 // TableColumn defines how a column should be formatted in a table view
@@ -111,11 +112,18 @@ var Registry = []DomainDetail{
 				Parameters:  []ParameterDetail{vfsNameParam},
 			},
 			{
+				Name:        "open",
+				Title:       "Open File",
+				Description: "Download on-demand if missing and open or view a VFS file",
+				OutputType:  "text",
+				Parameters:  []ParameterDetail{vfsNameParam},
+			},
+			{
 				Name:        "sync",
 				Title:       "Sync VFS",
 				Description: "Trigger VFS synchronization sequence",
 				OutputType:  "text",
-			},
+				},
 		},
 	},
 	{
@@ -250,6 +258,76 @@ var Registry = []DomainDetail{
 				OutputType:  "json",
 				Parameters: []ParameterDetail{
 					{Name: "task_id", Type: "string", Required: false, Description: "ID of the task to query"},
+				},
+			},
+			{
+				Name:        "add_pipeline",
+				Title:       "Add Pipeline",
+				Description: "Add a service pipeline schema to the cluster",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
+					{Name: "schema-file", Type: "string", Required: true, Description: "Path to JSON file containing the pipeline schema", UIHint: "file_picker"},
+				},
+			},
+			{
+				Name:        "remove_pipeline",
+				Title:       "Remove Pipeline",
+				Description: "Remove a pipeline schema from the cluster",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
+				},
+			},
+			{
+				Name:        "get_pipeline",
+				Title:       "Get Pipeline Schema",
+				Description: "Retrieve a pipeline schema JSON by ID",
+				OutputType:  "json",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
+				},
+			},
+			{
+				Name:        "clone_pipeline",
+				Title:       "Clone Pipeline Schema",
+				Description: "Clone and customize a pipeline schema for local target node execution",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: true, Description: "Existing pipeline identifier to clone"},
+					{Name: "new_id", Type: "string", Required: false, Description: "New ID for cloned pipeline"},
+					{Name: "target_node", Type: "string", Required: false, Description: "Target node ID to assign ($local for current node)"},
+				},
+			},
+			{
+				Name:        "list_pipelines",
+				Title:       "List Pipelines",
+				Description: "List all registered pipeline schemas",
+				OutputType:  "table",
+				Columns: []TableColumn{
+					{Header: "PIPELINE ID", FieldSelector: "id", Format: "string"},
+					{Header: "VERSION", FieldSelector: "version", Format: "string"},
+					{Header: "STEPS COUNT", FieldSelector: "steps", Format: "string"},
+				},
+			},
+			{
+				Name:        "run_pipeline",
+				Title:       "Run Pipeline",
+				Description: "Execute a pipeline across the cluster",
+				OutputType:  "json",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: true, Description: "Pipeline ID to run"},
+					{Name: "payload", Type: "string", Required: false, Description: "Initial input parameters payload in JSON format"},
+				},
+			},
+			{
+				Name:        "edit_pipeline",
+				Title:       "Edit Pipeline",
+				Description: "Launch the interactive TUI pipeline editor",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "id", Type: "string", Required: false, Description: "Pipeline ID to edit from daemon"},
+					{Name: "file", Type: "string", Required: false, Description: "Path to local JSON schema file to load and edit", UIHint: "file_picker"},
 				},
 			},
 		},

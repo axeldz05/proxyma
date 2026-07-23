@@ -55,17 +55,19 @@ func (r *ServiceRegistry) Get(name string) (protocol.ServiceSchema, bool) {
 func (r *ServiceRegistry) ListAll() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return slices.Collect(maps.Keys(r.services))
+	list := slices.Collect(maps.Keys(r.services))
+	slices.Sort(list)
+	return list
 }
 
-func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
-	schema, exists := r.Get(req.Service)
+func (r *ServiceRegistry) ValidatePayload(serviceName string, payload map[string]any) error {
+	schema, exists := r.Get(serviceName)
 	if !exists {
-		return fmt.Errorf("validation failed: service '%s' is not supported by this node", req.Service)
+		return fmt.Errorf("validation failed: service '%s' is not supported by this node", serviceName)
 	}
 
 	for paramName, paramRule := range schema.Parameters {
-		inputValue, inputProvided := req.Payload[paramName]
+		inputValue, inputProvided := payload[paramName]
 		if paramRule.Required && !inputProvided {
 			return fmt.Errorf("missing required parameter: '%s'", paramName)
 		}
@@ -78,6 +80,10 @@ func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
 	}
 
 	return nil
+}
+
+func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
+	return r.ValidatePayload(req.Service, req.Payload)
 }
 
 func validateType(paramName string, value any, expectedType string) error {

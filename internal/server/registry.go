@@ -242,6 +242,18 @@ func (pr *PeerRegistry) GetClusterServices(peerID string) map[string]protocol.Se
 	return services
 }
 
+// GetServiceSchema searches all peers for the given service schema.
+func (pr *PeerRegistry) GetServiceSchema(serviceName string) (protocol.ServiceSchema, bool) {
+	pr.clusterServicesMu.RLock()
+	defer pr.clusterServicesMu.RUnlock()
+	for _, peerServices := range pr.clusterServices {
+		if schema, ok := peerServices[serviceName]; ok {
+			return schema, true
+		}
+	}
+	return protocol.ServiceSchema{}, false
+}
+
 // UpdatePeerService updates a peer service schema.
 func (pr *PeerRegistry) UpdatePeerService(peerID string, action string, schema protocol.ServiceSchema) {
 	pr.clusterServicesMu.Lock()

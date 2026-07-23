@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
+	"proxyma/internal/protocol"
 	"proxyma/shared/uischema"
 
 	"github.com/spf13/cobra"
@@ -113,6 +115,28 @@ func init() {
 						Error string `json:"error"`
 					}
 					if err := json.Unmarshal([]byte(resJSON), &errResp); err == nil && errResp.Error != "" {
+						schemaFile := argsMap["schema-file"]
+						if schemaFile == "" && (strings.HasSuffix(argsMap["name"], ".json") || fileExists(argsMap["name"])) {
+							schemaFile = argsMap["name"]
+						}
+						if schemaFile != "" {
+							fmt.Printf("❌ Failed to add pipeline schema from file '%s': %s\n", schemaFile, errResp.Error)
+							fmt.Printf("💡 Tip: You can open and edit this schema file in the visual editor by running:\n")
+							fmt.Printf("   proxyma service edit_pipeline --file %s\n\n", schemaFile)
+
+							if isTerminalInteractive() {
+								fmt.Print("Would you like to open this file in the visual pipeline editor now? [y/N]: ")
+								var answer string
+								_, _ = fmt.Scanln(&answer)
+								answer = strings.ToLower(strings.TrimSpace(answer))
+								if answer == "y" || answer == "yes" {
+									resJSON = launchEditor("", schemaFile)
+									if !strings.Contains(resJSON, `"error":`) {
+										return nil
+									}
+								}
+							}
+						}
 						return fmt.Errorf("%s", errResp.Error)
 					}
 				}
@@ -157,7 +181,11 @@ func init() {
 								if val == nil {
 									val = ""
 								}
-								formatted = fmt.Sprintf("%v", val)
+								if slice, ok := val.([]any); ok {
+									formatted = fmt.Sprintf("%d", len(slice))
+								} else {
+									formatted = fmt.Sprintf("%v", val)
+								}
 
 								switch col.Format {
 								case "bytes":
@@ -276,6 +304,31 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 				return retErr(errStr)
 			}
 			return retMsg(fmt.Sprintf("Physical cache for file '%s' purged from disk.", name))
+		case "open":
+			name := args["name"]
+			if name == "" {
+				return retErr("missing name parameter")
+			}
+			errStr := proxyma_bind.FetchFileOnDemand(name)
+			if errStr != "" {
+				return retErr(fmt.Sprintf("failed to fetch file '%s' on demand: %s", name, errStr))
+			}
+			filesJson := proxyma_bind.GetVFSFilesJson()
+			var files []protocol.VFSFileStatus
+			_ = json.Unmarshal([]byte(filesJson), &files)
+			var hash string
+			for _, f := range files {
+				if f.Name == name {
+					hash = f.Hash
+					break
+				}
+			}
+			if hash == "" {
+				return retErr(fmt.Sprintf("file '%s' not found in VFS topology", name))
+			}
+			localPath := proxyma_bind.GetLocalBlobPath(hash)
+			_ = exec.Command("xdg-open", localPath).Start()
+			return retMsg(fmt.Sprintf("File '%s' fetched on-demand into cache and opened at: %s", name, localPath))
 		case "sync":
 			errStr := proxyma_bind.SyncVFS()
 			if errStr != "" {
@@ -405,6 +458,44 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			taskID := args["task_id"]
 			return proxyma_bind.GetTaskStatus(taskID)
 
+		case "add_pipeline":
+			return proxyma_bind.AddPipeline(args["id"], args["schema-file"])
+
+		case "remove_pipeline":
+			return proxyma_bind.RemovePipeline(args["id"])
+
+		case "list_pipelines":
+			return proxyma_bind.ListPipelines()
+
+		case "get_pipeline":
+			return proxyma_bind.GetPipelineSchemaJson(args["id"])
+
+		case "clone_pipeline":
+			id := args["id"]
+			newID := args["new_id"]
+			targetNode := args["target_node"]
+			clonedJson := proxyma_bind.ClonePipelineSchemaJson(id, newID, targetNode)
+			if strings.Contains(clonedJson, `"error":`) {
+				return clonedJson
+			}
+			errStr := proxyma_bind.AddPipelineRaw(newID, clonedJson)
+			if errStr != "" {
+				return retErr(errStr)
+			}
+			return retMsg(fmt.Sprintf("Pipeline '%s' successfully cloned and registered locally!", id))
+
+		case "run_pipeline":
+			return proxyma_bind.RunPipeline(args["id"], args["payload"])
+
+		case "edit_pipeline":
+			fileID := args["file"]
+			id := args["id"]
+			if fileID == "" && id != "" && (strings.HasSuffix(id, ".json") || fileExists(id)) {
+				fileID = id
+				id = ""
+			}
+			return launchEditor(id, fileID)
+
 		default:
 			return retErr(fmt.Sprintf("unknown action '%s' for domain '%s'", action, domain))
 		}
@@ -412,6 +503,51 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 	default:
 		return retErr(fmt.Sprintf("unknown domain '%s'", domain))
 	}
+}
+
+func launchEditor(pipelineID string, fileToOpen string) string {
+	binaryPath := "/home/drusila/Projects/proxyma-services/editor/proxyma-editor"
+	if _, err := os.Stat(binaryPath); err != nil {
+		return fmt.Sprintf(`{"error": "Editor binary not found. Please compile it first: %v"}`, err)
+	}
+
+	cmdArgs := []string{"--storage", cliStorage}
+	if pipelineID != "" {
+		cmdArgs = append(cmdArgs, "--id", pipelineID)
+	}
+	if fileToOpen != "" {
+		cmdArgs = append(cmdArgs, "--file", fileToOpen)
+	}
+
+	cmd := exec.Command(binaryPath, cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to run editor: %v"}`, err)
+	}
+	return `{"message": "Editor closed"}`
+}
+
+func isTerminalInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func Execute() {

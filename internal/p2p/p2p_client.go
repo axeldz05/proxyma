@@ -17,6 +17,7 @@ type PeerClient interface {
 	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	Notify(ctx context.Context, peerID string, notification protocol.PeerNotification) error
 	NotifyServiceUpdate(ctx context.Context, peerID string, notification protocol.ServiceNotification) error
+	NotifyPipelineSchema(ctx context.Context, peerID string, notification protocol.PipelineNotification) error
 	AddPeer(peerID string, payload *bytes.Buffer) error
 	DownloadBlob(ctx context.Context, peerID, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerID string) ([]string, error)
@@ -90,6 +91,10 @@ func (c *HTTPPeerClient) Notify(ctx context.Context, peerID string, notification
 
 func (c *HTTPPeerClient) NotifyServiceUpdate(ctx context.Context, peerID string, notification protocol.ServiceNotification) error {
 	return doVoid(ctx, c, "POST", peerID, "services/notify", notification, 0)
+}
+
+func (c *HTTPPeerClient) NotifyPipelineSchema(ctx context.Context, peerID string, notification protocol.PipelineNotification) error {
+	return doVoid(ctx, c, "POST", peerID, "schemas/notify", notification, 0)
 }
 
 // If the returned error is nil, the [ReadCloser] is a non-nil Body which the user is expected to close.

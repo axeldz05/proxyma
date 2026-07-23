@@ -1421,3 +1421,326 @@ func TestPeerPersistenceAndStatus(t *testing.T) {
 	srv3 := NewServer(t, cfg2, nil)
 	require.Len(t, srv3.LocalPeersList(), 0)
 }
+
+func TestDistributedPipelineExecution(t *testing.T) {
+	t.Parallel()
+
+	// 1. Create three servers: Node A, Node B, and Node C
+	srvA := NewServer(t, testutil.DefaultConfig(t, "node-a"), nil)
+	srvB := NewServer(t, testutil.DefaultConfig(t, "node-b"), nil)
+	srvC := NewServer(t, testutil.DefaultConfig(t, "node-c"), nil)
+
+	// Set their public addresses to the httptest server URLs
+	srvA.SetAddress(srvA.httpTestSrv.URL)
+	srvB.SetAddress(srvB.httpTestSrv.URL)
+	srvC.SetAddress(srvC.httpTestSrv.URL)
+
+	// Update peer routes on the http clients so they can talk mTLS to each other
+	if updater, ok := srvA.PeerClient().(interface {
+		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	}); ok {
+		updater.UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
+		updater.UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+	}
+	if updater, ok := srvB.PeerClient().(interface {
+		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	}); ok {
+		updater.UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+		updater.UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+	}
+	if updater, ok := srvC.PeerClient().(interface {
+		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	}); ok {
+		updater.UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+		updater.UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
+	}
+
+	// 2. Wire them as cluster peers
+	srvA.AddPeer("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
+	srvA.AddPeer("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+
+	srvB.AddPeer("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+	srvB.AddPeer("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+
+	srvC.AddPeer("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+	srvC.AddPeer("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
+
+	// Mark them online so they don't block
+	srvA.SetPeerOnline("node-b", true)
+	srvA.SetPeerOnline("node-c", true)
+	srvB.SetPeerOnline("node-a", true)
+	srvB.SetPeerOnline("node-c", true)
+	srvC.SetPeerOnline("node-a", true)
+	srvC.SetPeerOnline("node-b", true)
+
+	// 3. Register compute services
+	// Step 1: "test/multiply" (runs on Node B, multiplies by 2)
+	err := srvB.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name: "test/multiply",
+		Parameters: map[string]protocol.ServiceParameter{
+			"val": {Type: "int", Required: true},
+		},
+	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		val, ok := payload["val"].(float64)
+		if !ok {
+			if vInt, ok := payload["val"].(int); ok {
+				val = float64(vInt)
+			}
+		}
+		return map[string]any{"result": val * 2}, nil
+	})
+	require.NoError(t, err)
+
+	// Step 2: "test/add" (runs on Node C, adds 10)
+	err = srvC.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name: "test/add",
+		Parameters: map[string]protocol.ServiceParameter{
+			"val": {Type: "int", Required: true},
+		},
+	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		val, ok := payload["val"].(float64)
+		if !ok {
+			if vInt, ok := payload["val"].(int); ok {
+				val = float64(vInt)
+			}
+		}
+		return map[string]any{"result": val + 10}, nil
+	})
+	require.NoError(t, err)
+
+	// 4. Define and register the pipeline schema on Node A
+	pipeline := protocol.PipelineSchema{
+		ID:      "test-pipeline",
+		Version: 1,
+		Steps: []protocol.PipelineStep{
+			{
+				ID:           "step1",
+				Service:      "test/multiply",
+				TargetNodeID: "node-b",
+			},
+			{
+				ID:           "step2",
+				Service:      "test/add",
+				TargetNodeID: "node-c",
+			},
+		},
+		Connections: []protocol.PipelineConnection{
+			{
+				FromStep: "$initial",
+				FromPort: "input_val",
+				ToStep:   "step1",
+				ToPort:   "val",
+			},
+			{
+				FromStep: "step1",
+				FromPort: "result",
+				ToStep:   "step2",
+				ToPort:   "val",
+			},
+		},
+	}
+
+	err = srvA.LocalPipelineAdd(string(mustMarshal(pipeline)))
+	require.NoError(t, err)
+
+	// Verify Gossip propagation
+	require.Eventually(t, func() bool {
+		_, okB := srvB.Compute.GetPipeline("test-pipeline")
+		_, okC := srvC.Compute.GetPipeline("test-pipeline")
+		return okB && okC
+	}, 3*time.Second, 100*time.Millisecond, "Pipeline schema did not propagate via P2P Gossip")
+
+	// 5. Run the pipeline from Node A
+	initialPayload := map[string]any{
+		"input_val": float64(5),
+	}
+	initialPayloadJSON, _ := json.Marshal(initialPayload)
+
+	resp, err := srvA.LocalServiceRun("test-pipeline", string(initialPayloadJSON))
+	require.NoError(t, err)
+
+	t.Logf("Response status: %s, error: %s", resp.Status, resp.Error)
+	require.Equal(t, "completed", resp.Status)
+	require.NotNil(t, resp.Outputs)
+	require.Equal(t, float64(20), resp.Outputs["result"])
+
+	pipelineOutputsRaw, ok := resp.Outputs["$pipeline_outputs"]
+	require.True(t, ok)
+	pipelineOutputs, ok := pipelineOutputsRaw.(map[string]any)
+	require.True(t, ok)
+
+	step1Outs := pipelineOutputs["step1"].(map[string]any)
+	step2Outs := pipelineOutputs["step2"].(map[string]any)
+	require.Equal(t, float64(10), step1Outs["result"])
+	require.Equal(t, float64(20), step2Outs["result"])
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = srvA.Shutdown(ctx)
+	_ = srvB.Shutdown(ctx)
+	_ = srvC.Shutdown(ctx)
+	srvA.httpTestSrv.Close()
+	srvB.httpTestSrv.Close()
+	srvC.httpTestSrv.Close()
+}
+
+func mustMarshal(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func TestPipelineSchemaValidation(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(t, testutil.DefaultConfig(t, "node-validator"), nil)
+	defer srv.httpTestSrv.Close()
+	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	// Register some services with inputs and outputs
+	err := srv.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name:       "service-source",
+		Parameters: map[string]protocol.ServiceParameter{},
+		Outputs: map[string]protocol.ServiceParameter{
+			"out_str": {Type: "string"},
+			"out_int": {Type: "int"},
+		},
+	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	err = srv.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name: "service-target",
+		Parameters: map[string]protocol.ServiceParameter{
+			"in_str": {Type: "string", Required: true},
+			"in_int": {Type: "int", Required: true},
+		},
+	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	t.Run("Empty ID fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "pipeline ID cannot be empty")
+	})
+
+	t.Run("Zero steps fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID:    "test-pipeline",
+			Steps: []protocol.PipelineStep{},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "pipeline must have at least one step")
+	})
+
+	t.Run("Duplicate step IDs fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s1", Service: "service-target"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "duplicate step ID found")
+	})
+
+	t.Run("Invalid FromStep reference fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s-invalid", FromPort: "out_str", ToStep: "s2", ToPort: "in_str"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "source step 's-invalid' is not defined in pipeline steps")
+	})
+
+	t.Run("Invalid ToStep reference fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s1", FromPort: "out_str", ToStep: "s-invalid", ToPort: "in_str"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "target step 's-invalid' is not defined in pipeline steps")
+	})
+
+	t.Run("Invalid ToPort reference fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s1", FromPort: "out_str", ToStep: "s2", ToPort: "in_invalid"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "port 'in_invalid' is not a valid input parameter for step 's2'")
+	})
+
+	t.Run("Invalid FromPort reference fails when outputs are defined", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s1", FromPort: "out_invalid", ToStep: "s2", ToPort: "in_str"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "port 'out_invalid' is not a valid output for step 's1'")
+	})
+
+	t.Run("Type mismatch connection fails", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "test-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s1", FromPort: "out_str", ToStep: "s2", ToPort: "in_int"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.ErrorContains(t, err, "type mismatch on connection link")
+	})
+
+	t.Run("Valid connections succeed", func(t *testing.T) {
+		p := protocol.PipelineSchema{
+			ID: "valid-pipeline",
+			Steps: []protocol.PipelineStep{
+				{ID: "s1", Service: "service-source"},
+				{ID: "s2", Service: "service-target"},
+			},
+			Connections: []protocol.PipelineConnection{
+				{FromStep: "s1", FromPort: "out_str", ToStep: "s2", ToPort: "in_str"},
+				{FromStep: "s1", FromPort: "out_int", ToStep: "s2", ToPort: "in_int"},
+			},
+		}
+		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
+		require.NoError(t, err)
+	})
+}
+

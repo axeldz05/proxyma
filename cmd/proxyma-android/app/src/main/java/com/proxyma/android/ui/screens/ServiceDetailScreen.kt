@@ -21,7 +21,7 @@ import com.proxyma.android.models.FileTask
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.DynamicActionForm
-import com.proxyma.android.ui.components.FormParameter
+import com.proxyma.android.models.FormParameter
 import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*

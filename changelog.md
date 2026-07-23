@@ -1,5 +1,20 @@
 # Changelog - Proxyma P2P Dynamic Clustering Update
 
+## 23-07-2026
+### Integración Android & UI Schema Dinámico
+* **Selector de Nodos en Pipelines**: Opción de seleccionar el nodo ejecutor de cada paso en el editor visual de pipelines en Android (incluyendo el propio nodo y nodos conocidos del clúster).
+* **Persistencia y Ejecución de Pipelines en Android**: Soporte completo para guardar, listar y ejecutar pipelines distribuidos desde el cliente de Android.
+* **Integración Nativa con Sistema de Archivos y Cámara**: Integración de `ActivityResultContracts.GetContent()` y `ActivityResultContracts.TakePicture()` con `FileProvider` en Android para entradas que requieren imágenes o archivos.
+* **Extensión de UISchema para Presets y Opciones**: Extensión de `FormParameter` y `ServiceParameter` con `options` y `defaultValue` para exponer carpetas/presets predefinidos de nodos remotos (ej. bóvedas de Obsidian).
+* **Herencia de Metadatos en `$initial`**: Delegación automática de metadatos desde el servicio destino hacia las entradas `$initial` en ejecuciones de pipelines en Android.
+
+### Orquestación Transparente de Archivos (VFS Auto-Staging & P2P Fetching)
+* **Auto-Staging en el Origen**: Conversión transparente de archivos locales a referencias `vfs://<hash>` al despachar tareas a nodos remotos.
+* **Auto-Fetching P2P en el Destino**: Descarga automática sobre mTLS P2P de bloques VFS no presentes antes de ejecutar scripts en el nodo destino.
+* **Auto-Descarga de Salidas al Cliente**: Descarga automática de archivos de salida generados en nodos remotos hacia el dispositivo solicitante (evitando errores "blob does not exist").
+* **Auto-Staging por Paso en Pipelines**: Registro VFS automático de salidas intermedias entre pasos de un pipeline.
+* **Limpieza de Wrappers Heredados**: Eliminación del wrapper legado en `server.go` que sobreescribía y borraba prematuramente archivos resultantes (`/tmp/service_out_*`).
+
 ## 13-07-2026
 ### NAT Traversal (UDP Hole Punching & QUIC)
 * **QUICManager & Hole Punching**: Implementación de `QUICManager` en `internal/p2p/holepunch.go` que maneja el ciclo de vida de sesiones directas QUIC sobre UDP.

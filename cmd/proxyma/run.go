@@ -26,6 +26,7 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		signal.Ignore(syscall.SIGHUP)
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 		<-stop

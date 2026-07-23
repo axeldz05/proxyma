@@ -29,15 +29,18 @@ func (im *InviteManager) Add(secret string, expiration time.Time) {
 	im.pendingInvites[secret] = expiration
 }
 
-// CheckAndConsume verifies an invitation. If it exists, it consumes (deletes) it from memory and returns its expiration.
+// CheckAndConsume verifies an invitation secret. If valid, it consumes (deletes) it from memory and returns its expiration.
 func (im *InviteManager) CheckAndConsume(secret string) (time.Time, bool) {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	expiration, exists := im.pendingInvites[secret]
 	if exists {
 		delete(im.pendingInvites, secret)
+		if time.Now().Before(expiration) {
+			return expiration, true
+		}
 	}
-	return expiration, exists
+	return time.Time{}, false
 }
 
 // Sweep removes expired invitations.

@@ -110,7 +110,7 @@ fun VFSScreen(storageDomain: Map<String, Any>?) {
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(filesList) { file ->
+                items(filesList, key = { it.name }) { file ->
                     VFSFileCard(file)
                 }
             }
@@ -192,22 +192,37 @@ fun VFSFileCard(file: VfsFile) {
 
                 Button(
                     onClick = {
-                        if (!file.hasLocal) {
-                            context.toast("Subscribe first to download file locally.")
-                            return@Button
+                        executeGoCall(
+                            context = context,
+                            onStart = { isActionRunning = true },
+                            onComplete = { isActionRunning = false },
+                            action = {
+                                if (!file.hasLocal) {
+                                    val err = proxyma_bind.Proxyma_bind.fetchFileOnDemand(file.name)
+                                    if (err.isNotEmpty()) {
+                                        throw java.lang.Exception(err)
+                                    }
+                                }
+                                ""
+                            }
+                        ) {
+                            val localPath = proxyma_bind.Proxyma_bind.getLocalBlobPath(file.hash)
+                            if (localPath.isEmpty()) {
+                                context.toast("Local file not found.")
+                            } else {
+                                openFileNatively(context, localPath, file.name)
+                            }
                         }
-                        val localPath = proxyma_bind.Proxyma_bind.getLocalBlobPath(file.hash)
-                        if (localPath.isEmpty()) {
-                            context.toast("Local file not found.")
-                            return@Button
-                        }
-                        openFileNatively(context, localPath, file.name)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
                     modifier = Modifier.weight(1f),
                     enabled = !isActionRunning
                 ) {
-                    Text("Open", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (isActionRunning) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black)
+                    } else {
+                        Text("Open", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
 
                 if (file.hasLocal) {

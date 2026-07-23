@@ -147,3 +147,24 @@ func GetLocalBlobPath(hash string) string {
 	}
 	return s.Storage.GetLocalBlobPath(hash)
 }
+
+// FetchFileOnDemand downloads an unsubscribed or missing file on demand from peers into local cache.
+func FetchFileOnDemand(name string) string {
+	s := getSrv()
+
+	if s == nil {
+		_, err := sendUnixSocketCommand(appStorage, "vfs_fetch", map[string]string{
+			"name": name,
+		})
+		if err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+
+	err := s.FetchFileOnDemand(name)
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}

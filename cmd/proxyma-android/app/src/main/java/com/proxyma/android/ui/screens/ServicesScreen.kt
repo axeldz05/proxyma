@@ -1,5 +1,9 @@
 package com.proxyma.android.ui.screens
 
+import android.net.Uri
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -7,8 +11,16 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,13 +31,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FileTask
+import com.proxyma.android.models.FormParameter
+import com.proxyma.android.models.PipelineConnection
+import com.proxyma.android.models.PipelineSchema
+import com.proxyma.android.models.PipelineStep
 import com.proxyma.android.models.ServiceDetail
+import com.proxyma.android.models.ServiceParameterSpec
 import com.proxyma.android.ui.components.Icon
+import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
+import java.io.File
+import kotlin.concurrent.thread
 
 private val fileTasks = mutableStateListOf<FileTask>()
 
@@ -34,11 +55,59 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
     val serviceNames by rememberPolledParsedState(4000, emptyList<String>()) {
         proxyma_bind.Proxyma_bind.discoverServices()
     }
+    val pipelinesList by rememberPolledParsedState(2000, emptyList<PipelineSchema>()) {
+        proxyma_bind.Proxyma_bind.listPipelines()
+    }
     var selectedService by remember { mutableStateOf<String?>(null) }
     var serviceDetailJson by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var activeDetailTask by remember { mutableStateOf<FileTask?>(null) }
+    var showEditor by remember { mutableStateOf(false) }
+    var editingPipeline by remember { mutableStateOf<PipelineSchema?>(null) }
+    var isManualDiscovering by remember { mutableStateOf(false) }
+    var lastDiscoveryStatus by remember { mutableStateOf<String?>(null) }
+    var manualServicesList by remember { mutableStateOf<List<String>?>(null) }
+    val displayedServices = manualServicesList ?: serviceNames
     val context = LocalContext.current
+
+    var runTargetName by remember { mutableStateOf<String?>(null) }
+    var runTargetIsPipeline by remember { mutableStateOf(false) }
+    var runTargetSpecs by remember { mutableStateOf<List<ServiceParameterSpec>?>(null) }
+
+    fun triggerManualDiscovery() {
+        thread {
+            isManualDiscovering = true
+            Log.i("ProxymaService", "[Android UI] User triggered manual service discovery...")
+            val raw = proxyma_bind.Proxyma_bind.discoverServices()
+            Log.i("ProxymaService", "[Android UI] Service discovery response: $raw")
+
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            if (raw.contains("\"error\":")) {
+                val errorMsg = try {
+                    val obj = Gson().fromJson(raw, Map::class.java)
+                    obj["error"]?.toString() ?: raw
+                } catch (e: Exception) { raw }
+                Log.e("ProxymaService", "[Android UI] Service discovery error: $errorMsg")
+                handler.post {
+                    isManualDiscovering = false
+                    lastDiscoveryStatus = "❌ Error: $errorMsg"
+                    context.toast("❌ Discovery Error: $errorMsg")
+                }
+            } else {
+                val parsed = try {
+                    val type = object : TypeToken<List<String>>() {}.type
+                    Gson().fromJson<List<String>>(raw, type) ?: emptyList()
+                } catch (e: Exception) { emptyList() }
+                Log.i("ProxymaService", "[Android UI] Discovery scan finished. Found ${parsed.size} services: $parsed")
+                handler.post {
+                    isManualDiscovering = false
+                    manualServicesList = parsed
+                    lastDiscoveryStatus = if (parsed.isEmpty()) "ℹ️ No services found on cluster peers." else "✅ Found ${parsed.size} active service(s)."
+                    context.toast(if (parsed.isEmpty()) "ℹ️ No services found on cluster peers." else "✅ Found ${parsed.size} service(s)")
+                }
+            }
+        }
+    }
 
     if (selectedService == null) {
         LazyColumn(
@@ -124,24 +193,195 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 }
             }
 
+            // 2. Pipelines Section
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Pipelines",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    IconButton(
+                        onClick = {
+                            editingPipeline = PipelineSchema("", 1, emptyList(), emptyList())
+                            showEditor = true
+                        }
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Create Pipeline", tint = MintGreen)
+                    }
+                }
+            }
 
+            if (pipelinesList.isEmpty()) {
+                item {
+                    Text("No pipelines defined yet.", color = Color.Gray)
+                }
+            } else {
+                items(pipelinesList, key = { it.id }) { pipeline ->
+                    ProxymaCard(
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(pipeline.id, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                                    Text("Version: ${pipeline.version} | Steps: ${pipeline.steps.size}", fontSize = 12.sp, color = Color.Gray)
+                                }
+
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            thread {
+                                                val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
+                                                val specs = if (initialConns.isNotEmpty()) {
+                                                    initialConns.map { conn ->
+                                                        val fromPortName = conn.from_port
+                                                        val tgtStep = pipeline.steps.find { it.id == conn.to_step }
+                                                        val tgtSvc = tgtStep?.service ?: ""
+
+                                                        var paramDef: FormParameter? = null
+                                                        if (tgtSvc.isNotEmpty()) {
+                                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
+                                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
+                                                            paramDef = parsedDetails?.parameters?.find { it.name == conn.to_port }
+                                                        }
+
+                                                        val pType = paramDef?.type ?: "string"
+                                                        val pReq = paramDef?.required ?: false
+                                                        val pDef = paramDef?.defaultValue
+                                                        val pOpts = paramDef?.options
+
+                                                        val lowerFrom = fromPortName.lowercase()
+                                                        val lowerTo = conn.to_port.lowercase()
+                                                        val isFile = pType == "file" || lowerFrom.contains("path") || lowerFrom.contains("file") || lowerFrom.contains("doc") || lowerFrom.contains("pdf") || lowerFrom.contains("image") || lowerTo.contains("path") || lowerTo.contains("file")
+                                                        val isImg = lowerFrom.contains("image") || lowerFrom.contains("ocr") || lowerFrom.contains("photo") || lowerFrom.contains("pic") || lowerFrom.contains("input_path") || lowerTo.contains("image") || lowerTo.contains("photo")
+
+                                                        ServiceParameterSpec(
+                                                            name = fromPortName,
+                                                            type = pType,
+                                                            required = pReq,
+                                                            isFileInput = isFile,
+                                                            isImageInput = isImg,
+                                                            defaultValue = pDef,
+                                                            options = pOpts
+                                                        )
+                                                    }.distinctBy { it.name }
+                                                } else {
+                                                    listOf(
+                                                        ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
+                                                    )
+                                                }
+
+                                                isRunningOnMainThread {
+                                                    runTargetName = pipeline.id
+                                                    runTargetIsPipeline = true
+                                                    runTargetSpecs = specs
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = "Run Pipeline", tint = MintGreen)
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            editingPipeline = pipeline
+                                            showEditor = true
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit Pipeline", tint = VioletSecondary)
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            val clonedJson = proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
+                                            if (clonedJson.contains("\"error\":")) {
+                                                context.toast("Error cloning pipeline: $clonedJson")
+                                            } else {
+                                                val cloned = parsePipelineSchema(clonedJson)
+                                                if (cloned != null) {
+                                                    editingPipeline = cloned
+                                                    showEditor = true
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Clone & Localize Pipeline", tint = MintGreen)
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            executeGoCall(
+                                                context = context,
+                                                onStart = {},
+                                                onComplete = {},
+                                                action = { proxyma_bind.Proxyma_bind.removePipeline(pipeline.id) }
+                                            ) {
+                                                context.toast("Pipeline '${pipeline.id}' removed successfully.")
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Pipeline", tint = Color.Red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item { Spacer(Modifier.height(16.dp)) }
 
             // 3. Discovered services list
             item {
-                Text(
-                    text = "Discovered Services",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Discovered Services",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    IconButton(
+                        onClick = { triggerManualDiscovery() },
+                        enabled = !isManualDiscovering
+                    ) {
+                        if (isManualDiscovering) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = MintGreen)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh Services", tint = MintGreen)
+                        }
+                    }
+                }
+                if (lastDiscoveryStatus != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = lastDiscoveryStatus!!,
+                        fontSize = 12.sp,
+                        color = if (lastDiscoveryStatus!!.startsWith("❌")) Color.Red else MintGreen
+                    )
+                }
             }
 
-            if (serviceNames.isEmpty()) {
+            if (displayedServices.isEmpty()) {
                 item {
                     Text("No other compute services discovered.", color = Color.Gray)
                 }
             } else {
-                items(serviceNames) { svcName ->
+                items(displayedServices, key = { it }) { svcName ->
                     ProxymaCard(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
@@ -170,7 +410,40 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                 Spacer(Modifier.width(12.dp))
                                 Text(svcName, fontWeight = FontWeight.Bold, color = Color.White)
                             }
-                            Icon(Icons.Default.ChevronRight, contentDescription = "Open Details", tint = Color.Gray)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = {
+                                        thread {
+                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
+                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
+                                            val specs = parsedDetails?.parameters?.map { p ->
+                                                val lower = p.name.lowercase()
+                                                val isFile = lower.contains("path") || lower.contains("file") || lower.contains("doc") || lower.contains("pdf") || lower.contains("image")
+                                                val isImg = lower.contains("image") || lower.contains("ocr") || lower.contains("photo") || lower.contains("pic") || lower.contains("input_path")
+                                                ServiceParameterSpec(
+                                                    name = p.name,
+                                                    type = p.type,
+                                                    required = p.required,
+                                                    isFileInput = isFile,
+                                                    isImageInput = isImg,
+                                                    defaultValue = p.defaultValue,
+                                                    options = p.options
+                                                )
+                                            } ?: listOf(
+                                                ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
+                                            )
+                                            isRunningOnMainThread {
+                                                runTargetName = svcName
+                                                runTargetIsPipeline = false
+                                                runTargetSpecs = specs
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = "Run Service", tint = MintGreen)
+                                }
+                                Icon(Icons.Default.ChevronRight, contentDescription = "Open Details", tint = Color.Gray)
+                            }
                         }
                     }
                 }
@@ -187,7 +460,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 try {
                     gson.fromJson(serviceDetailJson, ServiceDetail::class.java)
                 } catch (e: Exception) {
-                    ServiceDetail("", "Failed to parse info", "", emptyList(), emptyList(), e.message)
+                    ServiceDetail("", "Failed to parse info", "", emptyList(), emptyList(), null, e.message)
                 }
             }
 
@@ -249,6 +522,244 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             containerColor = CardGray,
             textContentColor = Color.White
         )
+    }
+
+    if (showEditor) {
+        PipelineEditorDialog(
+            pipeline = editingPipeline,
+            services = serviceNames,
+            onDismiss = { showEditor = false }
+        )
+    }
+
+    if (runTargetName != null && runTargetSpecs != null) {
+        RunTaskDialog(
+            targetName = runTargetName!!,
+            isPipeline = runTargetIsPipeline,
+            parameterSpecs = runTargetSpecs!!,
+            onDismiss = {
+                runTargetName = null
+                runTargetSpecs = null
+            },
+            onExecute = { payloadMap ->
+                val payloadJson = Gson().toJson(payloadMap)
+                val targetId = runTargetName!!
+                val isPipe = runTargetIsPipeline
+                runTargetName = null
+                runTargetSpecs = null
+
+                val taskID = "task_${System.currentTimeMillis()}"
+                val newTask = FileTask(
+                    taskId = taskID,
+                    service = targetId,
+                    input = payloadJson,
+                    output = "result",
+                    status = "running"
+                )
+                fileTasks.add(0, newTask)
+                context.toast("🚀 Running $targetId...")
+
+                thread {
+                    val res = if (isPipe) {
+                        proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
+                    } else {
+                        proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
+                    }
+                    val err = getActionError(res)
+                    isRunningOnMainThread {
+                        val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                        if (err.isNotEmpty()) {
+                            context.toast("❌ Execution failed: $err", long = true)
+                            if (index != -1) {
+                                fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
+                            }
+                        } else {
+                            context.toast("✅ Execution completed!")
+                            val resPath = getResultPath(res)
+                            if (index != -1) {
+                                fileTasks[index] = fileTasks[index].copy(
+                                    status = "completed",
+                                    resultPath = if (resPath.isNotEmpty()) resPath else null
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RunTaskDialog(
+    targetName: String,
+    isPipeline: Boolean,
+    parameterSpecs: List<ServiceParameterSpec>,
+    onDismiss: () -> Unit,
+    onExecute: (payloadMap: Map<String, String>) -> Unit
+) {
+    val context = LocalContext.current
+    val paramValues = remember { mutableStateMapOf<String, String>() }
+
+    var activeParamForPicker by remember { mutableStateOf<String?>(null) }
+    var activeParamForCamera by remember { mutableStateOf<String?>(null) }
+    var cameraPhotoFile by remember { mutableStateOf<File?>(null) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        val paramName = activeParamForPicker
+        if (uri != null && paramName != null) {
+            val cachedPath = copyUriToCache(context, uri)
+            paramValues[paramName] = cachedPath
+            context.toast("Selected: ${cachedPath.substringAfterLast('/')}")
+        }
+        activeParamForPicker = null
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        val paramName = activeParamForCamera
+        val photoFile = cameraPhotoFile
+        if (success && paramName != null && photoFile != null) {
+            paramValues[paramName] = photoFile.absolutePath
+            context.toast("Photo captured!")
+        }
+        activeParamForCamera = null
+        cameraPhotoFile = null
+    }
+
+    LaunchedEffect(parameterSpecs) {
+        parameterSpecs.forEach { spec ->
+            if (!spec.defaultValue.isNullOrEmpty() && paramValues[spec.name].isNullOrEmpty()) {
+                paramValues[spec.name] = spec.defaultValue
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Run ${if (isPipeline) "Pipeline" else "Service"}: $targetName") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (parameterSpecs.isEmpty()) {
+                    item {
+                        Text("No specific input parameters required.", color = Color.Gray, fontSize = 14.sp)
+                    }
+                } else {
+                    items(parameterSpecs) { spec ->
+                        val currentValue = paramValues[spec.name] ?: ""
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${spec.name}${if (spec.required) " *" else " (opt)"}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (spec.required) Color.White else Color.LightGray,
+                                    fontSize = 14.sp
+                                )
+                                Text("type: ${spec.type}", fontSize = 11.sp, color = Color.Gray)
+                            }
+                            Spacer(Modifier.height(4.dp))
+
+                            if (!spec.options.isNullOrEmpty()) {
+                                var expandedOptions by remember { mutableStateOf(false) }
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    OutlinedButton(
+                                        onClick = { expandedOptions = true },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(if (currentValue.isEmpty()) "Select Preset..." else "Preset: $currentValue", fontSize = 12.sp, color = Color.White)
+                                    }
+                                    DropdownMenu(
+                                        expanded = expandedOptions,
+                                        onDismissRequest = { expandedOptions = false }
+                                    ) {
+                                        spec.options.forEach { opt ->
+                                            DropdownMenuItem(
+                                                text = { Text(opt) },
+                                                onClick = {
+                                                    paramValues[spec.name] = opt
+                                                    expandedOptions = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                            }
+
+                            OutlinedTextField(
+                                value = currentValue,
+                                onValueChange = { paramValues[spec.name] = it },
+                                label = { Text("Value / Path for ${spec.name}") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                if (spec.isFileInput) {
+                                    IconButton(onClick = {
+                                        activeParamForPicker = spec.name
+                                        filePickerLauncher.launch("*/*")
+                                    }) {
+                                        Icon(Icons.Default.Folder, contentDescription = "Pick File", tint = MintGreen)
+                                    }
+                                }
+                                if (spec.isImageInput) {
+                                    IconButton(onClick = {
+                                        val (uri, file) = createTempCameraFile(context)
+                                        cameraPhotoFile = file
+                                        activeParamForCamera = spec.name
+                                        cameraLauncher.launch(uri)
+                                    }) {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = "Take Photo", tint = VioletSecondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val missing = parameterSpecs.filter { it.required && (paramValues[it.name]?.trim() ?: "").isEmpty() }
+                    if (missing.isNotEmpty()) {
+                        context.toast("Missing required field(s): ${missing.joinToString { it.name }}")
+                        return@Button
+                    }
+                    onExecute(paramValues.toMap())
+                }
+            ) {
+                Text("Execute")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+private fun parsePipelineSchema(json: String): PipelineSchema? {
+    return try {
+        Gson().fromJson(json, PipelineSchema::class.java)
+    } catch (e: Exception) {
+        null
     }
 }
 

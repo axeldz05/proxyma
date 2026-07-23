@@ -1,41 +1,70 @@
 # Proxyma: Heterogeneous Resource Orchestrator (WIP)
 
-**Proxyma** is a distributed system written in **Go**, designed to unify multiple devices into a single, intelligent computing and storage mesh. 
-It acts as a connective tissue that allows the hardware capabilities of one node (such as a PC's GPU or a mobile camera) to be transparently available to the rest of the network of nodes.  
-The goal is to eliminate hardware boundaries, integrating multiple custom services.
-
-### **Issues in mind**
-* NAT Traversal: Implemented a robust UDP NAT Hole Punching mechanism using STUN for public IP/port discovery, signaling via the Sponsor relay, and establishing direct secure QUIC sessions. Added support for automatic UPnP and NAT-PMP port mapping (enabled by default) to automatically open firewall ports on home routers, including a dynamic refresh loop and automatic public IP fallback querying the gateway directly if STUN fails. If direct connectivity is unavailable, it falls back to the secure push-based Relay Fallback tunnel.
-* Currently, the system uses BoltDB for subscriptions of files and Virtual File System (VFS). Considering the transition to BadgerDB (which implements a WiscKey LSM-based) or a customized 
-implementation to optimize I/O on SSDs and handle larger metadata sets efficiently.
-* Distributed Consistency: Moving beyond local ACID compliance towards a distributed consensus model (e.g., Raft) for unified network state.
-* The "custom services" engine currently relies on a custom JSON-based protocol, which introduces serialization overhead. Consider using gRPC for Inter-Node Communication and Streaming, in conjunction
-with grpc-gateway for particular cases where a JSON will work just fine.
-
-## Key Features
-* **P2P Synchronization:** A file transfer protocol inspired by BitTorrent.
-* **The "custom services":** The system has a suite of services provided by its devices.
-* **Heterogeneous Connectivity:** Native integration between servers, desktop PCs, and mobile devices.
-* **Remote Screen Management:** Ability to visualize and control interfaces between nodes in the network.
-
-## To-Do
-
-### Phase 1: Core & Networking
-- [x] Implement a File System for servers and clients, based on a P2P Syncrhonization.
-- [x] Persist cluster peer topology in database to survive restarts and improve offline status tracking.
-- [x] Implement global discovery using a secure pairing.
-- [x] End-to-end TLS encryption.
-- [x] Secure "Handshake" and pairing system for new devices.
-- [x] Implement UDP NAT Hole Punching and direct QUIC connectivity.
-- [x] Implement automatic UPnP/NAT-PMP port mapping and STUN fallback.
-
-### Phase 2: Orchestration & Services
-- [ ] **Custom services** engine.
-- [ ] Load balancing logic based on real-time CPU/RAM telemetry (OpenTelemetry) from nodes.
-
-### Phase 3: Ecosystem & UI
-- [ ] Lightweight Android client (Photo capture, video recording, task submission).
-- [ ] Low-latency streaming protocol for remote screen access.
-- [ ] CLI Dashboard to monitor network health and load.
+**Proxyma** is a distributed, heterogeneous P2P resource and compute orchestrator written in **Go**. It unifies devices (servers, desktops, mobiles) into a single intelligent computing and storage mesh. It allows the hardware capabilities of one node (such as a PC's compute services or a mobile camera) to be transparently shared across the network.
 
 ---
+
+## Key Features
+
+* **P2P Synchronization & VFS:** A decentralized virtual file system with background metadata replication and blob retrieval (inspired by BitTorrent).
+* **Compute Workflows & Pipeline Engine:** Coordinates tasks across nodes using dynamic pipeline orchestration (workflows/DAGs) with static/dynamic port type checks and transparent cross-node VFS auto-staging & auto-fetching.
+* **Heterogeneous Connectivity:** Native integration between servers, desktop PCs, and mobile devices (using Go-mobile JNI bindings).
+* **NAT Traversal & Hole Punching:** Implements direct UDP NAT Hole Punching using STUN for public IP/port discovery, signaling via the Sponsor relay, automatic UPnP/NAT-PMP port mapping, and secure QUIC tunnels. Falls back to long-polling relay fallback in strict firewalls.
+* **E2E mTLS Security:** Dynamic CSR enrollment, mutual TLS authorization for all inter-node calls, and automatic cluster topology sync.
+* **Native Python Services & UV Environment:** Native Python service execution (`ocrmypdf`, `pypdf`, `pytesseract`) with isolated `uv` virtual environment resolution and RGBA alpha channel image pre-conversion.
+
+---
+
+## Standalone Pipeline Editor
+
+Proxyma includes a visual, standalone blueprint/node-editor to create, edit, and validate distributed workflow pipelines:
+
+1. **Static Validation Engine**: Performs DAG cycle detection and strict type verification on linked ports (e.g. matching an OCR output parameter to a save-file input parameter) before pipeline registration.
+2. **Platform Interfaces**:
+   * **Cobra CLI (TUI)**: An interactive terminal UI editor launched with `proxyma service edit_pipeline`.
+   * **Android Client (Jetpack Compose GUI)**: Built modularly in Jetpack Compose, integrated directly inside the *Services* tab of the Android app, supporting node target selection, native camera/file pickers, preset dropdowns (`UISchema`), and execution via Go-mobile bindings.
+
+---
+
+## Developer Quickstart
+
+To quickly spin up a developer test environment:
+
+1. Run the developer bootstrapping script:
+   ```bash
+   ./scripts/bootstrap_dev.sh
+   ```
+   This script builds all binaries, launches a local background daemon (scoped to `/tmp/proxyma-dev`), registers mock services (`ocr`, `text/extract`, `obsidian/save`, and the standalone `pipeline/editor`), and pre-populates VFS sample files.
+
+2. Interact with the node easily using the automatic wrapper (which binds `--storage` flags by default):
+   * List files: `/tmp/proxyma-dev/pm storage list`
+   * Discover services: `/tmp/proxyma-dev/pm service discover`
+   * Launch TUI Editor: `/tmp/proxyma-dev/pm service edit_pipeline`
+
+To build and compile the mobile app bindings:
+   ```bash
+   ./cmd/proxyma-android/ship_to_attached_phone.sh
+   ```
+
+---
+
+## Roadmap & Status
+
+### Phase 1: Core & Networking
+- [x] Decentralized Virtual File System (VFS) with P2P synchronization.
+- [x] Persistent cluster peer topology database.
+- [x] End-to-end mTLS authentication and secure "Handshake" pairing.
+- [x] UDP NAT Hole Punching and direct QUIC connectivity.
+- [x] Automatic UPnP/NAT-PMP port mapping and STUN gateway queries.
+
+### Phase 2: Orchestration & Services
+- [x] Custom services engine and workflow orchestration.
+- [x] **Static & Dynamic pipeline validation** (cycle/type check).
+- [x] **Transparent cross-node VFS file auto-staging and auto-fetching**.
+- [ ] Load balancing logic based on real-time CPU/RAM telemetry (OpenTelemetry).
+
+### Phase 3: Ecosystem & UI
+- [x] Standalone visual blueprint pipeline editor (TUI).
+- [x] Jetpack Compose-based visual pipeline editor on Android with target node selection.
+- [x] Lightweight Android daemon client (built with Gomobile JNI) with native camera & file pickers.
+- [ ] Low-latency streaming protocol for remote screen access.

@@ -29,6 +29,37 @@ type TaskRequest struct {
 	Payload         map[string]any `json:"payload"`
 }
 
+type PipelineConnection struct {
+	FromStep string `json:"from_step"`
+	FromPort string `json:"from_port"`
+	ToStep   string `json:"to_step"`
+	ToPort   string `json:"to_port"`
+}
+
+type PipelineStep struct {
+	ID           string `json:"id"`
+	Service      string `json:"service"`
+	TargetNodeID string `json:"target_node_id,omitempty"`
+}
+
+type PipelineSchema struct {
+	ID          string               `json:"id"`
+	Version     int                  `json:"version"`
+	Steps       []PipelineStep       `json:"steps"`
+	Connections []PipelineConnection `json:"connections,omitempty"`
+}
+
+type PipelineNotification struct {
+	Schema PipelineSchema `json:"schema"`
+	Action string         `json:"action"` // "add", "remove"
+}
+
+type PipelineContext struct {
+	Steps        []PipelineStep            `json:"steps"`
+	CurrentStep  int                       `json:"current_step"`
+	Outputs      map[string]map[string]any `json:"outputs"`
+}
+
 type DiscoveryQuery struct {
 	Service          string   `json:"service"`
 	RequiredParams   []string `json:"required_params"`
@@ -89,11 +120,14 @@ type ServiceSchema struct {
 	Name        string                      `json:"name"`
 	Description string                      `json:"description"`
 	Parameters  map[string]ServiceParameter `json:"parameters"`
+	Outputs     map[string]ServiceParameter `json:"outputs,omitempty"`
 }
 
 type ServiceParameter struct {
-	Type     string `json:"type"`
-	Required bool   `json:"required"`
+	Type     string   `json:"type"`
+	Required bool     `json:"required"`
+	Default  string   `json:"default,omitempty"`
+	Options  []string `json:"options,omitempty"`
 }
 
 type ServiceBid struct {
