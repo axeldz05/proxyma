@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"proxyma/internal/protocol"
+	"proxyma/internal/server"
 )
 
 type ParameterDetail struct {
@@ -36,22 +37,9 @@ type LocalService struct {
 
 // DiscoverServices returns active cluster services.
 func DiscoverServices() string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_discover", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list, err := s.LocalServiceDiscover()
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(list)
-	return string(b)
+	return dispatchUnixOrLocal("service_discover", nil, func(s *server.Server) (any, error) {
+		return s.LocalServiceDiscover()
+	})
 }
 
 // GetServiceDetails gets metadata for a given service.
@@ -309,72 +297,37 @@ func RemoveService(name string) string {
 
 // RunService runs a task and waits up to 30s.
 func RunService(name string, payloadJson string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_run", map[string]string{
-			"service": name,
-			"payload": payloadJson,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	resp, err := s.LocalServiceRun(name, payloadJson)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
+	return dispatchUnixOrLocal("service_run", map[string]string{
+		"service": name,
+		"payload": payloadJson,
+	}, func(s *server.Server) (any, error) {
+		return s.LocalServiceRun(name, payloadJson)
+	})
 }
 
 // GetTaskStatus queries the status of a specific task.
 func GetTaskStatus(taskID string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_status", map[string]string{
-			"task_id": taskID,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+	return dispatchUnixOrLocal("service_status", map[string]string{
+		"task_id": taskID,
+	}, func(s *server.Server) (any, error) {
+		resp, ok := s.Compute.GetTaskResponse(taskID)
+		if !ok {
+			return nil, fmt.Errorf("task not found")
 		}
-		return string(data)
-	}
-
-	resp, ok := s.Compute.GetTaskResponse(taskID)
-	if !ok {
-		return `{"error": "task not found"}`
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
+		return resp, nil
+	})
 }
 
 // RunFileService uploads the local input file if necessary, runs the generic file service, and returns the result.
 func RunFileService(serviceName string, inputPath string, outputName string, paramJson string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_run_file", map[string]string{
-			"service": serviceName,
-			"input":   inputPath,
-			"output":  outputName,
-			"param":   paramJson,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	resp, err := s.LocalServiceRunFile(serviceName, inputPath, outputName, paramJson)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
+	return dispatchUnixOrLocal("service_run_file", map[string]string{
+		"service": serviceName,
+		"input":   inputPath,
+		"output":  outputName,
+		"param":   paramJson,
+	}, func(s *server.Server) (any, error) {
+		return s.LocalServiceRunFile(serviceName, inputPath, outputName, paramJson)
+	})
 }
 
 // AddPipeline registers a new service pipeline schema.
@@ -484,92 +437,37 @@ func RemovePipeline(id string) string {
 
 // ListPipelines returns a list of registered pipelines.
 func ListPipelines() string {
-	s := getSrv()
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "pipeline_list", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list := s.LocalPipelineList()
-	b, err := json.Marshal(list)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return string(b)
+	return dispatchUnixOrLocal("pipeline_list", nil, func(s *server.Server) (any, error) {
+		return s.LocalPipelineList(), nil
+	})
 }
 
 // RunPipeline runs a pipeline task.
 func RunPipeline(id string, payloadJson string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_run", map[string]string{
-			"service": id,
-			"payload": payloadJson,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	resp, err := s.LocalServiceRun(id, payloadJson)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	b, _ := json.Marshal(resp)
-	return string(b)
+	return dispatchUnixOrLocal("service_run", map[string]string{
+		"service": id,
+		"payload": payloadJson,
+	}, func(s *server.Server) (any, error) {
+		return s.LocalServiceRun(id, payloadJson)
+	})
 }
 
 // GetPipelineSchemaJson returns a pipeline schema JSON by ID.
 func GetPipelineSchemaJson(id string) string {
-	s := getSrv()
-	var rawData []byte
-	var err error
-
-	if s == nil {
-		rawData, err = sendUnixSocketCommand(appStorage, "pipeline_get", map[string]string{
-			"id": id,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-	} else {
-		schema, getErr := s.LocalPipelineGet(id)
-		if getErr != nil {
-			return fmt.Sprintf(`{"error": %q}`, getErr.Error())
-		}
-		rawData, _ = json.Marshal(schema)
-	}
-
-	return string(rawData)
+	return dispatchUnixOrLocal("pipeline_get", map[string]string{
+		"id": id,
+	}, func(s *server.Server) (any, error) {
+		return s.LocalPipelineGet(id)
+	})
 }
 
 // ClonePipelineSchemaJson clones a pipeline schema, customizing ID and target node assignments.
 func ClonePipelineSchemaJson(id string, newID string, targetNodeID string) string {
-	s := getSrv()
-	var rawData []byte
-	var err error
-
-	if s == nil {
-		rawData, err = sendUnixSocketCommand(appStorage, "pipeline_clone", map[string]string{
-			"id":          id,
-			"new_id":      newID,
-			"target_node": targetNodeID,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-	} else {
-		schema, cloneErr := s.LocalPipelineClone(id, newID, targetNodeID)
-		if cloneErr != nil {
-			return fmt.Sprintf(`{"error": %q}`, cloneErr.Error())
-		}
-		rawData, _ = json.Marshal(schema)
-	}
-
-	return string(rawData)
+	return dispatchUnixOrLocal("pipeline_clone", map[string]string{
+		"id":          id,
+		"new_id":      newID,
+		"target_node": targetNodeID,
+	}, func(s *server.Server) (any, error) {
+		return s.LocalPipelineClone(id, newID, targetNodeID)
+	})
 }

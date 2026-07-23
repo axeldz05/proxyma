@@ -18,7 +18,6 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/utils"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -241,6 +240,64 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	return hs.ListenAndServeTLS("", "")
 }
 
+type tlsErrorWriter struct {
+	server *Server
+}
+
+func (w *tlsErrorWriter) Write(p []byte) (n int, err error) {
+	line := string(p)
+	if strings.Contains(line, "TLS handshake error") {
+		parts := strings.SplitN(line, "TLS handshake error from ", 2)
+		if len(parts) == 2 {
+			addrPart := parts[1]
+			addrErrParts := strings.SplitN(addrPart, ": ", 2)
+			if len(addrErrParts) == 2 {
+				hostPort := addrErrParts[0]
+				errMsg := addrErrParts[1]
+
+				host, _, err := net.SplitHostPort(hostPort)
+				if err != nil {
+					host = hostPort
+				}
+
+				peerID := ""
+				peerAddr := ""
+				for id, pRecord := range w.server.Peers.GetPeersRecordCopy() {
+					for _, a := range pRecord.Addresses {
+						if strings.Contains(a, host) {
+							peerID = id
+							peerAddr = a
+							break
+						}
+					}
+					if peerID != "" {
+						break
+					}
+				}
+
+				if peerID != "" {
+					w.server.Config.Logger.Error("TLS Handshake error from registered peer",
+						"peerID", peerID,
+						"peerAddress", peerAddr,
+						"remoteAddr", hostPort,
+						"error", strings.TrimSpace(errMsg),
+					)
+					w.server.SetPeerOffline(peerID, fmt.Errorf("TLS handshake failed: %s", strings.TrimSpace(errMsg)))
+					return len(p), nil
+				} else {
+					w.server.Config.Logger.Error("TLS Handshake error from unknown source",
+						"remoteAddr", hostPort,
+						"error", strings.TrimSpace(errMsg),
+					)
+					return len(p), nil
+				}
+			}
+		}
+	}
+	w.server.Config.Logger.Error("HTTP server error", "message", strings.TrimSpace(line))
+	return len(p), nil
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.shutdownOnce.Do(func() {
@@ -365,51 +422,30 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			actionErr = s.Storage.SaveLocalFile(fileName, f)
 			_ = f.Close()
 
-		case "vfs_subscribe":
+		case "vfs_subscribe", "vfs_unsubscribe", "vfs_delete", "vfs_purge", "vfs_fetch":
 			fileName := req.Args["name"]
 			if fileName == "" {
 				actionErr = fmt.Errorf("missing name parameter")
 				break
 			}
-			s.Storage.SetSubscription(fileName, true)
-			go func() {
-				if s.Config.BootstrapNode != "" {
-					_ = s.AnnouncePresence(s.Config.BootstrapNode)
-				}
-				_ = s.ExecuteSync()
-			}()
-
-		case "vfs_unsubscribe":
-			fileName := req.Args["name"]
-			if fileName == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
+			switch req.Action {
+			case "vfs_subscribe":
+				s.Storage.SetSubscription(fileName, true)
+				go func() {
+					if s.Config.BootstrapNode != "" {
+						_ = s.AnnouncePresence(s.Config.BootstrapNode)
+					}
+					_ = s.ExecuteSync()
+				}()
+			case "vfs_unsubscribe":
+				s.Storage.SetSubscription(fileName, false)
+			case "vfs_delete":
+				actionErr = s.Storage.DeleteLocalFile(fileName)
+			case "vfs_purge":
+				actionErr = s.Storage.DeleteLocalCache(fileName)
+			case "vfs_fetch":
+				actionErr = s.FetchFileOnDemand(fileName)
 			}
-			s.Storage.SetSubscription(fileName, false)
-
-		case "vfs_delete":
-			fileName := req.Args["name"]
-			if fileName == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
-			}
-			actionErr = s.Storage.DeleteLocalFile(fileName)
-
-		case "vfs_purge":
-			fileName := req.Args["name"]
-			if fileName == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
-			}
-			actionErr = s.Storage.DeleteLocalCache(fileName)
-
-		case "vfs_fetch":
-			fileName := req.Args["name"]
-			if fileName == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
-			}
-			actionErr = s.FetchFileOnDemand(fileName)
 
 		case "service_discover":
 			respData, actionErr = s.LocalServiceDiscover()
@@ -519,51 +555,6 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 	}
 }
 
-type LocalService struct {
-	Type   string                 `json:"type"`
-	Exec   string                 `json:"exec,omitempty"`
-	Schema protocol.ServiceSchema `json:"schema"`
-}
-
-func (s *Server) LoadLocalServices() {
-	s.Compute.ClearServices()
-	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
-	data, err := os.ReadFile(servicesFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			s.Config.Logger.Info("No services.json found, skipping local service registration")
-			return
-		}
-		s.Config.Logger.Error("Failed to read services.json", "error", err)
-		return
-	}
-
-	var services map[string]LocalService
-	if err := json.Unmarshal(data, &services); err != nil {
-		s.Config.Logger.Error("Failed to unmarshal services.json", "error", err)
-		return
-	}
-
-	for name, svc := range services {
-		var handler compute.ServiceHandler
-		switch svc.Type {
-		case "script", "exec":
-			handler = compute.BuildScriptHandler(svc.Exec)
-		case "grpc":
-			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
-		default:
-			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
-			continue
-		}
-
-		if err := s.Compute.RegisterNewService(svc.Schema, handler); err != nil {
-			s.Config.Logger.Error("Failed to register local service", "service", name, "error", err)
-		} else {
-			s.Config.Logger.Info("Local service registered", "service", name, "type", svc.Type)
-		}
-	}
-}
-
 // Delegated methods for backward compatibility & Continuous Granularity.
 
 func (s *Server) SetPeerOnline(peerID string, online bool) {
@@ -627,186 +618,12 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	}
 }
 
-func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
-	for peerID := range s.GetPeersCopy() {
-		payload := protocol.PeerNotification{
-			File:   fileInfo,
-			Source: s.Config.Address,
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		err := s.peerClient.Notify(ctx, peerID, payload)
-		if err != nil {
-			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
-			s.SetPeerOffline(peerID, err)
-		} else {
-			s.SetPeerOnline(peerID, true)
-		}
-	}
-}
-
-func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	var bids []protocol.ServiceBid
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	peers := s.GetPeersCopy()
-	for peerID := range peers {
-		wg.Add(1)
-		go func(peerID string) {
-			defer wg.Done()
-			bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
-			if err != nil {
-				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
-				s.SetPeerOffline(peerID, err)
-			} else {
-				s.SetPeerOnline(peerID, true)
-			}
-			if err != nil || !bid.CanAccept {
-				return
-			}
-			mu.Lock()
-			bids = append(bids, bid)
-			mu.Unlock()
-		}(peerID)
-	}
-
-	wg.Wait()
-
-	if len(bids) == 0 {
-		return "", "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)
-	}
-
-	bestBid := bids[0]
-	if query.SortStrategy == protocol.StrategyFastest {
-		for _, bid := range bids {
-			if bid.EstimatedMillis < bestBid.EstimatedMillis {
-				bestBid = bid
-			}
-		}
-	}
-
-	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
-}
-
-func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
-	if req.Payload != nil {
-		for k, v := range req.Payload {
-			if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
-				if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-					f, err := os.Open(pathStr)
-					if err == nil {
-						hash, _, err := s.Storage.SavePhysicalBlob(f)
-						_ = f.Close()
-						if err == nil {
-							s.Storage.Upsert(protocol.IndexEntry{
-								Name:    filepath.Base(pathStr),
-								Hash:    hash,
-								Size:    fi.Size(),
-								Version: 1,
-							})
-							req.Payload[k] = "vfs://" + hash
-						}
-					}
-				}
-			}
-		}
-	}
-
-	s.Compute.RegisterOutgoingTask(req)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	err := s.peerClient.SubmitTask(ctx, targetPeerID, req)
-	if err != nil {
-		s.Compute.MarkTaskAsFailed(req, err.Error())
-		s.SetPeerOffline(targetPeerID, err)
-		return err
-	}
-	s.SetPeerOnline(targetPeerID, true)
-	return nil
-}
-
 func (s *Server) GetPeersCopy() map[string]string {
 	return s.Peers.GetPeersCopy()
 }
 
 func (s *Server) GetSponsorPeers() map[string]string {
 	return s.Peers.GetSponsorPeers()
-}
-
-func (s *Server) ensureQUICSession(peerID string) {
-	if s.quicMgr == nil {
-		return
-	}
-	record, ok := s.Peers.GetPeerRecord(peerID)
-	if !ok {
-		return
-	}
-	hasQuic := false
-	for _, addr := range record.Addresses {
-		if strings.HasPrefix(addr, "quic://") {
-			hasQuic = true
-			break
-		}
-	}
-	if !hasQuic {
-		return
-	}
-	if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
-		return
-	}
-
-	if updater, ok := s.peerClient.(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute(peerID, record)
-	}
-
-	// Wait for the session to be established
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer waitCancel()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-waitCtx.Done():
-			return
-		case <-ticker.C:
-			if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
-				return
-			}
-		}
-	}
-}
-
-func (s *Server) ExecuteSync() error {
-	for peerID := range s.GetPeersCopy() {
-		s.ensureQUICSession(peerID)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		ctx = context.WithValue(ctx, p2p.BypassHolePunchKey{}, true)
-		manifest, err := s.peerClient.FetchManifest(ctx, peerID)
-		cancel()
-		if err != nil {
-			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
-			s.SetPeerOffline(peerID, err)
-			continue
-		}
-		s.SetPeerOnline(peerID, true)
-		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
-		for _, file := range missingFiles {
-			s.downloadQueue <- DownloadJob{
-				File:   file,
-				Source: peerID,
-			}
-		}
-	}
-	return nil
 }
 
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
@@ -858,36 +675,6 @@ func (s *Server) CheckNAT() {
 	s.checkNATOnce.Do(func() {
 		s.determineSponsorAndNATStatus()
 	})
-}
-
-func (s *Server) downloadWorker() {
-	for {
-		select {
-		case <-s.done:
-			return
-		case job, ok := <-s.downloadQueue:
-			if !ok {
-				return
-			}
-			if job.File.Deleted {
-				s.Storage.ProcessRemoteDeletion(job.File)
-				continue
-			}
-			ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			body, err := s.peerClient.DownloadBlob(ctxTimeout, job.Source, job.File.Hash)
-			if err != nil {
-				cancel()
-				s.Config.Logger.Error("Network error downloading blob", "file", job.File.Name, "error", err)
-				continue
-			}
-			err = s.Storage.StoreRemoteBlob(job.File, body)
-			_ = body.Close()
-			cancel()
-			if err != nil {
-				s.Config.Logger.Error("Failed to apply remote blob", "error", err)
-			}
-		}
-	}
 }
 
 func (s *Server) AddPendingInvite(secret string, expiration time.Time) {
@@ -1078,735 +865,4 @@ func (s *Server) RotateCAAndResignPeers() {
 	s.Config.Logger.Info("CA Rotation completed successfully on Sponsor/CA node.")
 }
 
-func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
-	snapshot := s.Storage.GetVFSSnapshot()
-	list := []protocol.VFSFileStatus{}
-	for _, entry := range snapshot {
-		if entry.Deleted {
-			continue
-		}
-		hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
-		isSubscribed := s.Storage.IsSubscribed(entry.Name)
-		sentSpeed, recvSpeed := s.GetCategoryBandwidth("vfs:" + entry.Hash)
 
-		list = append(list, protocol.VFSFileStatus{
-			Name:       entry.Name,
-			Version:    entry.Version,
-			Size:       entry.Size,
-			Hash:       entry.Hash,
-			Subscribed: isSubscribed,
-			HasLocal:   hasLocal,
-			Deleted:    entry.Deleted,
-			UpSpeed:    sentSpeed,
-			DownSpeed:  recvSpeed,
-		})
-	}
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Name < list[j].Name
-	})
-	return list
-}
-
-func (s *Server) FetchFileOnDemand(name string) error {
-	entry, ok := s.Storage.GetFileMeta(name)
-	if !ok {
-		return fmt.Errorf("file '%s' not found in VFS metadata", name)
-	}
-	hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
-	if hasLocal {
-		return nil
-	}
-
-	peersSnapshot := s.GetPeersRecordCopy()
-	var downloadErr error
-	for peerID, addrRec := range peersSnapshot {
-		if peerID == s.Config.ID || len(addrRec.Addresses) == 0 {
-			continue
-		}
-		ctxTimeout, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		body, err := s.peerClient.DownloadBlob(ctxTimeout, peerID, entry.Hash)
-		if err != nil {
-			cancel()
-			downloadErr = err
-			continue
-		}
-		err = s.Storage.StoreRemoteBlob(entry, body)
-		_ = body.Close()
-		cancel()
-		if err == nil {
-			s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
-			return nil
-		}
-		downloadErr = err
-	}
-
-	if downloadErr != nil {
-		return fmt.Errorf("failed to fetch file '%s' from cluster peers: %v", name, downloadErr)
-	}
-	return fmt.Errorf("no peer holds physical replica for file '%s'", name)
-}
-
-func (s *Server) LocalServiceDiscover() ([]string, error) {
-	names := make(map[string]bool)
-	for _, name := range s.Compute.ListServices() {
-		names[name] = true
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	peers := s.GetPeersCopy()
-	var discoveryErr error
-	for peerID := range peers {
-		peerSvc, err := s.DiscoverServices(ctx, peerID)
-		if err == nil {
-			for _, name := range peerSvc {
-				names[name] = true
-			}
-		} else {
-			discoveryErr = err
-			s.Config.Logger.Warn("Service discovery from cluster peer failed", "peerID", peerID, "error", err)
-		}
-	}
-	var result []string
-	for name := range names {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	s.Config.Logger.Info("Service discovery scan completed", "peers_scanned", len(peers), "services_found", len(result), "last_err", discoveryErr)
-	return result, nil
-}
-
-func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
-	var payload map[string]any
-	if payloadStr != "" {
-		_ = json.Unmarshal([]byte(payloadStr), &payload)
-	}
-
-	var targetPeerID string
-	var err error
-
-	if _, isPipeline := s.Compute.GetPipeline(serviceName); isPipeline {
-		targetPeerID = s.Config.ID
-	} else {
-		targetPeerID, _, _, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
-		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
-		}
-	}
-
-	taskID := fmt.Sprintf("task_kt_%d", time.Now().UnixNano())
-	taskReq := protocol.TaskRequest{
-		TaskID:          taskID,
-		Service:         serviceName,
-		RequesterNodeID: s.Config.ID,
-		ReplyTo:         fmt.Sprintf("https://%s.proxyma.local/services/callback", s.Config.ID),
-		Payload:         payload,
-	}
-
-	s.Compute.RegisterOutgoingTask(taskReq)
-
-	if targetPeerID == s.Config.ID {
-		err = s.Compute.SubmitTask(taskReq)
-		if err != nil {
-			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to submit local task: %w", err)
-		}
-	} else {
-		err = s.DispatchTask(targetPeerID, taskReq)
-		if err != nil {
-			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
-			return protocol.ServiceTaskResponse{}, err
-		}
-	}
-
-	var resp protocol.ServiceTaskResponse
-	completed := false
-	for i := 0; i < 90; i++ {
-		time.Sleep(1 * time.Second)
-		r, ok := s.Compute.GetTaskResponse(taskID)
-		if ok {
-			if r.Status == "completed" || r.Status == "failed" {
-				resp = r
-				completed = true
-				break
-			}
-		}
-	}
-	if !completed {
-		return protocol.ServiceTaskResponse{}, fmt.Errorf("task timed out on execution")
-	}
-
-	if completed && resp.Status == "completed" && resp.Outputs != nil {
-		var outputHash string
-		var outputName string
-		var outputSize int64
-
-		if h, ok := resp.Outputs["output_hash"].(string); ok && h != "" {
-			outputHash = h
-			outputName, _ = resp.Outputs["output_name"].(string)
-			if sz, ok := resp.Outputs["output_size"].(float64); ok {
-				outputSize = int64(sz)
-			}
-		} else {
-			for k, v := range resp.Outputs {
-				if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
-					outputHash = filepath.Base(strings.TrimPrefix(pathStr, "vfs://"))
-					outputName = k
-					break
-				}
-			}
-		}
-
-		if outputHash != "" {
-			if outputName == "" {
-				outputName = outputHash + ".pdf"
-			}
-			nextVersion := 1
-			if existing, exists := s.Storage.GetFileMeta(outputName); exists {
-				nextVersion = existing.Version + 1
-			}
-			outputMeta := protocol.IndexEntry{
-				Name:    outputName,
-				Hash:    outputHash,
-				Size:    outputSize,
-				Version: nextVersion,
-			}
-			s.Storage.Upsert(outputMeta)
-			s.Storage.SetSubscription(outputName, true)
-
-			dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
-			if err == nil {
-				_ = s.Storage.StoreRemoteBlob(outputMeta, body)
-				_ = body.Close()
-				localPath := s.Storage.GetBlobPath(outputHash)
-				resp.Outputs["result_path"] = localPath
-				for k, v := range resp.Outputs {
-					if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
-						resp.Outputs[k] = localPath
-					}
-				}
-			} else {
-				s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
-			}
-			dlCancel()
-		}
-	}
-
-	return resp, nil
-}
-
-func (s *Server) LocalServiceRunFile(serviceName, inputPath, outputName, paramStr string) (protocol.ServiceTaskResponse, error) {
-	var tempInputName string
-	var inputHash string
-	var inputSize int64
-
-	if outputName == "" {
-		outputName = "output_" + filepath.Base(inputPath)
-	}
-
-	if _, err := os.Stat(inputPath); err == nil {
-		f, err := os.Open(inputPath)
-		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to open local input file: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-
-		tempInputName = "temp_ocr_" + filepath.Base(inputPath)
-		hashVal, sizeVal, err := s.Storage.SaveLocalFileWithoutNotification(tempInputName, f)
-		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to save input file: %w", err)
-		}
-		inputHash = hashVal
-		inputSize = sizeVal
-	} else {
-		meta, ok := s.Storage.GetFileMeta(inputPath)
-		if !ok {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("input file not found on disk or VFS: %s", inputPath)
-		}
-		tempInputName = inputPath
-		inputHash = meta.Hash
-		inputSize = meta.Size
-	}
-
-	payload := make(map[string]any)
-	if paramStr != "" {
-		_ = json.Unmarshal([]byte(paramStr), &payload)
-	}
-	payload["input_name"] = tempInputName
-	payload["input_hash"] = inputHash
-	payload["input_size"] = inputSize
-	payload["output_name"] = outputName
-	payload["requester_node_id"] = s.Config.ID
-
-	payloadBytes, _ := json.Marshal(payload)
-	return s.LocalServiceRun(serviceName, string(payloadBytes))
-}
-
-func (s *Server) LocalInviteGenerate(validForMinutes int) (string, error) {
-	if validForMinutes <= 0 {
-		validForMinutes = 15
-	}
-	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
-	if err != nil {
-		return "", err
-	}
-	expiration := time.Now().Add(time.Duration(validForMinutes) * time.Minute)
-	s.AddPendingInvite(secretHex, expiration)
-	return smartToken, nil
-}
-
-func (s *Server) LocalBandwidthStats() protocol.BandwidthStats {
-	upSpeed, downSpeed := s.GetCurrentBandwidth()
-	totalSent, totalRecv := s.GetTotalBandwidth()
-	return protocol.BandwidthStats{
-		UploadSpeed:   int64(upSpeed),
-		DownloadSpeed: int64(downSpeed),
-		TotalSent:     totalSent,
-		TotalReceived: totalRecv,
-	}
-}
-
-func (s *Server) LocalPeersList() []protocol.PeerStatus {
-	var list []protocol.PeerStatus
-	for id, addr := range s.GetPeersCopy() {
-		online := s.IsPeerOnline(id)
-		var errMsg string
-		if !online {
-			errMsg = s.Peers.GetPeerError(id)
-		}
-		list = append(list, protocol.PeerStatus{
-			ID:      id,
-			Address: addr,
-			Online:  online,
-			Error:   errMsg,
-		})
-	}
-	return list
-}
-
-type tlsErrorWriter struct {
-	server *Server
-}
-
-func (w *tlsErrorWriter) Write(p []byte) (n int, err error) {
-	line := string(p)
-	if strings.Contains(line, "TLS handshake error") {
-		parts := strings.SplitN(line, "TLS handshake error from ", 2)
-		if len(parts) == 2 {
-			addrPart := parts[1]
-			addrErrParts := strings.SplitN(addrPart, ": ", 2)
-			if len(addrErrParts) == 2 {
-				hostPort := addrErrParts[0]
-				errMsg := addrErrParts[1]
-
-				host, _, err := net.SplitHostPort(hostPort)
-				if err != nil {
-					host = hostPort
-				}
-
-				// Find registered peer matching this IP/Host
-				peerID := ""
-				peerAddr := ""
-				for id, pRecord := range w.server.Peers.GetPeersRecordCopy() {
-					for _, a := range pRecord.Addresses {
-						if strings.Contains(a, host) {
-							peerID = id
-							peerAddr = a
-							break
-						}
-					}
-					if peerID != "" {
-						break
-					}
-				}
-
-				if peerID != "" {
-					w.server.Config.Logger.Error("TLS Handshake error from registered peer",
-						"peerID", peerID,
-						"peerAddress", peerAddr,
-						"remoteAddr", hostPort,
-						"error", strings.TrimSpace(errMsg),
-					)
-					w.server.SetPeerOffline(peerID, fmt.Errorf("TLS handshake failed: %s", strings.TrimSpace(errMsg)))
-					return len(p), nil
-				} else {
-					w.server.Config.Logger.Error("TLS Handshake error from unknown source",
-						"remoteAddr", hostPort,
-						"error", strings.TrimSpace(errMsg),
-					)
-					return len(p), nil
-				}
-			}
-		}
-	}
-	// Fallback to standard logging to avoid suppressing other HTTP server errors
-	w.server.Config.Logger.Error("HTTP server error", "message", strings.TrimSpace(line))
-	return len(p), nil
-}
-
-func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile string) (string, error) {
-	if serviceType == "" {
-		serviceType = "exec"
-	}
-
-	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
-	services := make(map[string]LocalService)
-
-	if data, err := os.ReadFile(servicesFile); err == nil {
-		_ = json.Unmarshal(data, &services)
-	}
-
-	var localService LocalService
-	var serviceName string
-
-	if strings.HasSuffix(name, ".json") || schemaFile != "" {
-		fileToRead := name
-		if schemaFile != "" {
-			fileToRead = schemaFile
-		}
-		data, err := os.ReadFile(fileToRead)
-		if err != nil {
-			return "", fmt.Errorf("couldn't read service file: %w", err)
-		}
-		if schemaFile != "" {
-			var schema protocol.ServiceSchema
-			if err := json.Unmarshal(data, &schema); err != nil {
-				return "", fmt.Errorf("invalid schema file format: %w", err)
-			}
-			localService.Schema = schema
-			serviceName = name
-			localService.Schema.Name = serviceName
-		} else {
-			if err := json.Unmarshal(data, &localService); err != nil {
-				return "", fmt.Errorf("invalid file format: %w", err)
-			}
-			serviceName = localService.Schema.Name
-		}
-		if serviceName == "" {
-			return "", fmt.Errorf("service name is missing in JSON schema")
-		}
-		if exec != "" {
-			localService.Exec = exec
-		}
-		if serviceType != "exec" && localService.Type == "" {
-			localService.Type = serviceType
-		}
-	} else {
-		serviceName = name
-		schema := protocol.ServiceSchema{
-			Name:        serviceName,
-			Description: desc,
-			Parameters:  make(map[string]protocol.ServiceParameter),
-		}
-
-		noReqMap := make(map[string]bool)
-		if noRequired != "" {
-			for _, p := range strings.Split(noRequired, ",") {
-				noReqMap[strings.TrimSpace(p)] = true
-			}
-		}
-
-		if param != "" {
-			for _, p := range strings.Split(param, ",") {
-				parts := strings.Split(p, ":")
-				if len(parts) < 2 {
-					return "", fmt.Errorf("invalid parameter format '%s'. Use name:type", p)
-				}
-
-				paramName := strings.TrimSpace(parts[0])
-				paramType := strings.TrimSpace(parts[1])
-
-				isRequired := true
-				if strings.HasSuffix(paramName, "?") {
-					paramName = strings.TrimSuffix(paramName, "?")
-					isRequired = false
-				} else if noReqMap[paramName] {
-					isRequired = false
-				}
-
-				schema.Parameters[paramName] = protocol.ServiceParameter{
-					Type:     paramType,
-					Required: isRequired,
-				}
-			}
-		}
-
-		localService = LocalService{
-			Type:   serviceType,
-			Exec:   exec,
-			Schema: schema,
-		}
-	}
-
-	services[serviceName] = localService
-
-	newData, _ := json.MarshalIndent(services, "", "  ")
-	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
-		return "", fmt.Errorf("error saving services file: %w", err)
-	}
-
-	s.LoadLocalServices()
-
-	return fmt.Sprintf("Service '%s' added successfully.", serviceName), nil
-}
-
-func (s *Server) LocalServiceRemove(name string) (string, error) {
-	servicesFile := filepath.Join(s.Config.StoragePath, "services.json")
-	services := make(map[string]LocalService)
-
-	if data, err := os.ReadFile(servicesFile); err == nil {
-		_ = json.Unmarshal(data, &services)
-	}
-
-	if _, exists := services[name]; !exists {
-		return "", fmt.Errorf("service '%s' not found", name)
-	}
-
-	delete(services, name)
-
-	newData, _ := json.MarshalIndent(services, "", "  ")
-	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
-		return "", fmt.Errorf("error saving services file: %w", err)
-	}
-
-	s.LoadLocalServices()
-
-	return fmt.Sprintf("Service '%s' removed successfully.", name), nil
-}
-
-func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
-	if schema.ID == "" {
-		return fmt.Errorf("pipeline ID cannot be empty")
-	}
-	if len(schema.Steps) == 0 {
-		return fmt.Errorf("pipeline must have at least one step")
-	}
-
-	// 1. Verify unique step IDs and collect them
-	stepServices := make(map[string]string) // stepID -> serviceName
-	stepNodes := make(map[string]string)    // stepID -> targetNodeID
-	var stepIDs []string
-	for _, step := range schema.Steps {
-		if step.ID == "" {
-			return fmt.Errorf("step ID cannot be empty")
-		}
-		if step.Service == "" {
-			return fmt.Errorf("step '%s' service name cannot be empty", step.ID)
-		}
-		if _, exists := stepServices[step.ID]; exists {
-			return fmt.Errorf("duplicate step ID found: '%s'. Each step in a pipeline must have a unique ID", step.ID)
-		}
-		stepServices[step.ID] = step.Service
-		stepNodes[step.ID] = step.TargetNodeID
-		stepIDs = append(stepIDs, step.ID)
-	}
-
-	// Helper to lookup service schema locally or from peers
-	getSchema := func(serviceName string) (protocol.ServiceSchema, bool) {
-		if sc, ok := s.Compute.GetService(serviceName); ok {
-			return sc, true
-		}
-		if s.Peers != nil {
-			if sc, ok := s.Peers.GetServiceSchema(serviceName); ok {
-				return sc, true
-			}
-		}
-		return protocol.ServiceSchema{}, false
-	}
-
-	// Helper to format available parameters
-	formatParams := func(params map[string]protocol.ServiceParameter) string {
-		if len(params) == 0 {
-			return "none"
-		}
-		var list []string
-		for k, p := range params {
-			list = append(list, fmt.Sprintf("%s (%s)", k, p.Type))
-		}
-		sort.Strings(list)
-		return strings.Join(list, ", ")
-	}
-
-	// 2. Validate connections
-	for _, conn := range schema.Connections {
-		fromStr := conn.FromStep
-		toStr := conn.ToStep
-		toNodeStr := ""
-		if nodeID, ok := stepNodes[toStr]; ok && nodeID != "" {
-			toNodeStr = fmt.Sprintf(" on node '%s'", nodeID)
-		}
-
-		// Validate FromStep
-		if conn.FromStep != "$initial" {
-			if _, exists := stepServices[conn.FromStep]; !exists {
-				return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: source step '%s' is not defined in pipeline steps %v",
-					conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.FromStep, stepIDs)
-			}
-		}
-
-		// Validate ToStep
-		toService, exists := stepServices[conn.ToStep]
-		if !exists {
-			return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: target step '%s' is not defined in pipeline steps %v",
-				conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.ToStep, stepIDs)
-		}
-
-		// Look up ToStep service schema
-		toSchema, toSchemaExists := getSchema(toService)
-		if toSchemaExists {
-			// Check if ToPort is a valid parameter in the Target Service
-			param, hasParam := toSchema.Parameters[conn.ToPort]
-			if !hasParam {
-				validParams := formatParams(toSchema.Parameters)
-				extraNote := ""
-				if _, isOutput := toSchema.Outputs[conn.ToPort]; isOutput {
-					extraNote = fmt.Sprintf(" (Note: '%s' is defined as an OUTPUT port for service '%s', not an input parameter!)", conn.ToPort, toService)
-				}
-				return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: port '%s' is not a valid input parameter for step '%s' (running service '%s'%s). Expected input parameters for service '%s': [%s]%s",
-					fromStr, conn.FromPort, toStr, conn.ToPort, conn.ToPort, toStr, toService, toNodeStr, toService, validParams, extraNote)
-			}
-
-			// If FromStep is not initial, and we can resolve its schema, check type compatibility
-			if conn.FromStep != "$initial" {
-				fromService := stepServices[conn.FromStep]
-				fromNodeStr := ""
-				if nodeID, ok := stepNodes[conn.FromStep]; ok && nodeID != "" {
-					fromNodeStr = fmt.Sprintf(" on node '%s'", nodeID)
-				}
-				fromSchema, fromSchemaExists := getSchema(fromService)
-				if fromSchemaExists {
-					// Check if FromPort is a valid output in the Source Service
-					outParam, hasOutParam := fromSchema.Outputs[conn.FromPort]
-					if !hasOutParam {
-						if len(fromSchema.Outputs) > 0 {
-							validOutputs := formatParams(fromSchema.Outputs)
-							return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: port '%s' is not a valid output for step '%s' (running service '%s'%s). Available output ports for service '%s': [%s]",
-								fromStr, conn.FromPort, toStr, conn.ToPort, conn.FromPort, conn.FromStep, fromService, fromNodeStr, fromService, validOutputs)
-						}
-					} else {
-						// Verify type compatibility
-						if outParam.Type != param.Type {
-							return fmt.Errorf("type mismatch on connection link [%s].%s ──► [%s].%s: source port '%s' outputs type '%s' (service '%s'%s, step '%s'), but target port '%s' requires type '%s' (service '%s'%s, step '%s')",
-								fromStr, conn.FromPort, toStr, conn.ToPort, conn.FromPort, outParam.Type, fromService, fromNodeStr, conn.FromStep, conn.ToPort, param.Type, toService, toNodeStr, conn.ToStep)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func (s *Server) LocalPipelineValidate(schemaJSON string) error {
-	var schema protocol.PipelineSchema
-	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
-	}
-
-	if err := s.ValidatePipelineSchema(schema); err != nil {
-		return fmt.Errorf("pipeline validation failed: %w", err)
-	}
-	return nil
-}
-
-func (s *Server) LocalPipelineAdd(schemaJSON string) error {
-	var schema protocol.PipelineSchema
-	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
-	}
-
-	if err := s.ValidatePipelineSchema(schema); err != nil {
-		return fmt.Errorf("pipeline validation failed: %w", err)
-	}
-
-	// Save to DB
-	if s.Storage != nil {
-		if err := s.Storage.SavePipelineSchema(schema); err != nil {
-			return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
-		}
-	}
-
-	// Register in Compute
-	s.Compute.RegisterPipeline(schema)
-
-	// Gossip update
-	go s.NotifySchema(schema, "add")
-
-	return nil
-}
-
-func (s *Server) LocalPipelineRemove(id string) error {
-	if id == "" {
-		return fmt.Errorf("pipeline ID cannot be empty")
-	}
-
-	// Delete from DB
-	if s.Storage != nil {
-		if err := s.Storage.DeletePipelineSchema(id); err != nil {
-			return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
-		}
-	}
-
-	// Unregister from Compute
-	s.Compute.UnregisterPipeline(id)
-
-	// Gossip update
-	go s.NotifySchema(protocol.PipelineSchema{ID: id}, "remove")
-
-	return nil
-}
-
-func (s *Server) LocalPipelineList() []protocol.PipelineSchema {
-	return s.Compute.ListPipelines()
-}
-
-func (s *Server) LocalPipelineGet(id string) (protocol.PipelineSchema, error) {
-	if id == "" {
-		return protocol.PipelineSchema{}, fmt.Errorf("pipeline ID cannot be empty")
-	}
-	if schema, ok := s.Compute.GetPipeline(id); ok {
-		return schema, nil
-	}
-	return protocol.PipelineSchema{}, fmt.Errorf("pipeline schema '%s' not found in cluster", id)
-}
-
-func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string) (protocol.PipelineSchema, error) {
-	schema, err := s.LocalPipelineGet(id)
-	if err != nil {
-		return protocol.PipelineSchema{}, err
-	}
-	if newID != "" {
-		schema.ID = newID
-	} else {
-		schema.ID = schema.ID + "-custom"
-	}
-	if targetNodeID == "$local" || targetNodeID == "local" {
-		targetNodeID = s.Config.ID
-	}
-	if targetNodeID != "" {
-		for i := range schema.Steps {
-			schema.Steps[i].TargetNodeID = targetNodeID
-		}
-	}
-	return schema, nil
-}
-
-func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {
-	payload := protocol.PipelineNotification{
-		Schema: schema,
-		Action: action,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err := s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
-	if err != nil {
-		s.Config.Logger.Debug("Failed to notify peer about schema update", "peerID", peerID, "pipelineID", schema.ID, "error", err)
-	}
-}
-
-func (s *Server) NotifySchema(schema protocol.PipelineSchema, action string) {
-	for peerID := range s.GetPeersCopy() {
-		s.NotifySchemaToPeer(peerID, schema, action)
-	}
-}

@@ -284,21 +284,7 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 		}
 
 		// Auto-stage any generated local output file into VFS physical storage for subsequent steps
-		if c.vfsBlobStager != nil {
-			for k, v := range outputs {
-				if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
-					if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-						hash, size, err := c.vfsBlobStager(pathStr)
-						if err == nil && hash != "" {
-							outputs["output_hash"] = hash
-							outputs["output_name"] = filepath.Base(pathStr)
-							outputs["output_size"] = float64(size)
-							outputs[k] = "vfs://" + hash
-						}
-					}
-				}
-			}
-		}
+		c.stageOutputBlobs(outputs)
 
 		pipelineCtx.Outputs[currentStep.ID] = outputs
 		pipelineCtx.CurrentStep++
@@ -307,6 +293,25 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 		c.advancePipeline(t, schema)
 	} else {
 		c.routePipelineStep(t, currentStep, schema)
+	}
+}
+
+func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) {
+	if c.vfsBlobStager == nil || outputs == nil {
+		return
+	}
+	for k, v := range outputs {
+		if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
+			if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
+				hash, size, err := c.vfsBlobStager(pathStr)
+				if err == nil && hash != "" {
+					outputs["output_hash"] = hash
+					outputs["output_name"] = filepath.Base(pathStr)
+					outputs["output_size"] = float64(size)
+					outputs[k] = "vfs://" + hash
+				}
+			}
+		}
 	}
 }
 
@@ -373,21 +378,7 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		finalOutputs["$pipeline_outputs"] = pipelineCtx.Outputs
 
 		// Auto-stage any generated local output file into VFS physical storage
-		if c.vfsBlobStager != nil {
-			for k, v := range finalOutputs {
-				if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
-					if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-						hash, size, err := c.vfsBlobStager(pathStr)
-						if err == nil && hash != "" {
-							finalOutputs["output_hash"] = hash
-							finalOutputs["output_name"] = filepath.Base(pathStr)
-							finalOutputs["output_size"] = float64(size)
-							finalOutputs[k] = "vfs://" + hash
-						}
-					}
-				}
-			}
-		}
+		c.stageOutputBlobs(finalOutputs)
 
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:  t.TaskID,

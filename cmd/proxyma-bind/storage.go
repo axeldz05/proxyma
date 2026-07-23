@@ -1,141 +1,93 @@
 package proxyma_bind
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"proxyma/internal/server"
 )
 
 func GetVFSFilesJson() string {
-	s := getSrv()
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "vfs_list", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list := s.LocalVFSList()
-	b, _ := json.Marshal(list)
-	return string(b)
+	return dispatchUnixOrLocal("vfs_list", nil, func(s *server.Server) (any, error) {
+		return s.LocalVFSList(), nil
+	})
 }
 
 // SyncVFS triggers VFS synchronization.
 func SyncVFS() string {
-	s := getSrv()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "sync", nil)
+	return dispatchUnixOrLocal("sync", nil, func(s *server.Server) (any, error) {
+		err := s.ExecuteSync()
 		if err != nil {
-			return err.Error()
+			return nil, err
 		}
-		return ""
-	}
-
-	err := s.ExecuteSync()
-	if err != nil {
-		return err.Error()
-	}
-	return ""
+		return "", nil
+	})
 }
 
 // UploadFile uploads a local file to the node's VFS.
 func UploadFile(name string, filePath string) string {
-	s := getSrv()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_upload", map[string]string{
-			"path": filePath,
-			"name": name,
-		})
+	return dispatchUnixOrLocal("vfs_upload", map[string]string{
+		"path": filePath,
+		"name": name,
+	}, func(s *server.Server) (any, error) {
+		f, err := os.Open(filePath)
 		if err != nil {
-			return err.Error()
+			return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
 		}
-		return ""
-	}
+		defer func() { _ = f.Close() }()
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Sprintf("failed to open file %s: %v", filePath, err)
-	}
-	defer func() { _ = f.Close() }()
-
-	err = s.Storage.SaveLocalFile(name, f)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
+		err = s.Storage.SaveLocalFile(name, f)
+		if err != nil {
+			return nil, err
+		}
+		return "", nil
+	})
 }
 
 // SetSubscription enables/disables subscription for a VFS file.
 func SetSubscription(name string, subscribe bool) string {
-	s := getSrv()
-
-	if s == nil {
-		action := "vfs_subscribe"
-		if !subscribe {
-			action = "vfs_unsubscribe"
-		}
-		_, err := sendUnixSocketCommand(appStorage, action, map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		return ""
+	action := "vfs_subscribe"
+	if !subscribe {
+		action = "vfs_unsubscribe"
 	}
-
-	s.Storage.SetSubscription(name, subscribe)
-	if subscribe {
-		go func() {
-			_ = s.ExecuteSync()
-		}()
-	}
-	return ""
+	return dispatchUnixOrLocal(action, map[string]string{
+		"name": name,
+	}, func(s *server.Server) (any, error) {
+		s.Storage.SetSubscription(name, subscribe)
+		if subscribe {
+			go func() {
+				_ = s.ExecuteSync()
+			}()
+		}
+		return "", nil
+	})
 }
 
 // DeleteLocalCache deletes the local blob copy of a VFS file.
 func DeleteLocalCache(name string) string {
-	s := getSrv()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_purge", map[string]string{
-			"name": name,
-		})
+	return dispatchUnixOrLocal("vfs_purge", map[string]string{
+		"name": name,
+	}, func(s *server.Server) (any, error) {
+		err := s.Storage.DeleteLocalCache(name)
 		if err != nil {
-			return err.Error()
+			return nil, err
 		}
-		return ""
-	}
-
-	err := s.Storage.DeleteLocalCache(name)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
+		return "", nil
+	})
 }
 
 // DeleteFile marks a VFS file as deleted in the registry.
 func DeleteFile(name string) string {
-	s := getSrv()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_delete", map[string]string{
-			"name": name,
-		})
+	return dispatchUnixOrLocal("vfs_delete", map[string]string{
+		"name": name,
+	}, func(s *server.Server) (any, error) {
+		err := s.Storage.DeleteLocalFile(name)
 		if err != nil {
-			return err.Error()
+			return nil, err
 		}
-		return ""
-	}
-
-	err := s.Storage.DeleteLocalFile(name)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
+		return "", nil
+	})
 }
 
 // GetLocalBlobPath returns absolute local file path for open operations.
@@ -150,21 +102,13 @@ func GetLocalBlobPath(hash string) string {
 
 // FetchFileOnDemand downloads an unsubscribed or missing file on demand from peers into local cache.
 func FetchFileOnDemand(name string) string {
-	s := getSrv()
-
-	if s == nil {
-		_, err := sendUnixSocketCommand(appStorage, "vfs_fetch", map[string]string{
-			"name": name,
-		})
+	return dispatchUnixOrLocal("vfs_fetch", map[string]string{
+		"name": name,
+	}, func(s *server.Server) (any, error) {
+		err := s.FetchFileOnDemand(name)
 		if err != nil {
-			return err.Error()
+			return nil, err
 		}
-		return ""
-	}
-
-	err := s.FetchFileOnDemand(name)
-	if err != nil {
-		return err.Error()
-	}
-	return ""
+		return "", nil
+	})
 }

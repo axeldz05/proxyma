@@ -247,12 +247,12 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
 }
 
-type LeaveRequest struct {
+type PeerIDRequest struct {
 	ID string `json:"id"`
 }
 
 func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[LeaveRequest](w, r)
+	req, ok := utils.DecodeJSONOrError[PeerIDRequest](w, r)
 	if !ok {
 		return
 	}
@@ -262,12 +262,8 @@ func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
 }
 
-type OfflineRequest struct {
-	ID string `json:"id"`
-}
-
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[OfflineRequest](w, r)
+	req, ok := utils.DecodeJSONOrError[PeerIDRequest](w, r)
 	if !ok {
 		return
 	}
@@ -295,12 +291,13 @@ func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
 
 	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
 
-	if req.Action == "add" {
+	switch req.Action {
+	case "add":
 		if s.Storage != nil {
 			_ = s.Storage.SavePipelineSchema(req.Schema)
 		}
 		s.Compute.RegisterPipeline(req.Schema)
-	} else if req.Action == "remove" {
+	case "remove":
 		if s.Storage != nil {
 			_ = s.Storage.DeletePipelineSchema(req.Schema.ID)
 		}

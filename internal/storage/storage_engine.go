@@ -34,22 +34,16 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 	}
 
 	if err = db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists([]byte("subscriptions")); err != nil {
-			logger.Error("Failed to create bucket for subscriptions", "error", err)
-			return err
+		buckets := []string{"subscriptions", "peers", "pipeline_schemas", "vfs_index"}
+		for _, bName := range buckets {
+			if _, err := tx.CreateBucketIfNotExists([]byte(bName)); err != nil {
+				logger.Error("Failed to create bucket", "bucket", bName, "error", err)
+				return err
+			}
 		}
-		if _, err := tx.CreateBucketIfNotExists([]byte("peers")); err != nil {
-			logger.Error("Failed to create bucket for peers", "error", err)
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists([]byte("pipeline_schemas")); err != nil {
-			logger.Error("Failed to create bucket for pipeline_schemas", "error", err)
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists([]byte("vfs_index"))
-		return err
+		return nil
 	}); err != nil {
-		logger.Error("Failed to create bucket for vfs_index", "error", err)
+		logger.Error("Failed to initialize database buckets", "error", err)
 		os.Exit(1)
 	}
 

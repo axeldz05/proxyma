@@ -135,59 +135,11 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         items(fileTasks) { task ->
-                            ProxymaCard(
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .width(260.dp)
-                                    .clickable { activeDetailTask = task }
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = task.service.uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            color = VioletSecondary
-                                        )
-                                        val statusColor = when (task.status) {
-                                            "completed" -> MintGreen
-                                            "failed" -> Color.Red
-                                            else -> Color.Yellow
-                                        }
-                                        Text(
-                                            text = task.status.uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp,
-                                            color = statusColor
-                                        )
-                                    }
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("Input: ${task.input}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
-                                    Text("Output: ${task.output}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
-                                    if (task.status == "completed" && task.resultPath != null) {
-                                        Spacer(Modifier.height(8.dp))
-                                        Button(
-                                            onClick = {
-                                                openFileNatively(context, task.resultPath, task.output)
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(32.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text("Open Result", fontSize = 12.sp, color = Color.White)
-                                        }
-                                    } else if (task.status == "failed" && task.error != null) {
-                                        Spacer(Modifier.height(6.dp))
-                                        Text(task.error, fontSize = 11.sp, color = Color.Red, maxLines = 2)
-                                    }
-                                }
-                            }
+                            TaskLogCardItem(
+                                task = task,
+                                onClick = { activeDetailTask = task },
+                                onOpenResult = { path, name -> openFileNatively(context, path, name) }
+                            )
                         }
                     }
                 }
@@ -223,120 +175,84 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 }
             } else {
                 items(pipelinesList, key = { it.id }) { pipeline ->
-                    ProxymaCard(
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text(pipeline.id, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
-                                    Text("Version: ${pipeline.version} | Steps: ${pipeline.steps.size}", fontSize = 12.sp, color = Color.Gray)
+                    PipelineCardItem(
+                        pipeline = pipeline,
+                        onRun = {
+                            thread {
+                                val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
+                                val specs = if (initialConns.isNotEmpty()) {
+                                    initialConns.map { conn ->
+                                        val fromPortName = conn.from_port
+                                        val tgtStep = pipeline.steps.find { it.id == conn.to_step }
+                                        val tgtSvc = tgtStep?.service ?: ""
+
+                                        var paramDef: FormParameter? = null
+                                        if (tgtSvc.isNotEmpty()) {
+                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
+                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
+                                            paramDef = parsedDetails?.parameters?.find { it.name == conn.to_port }
+                                        }
+
+                                        val pType = paramDef?.type ?: "string"
+                                        val pReq = paramDef?.required ?: false
+                                        val pDef = paramDef?.defaultValue
+                                        val pOpts = paramDef?.options
+
+                                        val lowerFrom = fromPortName.lowercase()
+                                        val lowerTo = conn.to_port.lowercase()
+                                        val isFile = pType == "file" || lowerFrom.contains("path") || lowerFrom.contains("file") || lowerFrom.contains("doc") || lowerFrom.contains("pdf") || lowerFrom.contains("image") || lowerTo.contains("path") || lowerTo.contains("file")
+                                        val isImg = lowerFrom.contains("image") || lowerFrom.contains("ocr") || lowerFrom.contains("photo") || lowerFrom.contains("pic") || lowerFrom.contains("input_path") || lowerTo.contains("image") || lowerTo.contains("photo")
+
+                                        ServiceParameterSpec(
+                                            name = fromPortName,
+                                            type = pType,
+                                            required = pReq,
+                                            isFileInput = isFile,
+                                            isImageInput = isImg,
+                                            defaultValue = pDef,
+                                            options = pOpts
+                                        )
+                                    }.distinctBy { it.name }
+                                } else {
+                                    listOf(
+                                        ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
+                                    )
                                 }
 
-                                Row {
-                                    IconButton(
-                                        onClick = {
-                                            thread {
-                                                val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
-                                                val specs = if (initialConns.isNotEmpty()) {
-                                                    initialConns.map { conn ->
-                                                        val fromPortName = conn.from_port
-                                                        val tgtStep = pipeline.steps.find { it.id == conn.to_step }
-                                                        val tgtSvc = tgtStep?.service ?: ""
-
-                                                        var paramDef: FormParameter? = null
-                                                        if (tgtSvc.isNotEmpty()) {
-                                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
-                                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
-                                                            paramDef = parsedDetails?.parameters?.find { it.name == conn.to_port }
-                                                        }
-
-                                                        val pType = paramDef?.type ?: "string"
-                                                        val pReq = paramDef?.required ?: false
-                                                        val pDef = paramDef?.defaultValue
-                                                        val pOpts = paramDef?.options
-
-                                                        val lowerFrom = fromPortName.lowercase()
-                                                        val lowerTo = conn.to_port.lowercase()
-                                                        val isFile = pType == "file" || lowerFrom.contains("path") || lowerFrom.contains("file") || lowerFrom.contains("doc") || lowerFrom.contains("pdf") || lowerFrom.contains("image") || lowerTo.contains("path") || lowerTo.contains("file")
-                                                        val isImg = lowerFrom.contains("image") || lowerFrom.contains("ocr") || lowerFrom.contains("photo") || lowerFrom.contains("pic") || lowerFrom.contains("input_path") || lowerTo.contains("image") || lowerTo.contains("photo")
-
-                                                        ServiceParameterSpec(
-                                                            name = fromPortName,
-                                                            type = pType,
-                                                            required = pReq,
-                                                            isFileInput = isFile,
-                                                            isImageInput = isImg,
-                                                            defaultValue = pDef,
-                                                            options = pOpts
-                                                        )
-                                                    }.distinctBy { it.name }
-                                                } else {
-                                                    listOf(
-                                                        ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
-                                                    )
-                                                }
-
-                                                isRunningOnMainThread {
-                                                    runTargetName = pipeline.id
-                                                    runTargetIsPipeline = true
-                                                    runTargetSpecs = specs
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = "Run Pipeline", tint = MintGreen)
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            editingPipeline = pipeline
-                                            showEditor = true
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Edit, contentDescription = "Edit Pipeline", tint = VioletSecondary)
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            val clonedJson = proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
-                                            if (clonedJson.contains("\"error\":")) {
-                                                context.toast("Error cloning pipeline: $clonedJson")
-                                            } else {
-                                                val cloned = parsePipelineSchema(clonedJson)
-                                                if (cloned != null) {
-                                                    editingPipeline = cloned
-                                                    showEditor = true
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.ContentCopy, contentDescription = "Clone & Localize Pipeline", tint = MintGreen)
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            executeGoCall(
-                                                context = context,
-                                                onStart = {},
-                                                onComplete = {},
-                                                action = { proxyma_bind.Proxyma_bind.removePipeline(pipeline.id) }
-                                            ) {
-                                                context.toast("Pipeline '${pipeline.id}' removed successfully.")
-                                            }
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete Pipeline", tint = Color.Red)
-                                    }
+                                isRunningOnMainThread {
+                                    runTargetName = pipeline.id
+                                    runTargetIsPipeline = true
+                                    runTargetSpecs = specs
                                 }
                             }
+                        },
+                        onEdit = {
+                            editingPipeline = pipeline
+                            showEditor = true
+                        },
+                        onClone = {
+                            val clonedJson = proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
+                            if (clonedJson.contains("\"error\":")) {
+                                context.toast("Error cloning pipeline: $clonedJson")
+                            } else {
+                                val cloned = parsePipelineSchema(clonedJson)
+                                if (cloned != null) {
+                                    editingPipeline = cloned
+                                    showEditor = true
+                                }
+                            }
+                        },
+                        onDelete = {
+                            executeGoCall(
+                                context = context,
+                                onStart = {},
+                                onComplete = {},
+                                action = { proxyma_bind.Proxyma_bind.removePipeline(pipeline.id) }
+                            ) {
+                                context.toast("Pipeline '${pipeline.id}' removed successfully.")
+                            }
                         }
-                    }
+                    )
                 }
             }
 
@@ -382,70 +298,47 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 }
             } else {
                 items(displayedServices, key = { it }) { svcName ->
-                    ProxymaCard(
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                selectedService = svcName
-                                executeGoCall(
-                                    context = context,
-                                    onStart = { isLoading = true },
-                                    onComplete = { isLoading = false },
-                                    action = { proxyma_bind.Proxyma_bind.getServiceDetails(svcName) }
-                                ) { details ->
-                                    serviceDetailJson = details
-                                }
+                    ServiceCardItem(
+                        svcName = svcName,
+                        onClick = {
+                            selectedService = svcName
+                            executeGoCall(
+                                context = context,
+                                onStart = { isLoading = true },
+                                onComplete = { isLoading = false },
+                                action = { proxyma_bind.Proxyma_bind.getServiceDetails(svcName) }
+                            ) { details ->
+                                serviceDetailJson = details
                             }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CloudQueue, contentDescription = "Compute", tint = VioletSecondary)
-                                Spacer(Modifier.width(12.dp))
-                                Text(svcName, fontWeight = FontWeight.Bold, color = Color.White)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = {
-                                        thread {
-                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
-                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
-                                            val specs = parsedDetails?.parameters?.map { p ->
-                                                val lower = p.name.lowercase()
-                                                val isFile = lower.contains("path") || lower.contains("file") || lower.contains("doc") || lower.contains("pdf") || lower.contains("image")
-                                                val isImg = lower.contains("image") || lower.contains("ocr") || lower.contains("photo") || lower.contains("pic") || lower.contains("input_path")
-                                                ServiceParameterSpec(
-                                                    name = p.name,
-                                                    type = p.type,
-                                                    required = p.required,
-                                                    isFileInput = isFile,
-                                                    isImageInput = isImg,
-                                                    defaultValue = p.defaultValue,
-                                                    options = p.options
-                                                )
-                                            } ?: listOf(
-                                                ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
-                                            )
-                                            isRunningOnMainThread {
-                                                runTargetName = svcName
-                                                runTargetIsPipeline = false
-                                                runTargetSpecs = specs
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "Run Service", tint = MintGreen)
+                        },
+                        onRun = {
+                            thread {
+                                val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
+                                val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
+                                val specs = parsedDetails?.parameters?.map { p ->
+                                    val lower = p.name.lowercase()
+                                    val isFile = lower.contains("path") || lower.contains("file") || lower.contains("doc") || lower.contains("pdf") || lower.contains("image")
+                                    val isImg = lower.contains("image") || lower.contains("ocr") || lower.contains("photo") || lower.contains("pic") || lower.contains("input_path")
+                                    ServiceParameterSpec(
+                                        name = p.name,
+                                        type = p.type,
+                                        required = p.required,
+                                        isFileInput = isFile,
+                                        isImageInput = isImg,
+                                        defaultValue = p.defaultValue,
+                                        options = p.options
+                                    )
+                                } ?: listOf(
+                                    ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
+                                )
+                                isRunningOnMainThread {
+                                    runTargetName = svcName
+                                    runTargetIsPipeline = false
+                                    runTargetSpecs = specs
                                 }
-                                Icon(Icons.Default.ChevronRight, contentDescription = "Open Details", tint = Color.Gray)
                             }
                         }
-                    }
+                    )
                 }
             }
         }
@@ -654,81 +547,21 @@ fun RunTaskDialog(
                 } else {
                     items(parameterSpecs) { spec ->
                         val currentValue = paramValues[spec.name] ?: ""
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${spec.name}${if (spec.required) " *" else " (opt)"}",
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (spec.required) Color.White else Color.LightGray,
-                                    fontSize = 14.sp
-                                )
-                                Text("type: ${spec.type}", fontSize = 11.sp, color = Color.Gray)
+                        ServiceParameterField(
+                            spec = spec,
+                            currentValue = currentValue,
+                            onValueChange = { paramValues[spec.name] = it },
+                            onPickFile = {
+                                activeParamForPicker = spec.name
+                                filePickerLauncher.launch("*/*")
+                            },
+                            onTakePhoto = {
+                                val (uri, file) = createTempCameraFile(context)
+                                cameraPhotoFile = file
+                                activeParamForCamera = spec.name
+                                cameraLauncher.launch(uri)
                             }
-                            Spacer(Modifier.height(4.dp))
-
-                            if (!spec.options.isNullOrEmpty()) {
-                                var expandedOptions by remember { mutableStateOf(false) }
-                                Box(modifier = Modifier.fillMaxWidth()) {
-                                    OutlinedButton(
-                                        onClick = { expandedOptions = true },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(if (currentValue.isEmpty()) "Select Preset..." else "Preset: $currentValue", fontSize = 12.sp, color = Color.White)
-                                    }
-                                    DropdownMenu(
-                                        expanded = expandedOptions,
-                                        onDismissRequest = { expandedOptions = false }
-                                    ) {
-                                        spec.options.forEach { opt ->
-                                            DropdownMenuItem(
-                                                text = { Text(opt) },
-                                                onClick = {
-                                                    paramValues[spec.name] = opt
-                                                    expandedOptions = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.height(4.dp))
-                            }
-
-                            OutlinedTextField(
-                                value = currentValue,
-                                onValueChange = { paramValues[spec.name] = it },
-                                label = { Text("Value / Path for ${spec.name}") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                if (spec.isFileInput) {
-                                    IconButton(onClick = {
-                                        activeParamForPicker = spec.name
-                                        filePickerLauncher.launch("*/*")
-                                    }) {
-                                        Icon(Icons.Default.Folder, contentDescription = "Pick File", tint = MintGreen)
-                                    }
-                                }
-                                if (spec.isImageInput) {
-                                    IconButton(onClick = {
-                                        val (uri, file) = createTempCameraFile(context)
-                                        cameraPhotoFile = file
-                                        activeParamForCamera = spec.name
-                                        cameraLauncher.launch(uri)
-                                    }) {
-                                        Icon(Icons.Default.PhotoCamera, contentDescription = "Take Photo", tint = VioletSecondary)
-                                    }
-                                }
-                            }
-                        }
+                        )
                     }
                 }
             }
@@ -760,6 +593,218 @@ private fun parsePipelineSchema(json: String): PipelineSchema? {
         Gson().fromJson(json, PipelineSchema::class.java)
     } catch (e: Exception) {
         null
+    }
+}
+
+@Composable
+fun ServiceParameterField(
+    spec: ServiceParameterSpec,
+    currentValue: String,
+    onValueChange: (String) -> Unit,
+    onPickFile: () -> Unit,
+    onTakePhoto: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${spec.name}${if (spec.required) " *" else " (opt)"}",
+                fontWeight = FontWeight.Bold,
+                color = if (spec.required) Color.White else Color.LightGray,
+                fontSize = 14.sp
+            )
+            Text("type: ${spec.type}", fontSize = 11.sp, color = Color.Gray)
+        }
+        Spacer(Modifier.height(4.dp))
+
+        if (!spec.options.isNullOrEmpty()) {
+            var expandedOptions by remember { mutableStateOf(false) }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { expandedOptions = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (currentValue.isEmpty()) "Select Preset..." else "Preset: $currentValue", fontSize = 12.sp, color = Color.White)
+                }
+                DropdownMenu(
+                    expanded = expandedOptions,
+                    onDismissRequest = { expandedOptions = false }
+                ) {
+                    spec.options.forEach { opt ->
+                        DropdownMenuItem(
+                            text = { Text(opt) },
+                            onClick = {
+                                onValueChange(opt)
+                                expandedOptions = false
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+
+        OutlinedTextField(
+            value = currentValue,
+            onValueChange = onValueChange,
+            label = { Text("Value / Path for ${spec.name}") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            if (spec.isFileInput) {
+                IconButton(onClick = onPickFile) {
+                    Icon(Icons.Default.Folder, contentDescription = "Pick File", tint = MintGreen)
+                }
+            }
+            if (spec.isImageInput) {
+                IconButton(onClick = onTakePhoto) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = "Take Photo", tint = VioletSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TaskLogCardItem(
+    task: FileTask,
+    onClick: () -> Unit,
+    onOpenResult: (path: String, outputName: String) -> Unit
+) {
+    ProxymaCard(
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .width(260.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = task.service.uppercase(),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = VioletSecondary
+                )
+                val statusColor = when (task.status) {
+                    "completed" -> MintGreen
+                    "failed" -> Color.Red
+                    else -> Color.Yellow
+                }
+                Text(
+                    text = task.status.uppercase(),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    color = statusColor
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text("Input: ${task.input}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
+            Text("Output: ${task.output}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
+            if (task.status == "completed" && task.resultPath != null) {
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onOpenResult(task.resultPath, task.output) },
+                    colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Open Result", fontSize = 12.sp, color = Color.White)
+                }
+            } else if (task.status == "failed" && task.error != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(task.error, fontSize = 11.sp, color = Color.Red, maxLines = 2)
+            }
+        }
+    }
+}
+
+@Composable
+fun PipelineCardItem(
+    pipeline: PipelineSchema,
+    onRun: () -> Unit,
+    onEdit: () -> Unit,
+    onClone: () -> Unit,
+    onDelete: () -> Unit
+) {
+    ProxymaCard(
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(pipeline.id, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+                    Text("Version: ${pipeline.version} | Steps: ${pipeline.steps.size}", fontSize = 12.sp, color = Color.Gray)
+                }
+
+                Row {
+                    IconButton(onClick = onRun) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Run Pipeline", tint = MintGreen)
+                    }
+                    IconButton(onClick = onEdit) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Pipeline", tint = VioletSecondary)
+                    }
+                    IconButton(onClick = onClone) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Clone & Localize Pipeline", tint = MintGreen)
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Pipeline", tint = Color.Red)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ServiceCardItem(
+    svcName: String,
+    onClick: () -> Unit,
+    onRun: () -> Unit
+) {
+    ProxymaCard(
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CloudQueue, contentDescription = "Compute", tint = VioletSecondary)
+                Spacer(Modifier.width(12.dp))
+                Text(svcName, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onRun) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Run Service", tint = MintGreen)
+                }
+                Icon(Icons.Default.ChevronRight, contentDescription = "Open Details", tint = Color.Gray)
+            }
+        }
     }
 }
 

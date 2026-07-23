@@ -1,5 +1,7 @@
 package uischema
 
+import "encoding/json"
+
 // ParameterDetail defines a parameter for an action
 type ParameterDetail struct {
 	Name         string   `json:"name"`
@@ -341,4 +343,21 @@ func init() {
 			Registry[i].Actions[j].Domain = Registry[i].Name
 		}
 	}
+}
+
+// GetRegistryJSON returns the complete UI Schema registry in JSON format.
+func GetRegistryJSON() string {
+	b, _ := json.Marshal(Registry)
+	return string(b)
+}
+
+// GetDomainJSON returns a specific domain metadata by name in JSON format.
+func GetDomainJSON(domainName string) string {
+	for _, d := range Registry {
+		if d.Name == domainName {
+			b, _ := json.Marshal(d)
+			return string(b)
+		}
+	}
+	return "{}"
 }

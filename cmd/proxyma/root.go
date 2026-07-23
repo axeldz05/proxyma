@@ -259,6 +259,13 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 	retMsg := func(msg string) string {
 		return fmt.Sprintf(`{"message": %q}`, msg)
 	}
+	runAction := func(fn func() string, successMsg string) string {
+		errStr := fn()
+		if errStr != "" {
+			return retErr(errStr)
+		}
+		return retMsg(successMsg)
+	}
 
 	switch domain {
 	case "storage":
@@ -271,39 +278,19 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			if name == "" {
 				name = filepath.Base(filePath)
 			}
-			errStr := proxyma_bind.UploadFile(name, filePath)
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg(fmt.Sprintf("File '%s' uploaded successfully to VFS.", name))
+			return runAction(func() string { return proxyma_bind.UploadFile(name, filePath) }, fmt.Sprintf("File '%s' uploaded successfully to VFS.", name))
 		case "subscribe":
 			name := args["name"]
-			errStr := proxyma_bind.SetSubscription(name, true)
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg(fmt.Sprintf("Subscribed to file '%s'. Synchronization triggered.", name))
+			return runAction(func() string { return proxyma_bind.SetSubscription(name, true) }, fmt.Sprintf("Subscribed to file '%s'. Synchronization triggered.", name))
 		case "unsubscribe":
 			name := args["name"]
-			errStr := proxyma_bind.SetSubscription(name, false)
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg(fmt.Sprintf("Unsubscribed from file '%s'.", name))
+			return runAction(func() string { return proxyma_bind.SetSubscription(name, false) }, fmt.Sprintf("Unsubscribed from file '%s'.", name))
 		case "delete":
 			name := args["name"]
-			errStr := proxyma_bind.DeleteFile(name)
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg(fmt.Sprintf("File '%s' marked as deleted in VFS registry.", name))
+			return runAction(func() string { return proxyma_bind.DeleteFile(name) }, fmt.Sprintf("File '%s' marked as deleted in VFS registry.", name))
 		case "purge":
 			name := args["name"]
-			errStr := proxyma_bind.DeleteLocalCache(name)
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg(fmt.Sprintf("Physical cache for file '%s' purged from disk.", name))
+			return runAction(func() string { return proxyma_bind.DeleteLocalCache(name) }, fmt.Sprintf("Physical cache for file '%s' purged from disk.", name))
 		case "open":
 			name := args["name"]
 			if name == "" {
@@ -330,11 +317,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			_ = exec.Command("xdg-open", localPath).Start()
 			return retMsg(fmt.Sprintf("File '%s' fetched on-demand into cache and opened at: %s", name, localPath))
 		case "sync":
-			errStr := proxyma_bind.SyncVFS()
-			if errStr != "" {
-				return retErr(errStr)
-			}
-			return retMsg("Synchronization triggered successfully.")
+			return runAction(proxyma_bind.SyncVFS, "Synchronization triggered successfully.")
 		default:
 			return retErr(fmt.Sprintf("unknown action '%s' for domain '%s'", action, domain))
 		}

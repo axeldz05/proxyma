@@ -65,12 +65,12 @@ func main() {
 		fmt.Printf("Error creating output file: %v\n", err)
 		os.Exit(1)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	writer := bufio.NewWriter(outFile)
 	_, _ = writer.WriteString("mode: " + mode + "\n")
 	for _, block := range order {
-		_, _ = writer.WriteString(fmt.Sprintf("%s %d\n", block, counts[block]))
+		_, _ = fmt.Fprintf(writer, "%s %d\n", block, counts[block])
 	}
 	_ = writer.Flush()
 	fmt.Printf("Successfully merged profiles into %s\n", outputPath)

@@ -117,36 +117,36 @@ fun isRunningOnMainThread(action: () -> Unit) {
     android.os.Handler(android.os.Looper.getMainLooper()).post(action)
 }
 
+fun parseJSONMap(json: String): Map<String, Any> {
+    return try {
+        Gson().fromJson<Map<String, Any>>(json, object : TypeToken<Map<String, Any>>() {}.type) ?: emptyMap()
+    } catch (e: Exception) {
+        emptyMap()
+    }
+}
+
 fun getActionError(res: String): String = parseJSONField(res, "error")
 
 fun getActionMessage(res: String): String = parseJSONField(res, "message")
 
 fun getResultPath(res: String): String {
-    return try {
-        val map = Gson().fromJson<Map<String, Any>>(res, object : TypeToken<Map<String, Any>>() {}.type)
-        val outputs = map["outputs"] as? Map<String, Any>
-        if (outputs != null) {
-            val resultPath = outputs["result_path"] as? String
-                ?: outputs["output_path"] as? String
-                ?: outputs["note_path"] as? String
-                ?: outputs["path"] as? String
-            if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
-                return resultPath
-            }
+    val map = parseJSONMap(res)
+    val outputs = map["outputs"] as? Map<String, Any>
+    if (outputs != null) {
+        val resultPath = outputs["result_path"] as? String
+            ?: outputs["output_path"] as? String
+            ?: outputs["note_path"] as? String
+            ?: outputs["path"] as? String
+        if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
+            return resultPath
         }
-        ""
-    } catch (e: Exception) {
-        ""
     }
+    return ""
 }
 
 private fun parseJSONField(json: String, key: String): String {
-    return try {
-        val map = Gson().fromJson<Map<String, Any>>(json, object : TypeToken<Map<String, Any>>() {}.type)
-        (map[key] as? String) ?: ""
-    } catch (e: Exception) {
-        ""
-    }
+    val map = parseJSONMap(json)
+    return (map[key] as? String) ?: ""
 }
 
 @Composable

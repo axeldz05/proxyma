@@ -51,6 +51,27 @@ func GetStoragePath() string {
 	return appStorage
 }
 
+func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s *server.Server) (any, error)) string {
+	s := getSrv()
+	if s == nil {
+		data, err := sendUnixSocketCommand(appStorage, action, args)
+		if err != nil {
+			return fmt.Sprintf(`{"error": %q}`, err.Error())
+		}
+		return string(data)
+	}
+
+	res, err := localCall(s)
+	if err != nil {
+		return fmt.Sprintf(`{"error": %q}`, err.Error())
+	}
+	if str, ok := res.(string); ok {
+		return str
+	}
+	b, _ := json.Marshal(res)
+	return string(b)
+}
+
 func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
 	cfg, err := protocol.LoadConfig(storagePath)
 	if err != nil {
@@ -346,6 +367,16 @@ func copyDir(src string, dst string) error {
 		}
 	}
 	return nil
+}
+
+// GetUISchemaJson exports the full single-source-of-truth UI Schema registry as JSON.
+func GetUISchemaJson() string {
+	return uischema.GetRegistryJSON()
+}
+
+// GetDomainSchemaJson exports metadata for a specific domain as JSON.
+func GetDomainSchemaJson(domainName string) string {
+	return uischema.GetDomainJSON(domainName)
 }
 
 // GetUISchemaJSON serializes the global UI schema domains to JSON.

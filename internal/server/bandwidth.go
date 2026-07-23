@@ -27,32 +27,34 @@ func NewBandwidthTracker() *BandwidthTracker {
 	return &BandwidthTracker{}
 }
 
-// RecordBytesSent records the number of bytes sent via a request path.
-func (bt *BandwidthTracker) RecordBytesSent(n int64, path string) {
+func (bt *BandwidthTracker) recordTransfer(isSent bool, n int64, path string) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
-	bt.totalSent += n
-	bt.sentHistory = append(bt.sentHistory, TransferRecord{
+
+	rec := TransferRecord{
 		Timestamp: time.Now(),
 		Bytes:     n,
 		Category:  bt.CategorizePath(path),
-	})
-	threshold := time.Now().Add(-5 * time.Second)
-	bt.sentHistory, _ = pruneHistory(bt.sentHistory, threshold)
+	}
+	threshold := rec.Timestamp.Add(-5 * time.Second)
+
+	if isSent {
+		bt.totalSent += n
+		bt.sentHistory, _ = pruneHistory(append(bt.sentHistory, rec), threshold)
+	} else {
+		bt.totalReceived += n
+		bt.receivedHistory, _ = pruneHistory(append(bt.receivedHistory, rec), threshold)
+	}
+}
+
+// RecordBytesSent records the number of bytes sent via a request path.
+func (bt *BandwidthTracker) RecordBytesSent(n int64, path string) {
+	bt.recordTransfer(true, n, path)
 }
 
 // RecordBytesReceived records the number of bytes received via a request path.
 func (bt *BandwidthTracker) RecordBytesReceived(n int64, path string) {
-	bt.mu.Lock()
-	defer bt.mu.Unlock()
-	bt.totalReceived += n
-	bt.receivedHistory = append(bt.receivedHistory, TransferRecord{
-		Timestamp: time.Now(),
-		Bytes:     n,
-		Category:  bt.CategorizePath(path),
-	})
-	threshold := time.Now().Add(-5 * time.Second)
-	bt.receivedHistory, _ = pruneHistory(bt.receivedHistory, threshold)
+	bt.recordTransfer(false, n, path)
 }
 
 // GetCurrentBandwidth calculates the upload and download bandwidth for the last 5 seconds.

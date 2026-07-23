@@ -169,13 +169,7 @@ fun ServiceDetailLayout(
                                 val resultJson = proxyma_bind.Proxyma_bind.runFileService(details.name, input, output, paramJson)
                                 android.util.Log.d("ProxymaUI", "runFileService returned: " + resultJson)
                                 isRunningOnMainThread {
-                                    val map = try {
-                                        Gson().fromJson<Map<String, Any>>(resultJson, object : TypeToken<Map<String, Any>>() {}.type)
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("ProxymaUI", "JSON parse error: " + e.message)
-                                        mapOf("error" to "Daemon response error: ${e.message}")
-                                    }
-
+                                    val map = parseJSONMap(resultJson)
                                     val idx = fileTasks.indexOfFirst { it.taskId == taskId }
                                     if (idx != -1) {
                                         val errVal = map["error"] as? String
