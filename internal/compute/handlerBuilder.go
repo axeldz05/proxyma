@@ -83,6 +83,12 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	}
 }
 
+// StreamServiceHandler signature for handlers that stream chunks (io.ReadCloser) to the caller.
+type StreamServiceHandler func(ctx context.Context, payload map[string]any) (io.ReadCloser, error)
+
+// BidiStreamHandler signature for bidirectional stream handlers (e.g. gRPC bidi or WebSockets).
+type BidiStreamHandler func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any) error
+
 // notImplementedHandler generates a stub for unsupported connections.
 func notImplementedHandler(name string) ServiceHandler {
 	return func(ctx context.Context, payload map[string]any) (map[string]any, error) {

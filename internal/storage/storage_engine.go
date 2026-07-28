@@ -17,7 +17,7 @@ import (
 
 type StorageEngine struct {
 	physical         storage.Storage
-	vfs              *VFS
+	vfs              IndexStore
 	subscriptions    *bolt.DB
 	logger           *slog.Logger
 	peerClient       p2p.PeerClient

@@ -7,9 +7,19 @@ import (
 	"github.com/boltdb/bolt"
 )
 
+// IndexStore defines the abstraction for VFS metadata indexing.
+// Implementing this interface allows plugging alternative storage backends (e.g. BadgerDB, SQLite, Pebble).
+type IndexStore interface {
+	Get(name string) (protocol.IndexEntry, bool)
+	Upsert(entry protocol.IndexEntry) bool
+	Snapshot() map[string]protocol.IndexEntry
+}
+
 type VFS struct {
 	index *bolt.DB
 }
+
+var _ IndexStore = (*VFS)(nil)
 
 func NewVFS(index *bolt.DB) *VFS {
 	return &VFS{
