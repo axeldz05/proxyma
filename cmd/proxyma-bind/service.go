@@ -42,14 +42,35 @@ func DiscoverServices() string {
 
 // GetServiceSchema returns the raw protocol.ServiceSchema JSON for a service (L2).
 // Prefer this over GetServiceDetails when callers need Type/IsStreaming/Parameters map.
+// Offline arm loads from services.json when daemon is unreachable.
 func GetServiceSchema(name string) string {
-	return dispatchUnixOrLocal("service_detail", map[string]string{"name": name}, func(s *server.Server) (any, error) {
-		schema, _, err := s.LocalServiceDetail(name)
-		if err != nil {
-			return nil, err
-		}
-		return schema, nil
-	})
+	return dispatchUnixLocalOrOffline("service_detail", map[string]string{"name": name},
+		func(s *server.Server) (any, error) {
+			schema, _, err := s.LocalServiceDetail(name)
+			if err != nil {
+				return nil, err
+			}
+			return schema, nil
+		},
+		func() (any, error) {
+			svcs, err := compute.LoadServicesMap(appStorage)
+			if err != nil {
+				return nil, err
+			}
+			svc, ok := svcs[name]
+			if !ok {
+				return nil, fmt.Errorf("service %q not found offline", name)
+			}
+			schema := svc.Schema
+			if schema.Name == "" {
+				schema.Name = name
+			}
+			if schema.Type == "" {
+				schema.Type = svc.Type
+			}
+			return schema, nil
+		},
+	)
 }
 
 // resolveServiceSchema loads ServiceSchema + optional remote provider address.
@@ -297,7 +318,7 @@ func GetTaskStatus(taskID string) string {
 func AddPipeline(id string, schemaFile string) string {
 	schemaBytes, err := os.ReadFile(schemaFile)
 	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
+		return bindErrorJSON(err)
 	}
 	return AddPipelineRaw(id, string(schemaBytes))
 }
@@ -305,7 +326,7 @@ func AddPipeline(id string, schemaFile string) string {
 func registerPipelineJSON(id, schemaJSON string) string {
 	var schema protocol.PipelineSchema
 	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return fmt.Sprintf(`{"error": "invalid pipeline schema json: %s"}`, err.Error())
+		return bindErrorJSON(fmt.Errorf("invalid pipeline schema json: %s", err.Error()))
 	}
 	schema.ID = id
 	normalizedJSON, _ := json.Marshal(schema)
@@ -356,14 +377,9 @@ func ListPipelines() string {
 	})
 }
 
-// RunPipeline runs a pipeline task.
+// RunPipeline runs a pipeline task (alias of RunService).
 func RunPipeline(id string, payloadJson string) string {
-	return dispatchUnixOrLocal("service_run", map[string]string{
-		"service": id,
-		"payload": payloadJson,
-	}, func(s *server.Server) (any, error) {
-		return s.LocalServiceRun(id, payloadJson)
-	})
+	return RunService(id, payloadJson)
 }
 
 // GetPipelineSchemaJson returns a pipeline schema JSON by ID.

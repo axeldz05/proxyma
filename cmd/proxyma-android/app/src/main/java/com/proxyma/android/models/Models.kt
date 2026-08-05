@@ -91,11 +91,4 @@ data class ServiceParameter(
     val uiHint: String? = null
 )
 
-data class ServiceSchema(
-    val name: String,
-    val description: String? = null,
-    val parameters: Map<String, ServiceParameter>? = null,
-    val outputs: Map<String, ServiceParameter>? = null
-)
-
 

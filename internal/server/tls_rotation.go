@@ -59,8 +59,7 @@ func (s *Server) RotateCAAndResignPeers() {
 	}
 
 	// 2. Re-sign own certificate with the new CA
-	ownCertFile := filepath.Join(certsDir, fmt.Sprintf("%s.crt", s.Config.ID))
-	ownKeyFile := filepath.Join(certsDir, fmt.Sprintf("%s.key", s.Config.ID))
+	ownCertFile, ownKeyFile := p2p.NodeCertPaths(certsDir, s.Config.ID)
 	err = p2p.IssueNodeCertificate(certsDir, certsDir, s.Config.ID)
 	if err != nil {
 		s.Config.Logger.Error("Failed to re-sign own certificate", "error", err)

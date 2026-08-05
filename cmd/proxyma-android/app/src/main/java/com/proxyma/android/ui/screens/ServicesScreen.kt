@@ -1,9 +1,6 @@
 package com.proxyma.android.ui.screens
 
-import android.net.Uri
 import android.util.Log
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,8 +17,6 @@ import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -38,17 +33,15 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FileTask
 import com.proxyma.android.models.FormParameter
-import com.proxyma.android.models.PipelineConnection
 import com.proxyma.android.models.PipelineSchema
-import com.proxyma.android.models.PipelineStep
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.components.Icon
+import com.proxyma.android.ui.components.ParameterInput
 import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import java.io.File
 import kotlin.concurrent.thread
 
 private val fileTasks = mutableStateListOf<FileTask>()
@@ -86,11 +79,8 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             Log.i("ProxymaService", "[Android UI] Service discovery response: $raw")
 
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
-            if (raw.contains("\"error\":")) {
-                val errorMsg = try {
-                    val obj = Gson().fromJson(raw, Map::class.java)
-                    obj["error"]?.toString() ?: raw
-                } catch (e: Exception) { raw }
+            if (isBindError(raw)) {
+                val errorMsg = parseBindError(raw).ifEmpty { raw }
                 Log.e("ProxymaService", "[Android UI] Service discovery error: $errorMsg")
                 handler.post {
                     isManualDiscovering = false
@@ -223,8 +213,8 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         },
                         onClone = {
                             val clonedJson = proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
-                            if (clonedJson.contains("\"error\":")) {
-                                context.toast("Error cloning pipeline: $clonedJson")
+                            if (isBindError(clonedJson)) {
+                                context.toast("Error cloning pipeline: ${parseBindError(clonedJson).ifEmpty { clonedJson }}")
                             } else {
                                 val cloned = parsePipelineSchema(clonedJson)
                                 if (cloned != null) {
@@ -454,140 +444,45 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 fileTasks.add(0, newTask)
                 context.toast(if (isStream) "🌊 Streaming $targetId..." else "🚀 Running $targetId...")
 
-                if (isPipe) {
-                    thread {
-                        val res = proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
-                        val err = getActionError(res)
-                        isRunningOnMainThread {
-                            val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                            if (err.isNotEmpty()) {
-                                context.toast("❌ Execution failed: $err", long = true)
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
-                                }
-                            } else {
-                                context.toast("✅ Execution completed!")
-                                val resPath = getResultPath(res)
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(
-                                        status = "completed",
-                                        resultPath = if (resPath.isNotEmpty()) resPath else null
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else if (isStream) {
-                    proxyma_bind.Proxyma_bind.streamService(targetId, payloadJson, object : proxyma_bind.StreamEventListener {
-                        override fun onChunk(chunkJSON: String) {
-                            isRunningOnMainThread {
-                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                                if (index != -1) {
-                                    val current = fileTasks[index]
-                                    val updatedOutput = if (current.streamOutput.isNullOrEmpty()) {
-                                        chunkJSON
-                                    } else {
-                                        current.streamOutput + "\n" + chunkJSON
-                                    }
-                                    fileTasks[index] = current.copy(streamOutput = updatedOutput)
-                                }
-                            }
-                        }
-
-                        override fun onError(errMsg: String) {
-                            isRunningOnMainThread {
-                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = errMsg)
-                                }
-                                context.toast("❌ Stream error: $errMsg", long = true)
-                            }
-                        }
-
-                        override fun onComplete() {
-                            isRunningOnMainThread {
-                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(status = "completed")
-                                }
-                                context.toast("✅ Stream completed!")
-                            }
-                        }
-                    })
+                if (isStream) {
+                    attachStreamToFileTask(
+                        fileTasks = fileTasks,
+                        taskId = taskID,
+                        serviceName = targetId,
+                        payloadJson = payloadJson,
+                        context = context
+                    )
                 } else {
-                    thread {
-                        val res = proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
-                        val err = getActionError(res)
-                        isRunningOnMainThread {
-                            val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                            if (err.isNotEmpty()) {
-                                context.toast("❌ Execution failed: $err", long = true)
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
-                                }
-                            } else {
-                                context.toast("✅ Execution completed!")
-                                val resPath = getResultPath(res)
-                                if (index != -1) {
-                                    fileTasks[index] = fileTasks[index].copy(
-                                        status = "completed",
-                                        resultPath = if (resPath.isNotEmpty()) resPath else null
-                                    )
-                                }
-                            }
+                    startUnaryFileTask(
+                        fileTasks = fileTasks,
+                        taskId = taskID,
+                        context = context,
+                        action = {
+                            if (isPipe) proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
+                            else proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
                         }
-                    }
+                    )
                 }
             }
         )
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RunTaskDialog(
     targetName: String,
     isPipeline: Boolean,
     parameterSpecs: List<FormParameter>,
     onDismiss: () -> Unit,
-    onExecute: (payloadMap: Map<String, String>) -> Unit
+    onExecute: (payloadMap: Map<String, Any>) -> Unit
 ) {
     val context = LocalContext.current
-    val paramValues = remember { mutableStateMapOf<String, String>() }
-
-    var activeParamForPicker by remember { mutableStateOf<String?>(null) }
-    var activeParamForCamera by remember { mutableStateOf<String?>(null) }
-    var cameraPhotoFile by remember { mutableStateOf<File?>(null) }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        val paramName = activeParamForPicker
-        if (uri != null && paramName != null) {
-            val cachedPath = copyUriToCache(context, uri)
-            paramValues[paramName] = cachedPath
-            context.toast("Selected: ${cachedPath.substringAfterLast('/')}")
-        }
-        activeParamForPicker = null
-    }
-
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success: Boolean ->
-        val paramName = activeParamForCamera
-        val photoFile = cameraPhotoFile
-        if (success && paramName != null && photoFile != null) {
-            paramValues[paramName] = photoFile.absolutePath
-            context.toast("Photo captured!")
-        }
-        activeParamForCamera = null
-        cameraPhotoFile = null
-    }
+    val paramValues = remember { mutableStateMapOf<String, Any>() }
 
     LaunchedEffect(parameterSpecs) {
         parameterSpecs.forEach { spec ->
-            if (!param.defaultValue.isNullOrEmpty() && paramValues[param.name].isNullOrEmpty()) {
-                paramValues[param.name] = param.defaultValue
+            if (!spec.defaultValue.isNullOrEmpty() && paramValues[spec.name] == null) {
+                paramValues[spec.name] = spec.defaultValue
             }
         }
     }
@@ -606,21 +501,12 @@ fun RunTaskDialog(
                     }
                 } else {
                     items(parameterSpecs) { spec ->
-                        val currentValue = paramValues[param.name] ?: ""
-                        ServiceParameterField(
+                        ParameterInput(
                             param = spec,
-                            currentValue = currentValue,
-                            onValueChange = { paramValues[param.name] = it },
-                            onPickFile = {
-                                activeParamForPicker = param.name
-                                filePickerLauncher.launch("*/*")
-                            },
-                            onTakePhoto = {
-                                val (uri, file) = createTempCameraFile(context)
-                                cameraPhotoFile = file
-                                activeParamForCamera = param.name
-                                cameraLauncher.launch(uri)
-                            }
+                            value = paramValues[spec.name],
+                            onValueChange = { paramValues[spec.name] = it },
+                            localFilePath = true,
+                            enableCamera = true
                         )
                     }
                 }
@@ -629,7 +515,9 @@ fun RunTaskDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val missing = parameterSpecs.filter { it.required && (paramValues[it.name]?.trim() ?: "").isEmpty() }
+                    val missing = parameterSpecs.filter {
+                        it.required && (paramValues[it.name]?.toString()?.trim() ?: "").isEmpty()
+                    }
                     if (missing.isNotEmpty()) {
                         context.toast("Missing required field(s): ${missing.joinToString { it.name }}")
                         return@Button
@@ -653,83 +541,6 @@ private fun parsePipelineSchema(json: String): PipelineSchema? {
         Gson().fromJson(json, PipelineSchema::class.java)
     } catch (e: Exception) {
         null
-    }
-}
-
-@Composable
-fun ServiceParameterField(
-    param: FormParameter,
-    currentValue: String,
-    onValueChange: (String) -> Unit,
-    onPickFile: () -> Unit,
-    onTakePhoto: () -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${param.name}${if (param.required) " *" else " (opt)"}",
-                fontWeight = FontWeight.Bold,
-                color = if (param.required) Color.White else Color.LightGray,
-                fontSize = 14.sp
-            )
-            Text("type: ${param.type}", fontSize = 11.sp, color = Color.Gray)
-        }
-        Spacer(Modifier.height(4.dp))
-
-        if (!param.options.isNullOrEmpty()) {
-            var expandedOptions by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = { expandedOptions = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (currentValue.isEmpty()) "Select Preset..." else "Preset: $currentValue", fontSize = 12.sp, color = Color.White)
-                }
-                DropdownMenu(
-                    expanded = expandedOptions,
-                    onDismissRequest = { expandedOptions = false }
-                ) {
-                    param.options.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt) },
-                            onClick = {
-                                onValueChange(opt)
-                                expandedOptions = false
-                            }
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-        }
-
-        OutlinedTextField(
-            value = currentValue,
-            onValueChange = onValueChange,
-            label = { Text("Value / Path for ${param.name}") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            if (param.isFilePicker()) {
-                IconButton(onClick = onPickFile) {
-                    Icon(Icons.Default.Folder, contentDescription = "Pick File", tint = MintGreen)
-                }
-            }
-            if (param.isImagePicker()) {
-                IconButton(onClick = onTakePhoto) {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = "Take Photo", tint = VioletSecondary)
-                }
-            }
-        }
     }
 }
 

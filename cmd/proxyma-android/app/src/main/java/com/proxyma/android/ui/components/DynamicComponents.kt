@@ -8,6 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +26,7 @@ import com.proxyma.android.ui.theme.CardGray
 import com.proxyma.android.ui.theme.VioletPrimary
 import com.proxyma.android.models.FormParameter
 import com.proxyma.android.utils.*
+import java.io.File
 
 @Composable
 fun DynamicActionForm(
@@ -147,7 +150,9 @@ fun ParameterInput(
     param: FormParameter,
     value: Any?,
     errorMessage: String? = null,
-    onValueChange: (Any) -> Unit
+    onValueChange: (Any) -> Unit,
+    localFilePath: Boolean = false,
+    enableCamera: Boolean = false
 ) {
     val context = LocalContext.current
     
@@ -158,11 +163,21 @@ fun ParameterInput(
     val isImagePicker = remember(param) { param.isImagePicker() }
 
     var isFileUploading by remember { mutableStateOf(false) }
+    var cameraPhotoFile by remember { mutableStateOf<File?>(null) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        if (uri != null) {
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (localFilePath) {
+            try {
+                val path = copyUriToCache(context, uri)
+                onValueChange(path)
+                context.toast("Selected: ${path.substringAfterLast('/')}")
+            } catch (e: Exception) {
+                context.toast("Failed to copy file: ${e.message}", long = true)
+            }
+        } else {
             uploadUriToVfs(
                 context = context,
                 uri = uri,
@@ -180,6 +195,17 @@ fun ParameterInput(
                 }
             )
         }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        val photoFile = cameraPhotoFile
+        if (success && photoFile != null) {
+            onValueChange(photoFile.absolutePath)
+            context.toast("Photo captured!")
+        }
+        cameraPhotoFile = null
     }
 
     val cardBorderColor = if (errorMessage != null) Color(0xFFFF5252) else Color.DarkGray
@@ -287,6 +313,23 @@ fun ParameterInput(
                                 CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
                             } else {
                                 Text("Pick")
+                            }
+                        }
+                        if (enableCamera && isImagePicker) {
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = {
+                                    val (uri, file) = createTempCameraFile(context)
+                                    cameraPhotoFile = file
+                                    cameraLauncher.launch(uri)
+                                },
+                                enabled = !isFileUploading
+                            ) {
+                                Icon(
+                                    Icons.Default.PhotoCamera,
+                                    contentDescription = "Take Photo",
+                                    tint = VioletPrimary
+                                )
                             }
                         }
                     }

@@ -7,12 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+
+	proxyma_bind "proxyma/cmd/proxyma-bind"
 )
 
 func launchEditor(pipelineID string, fileToOpen string) string {
 	binaryPath := "/home/drusila/Projects/proxyma-services/editor/proxyma-editor"
 	if _, err := os.Stat(binaryPath); err != nil {
-		return fmt.Sprintf(`{"error": "Editor binary not found. Please compile it first: %v"}`, err)
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("Editor binary not found. Please compile it first: %v", err))
 	}
 
 	cmdArgs := []string{"--storage", cliStorage}
@@ -30,9 +32,9 @@ func launchEditor(pipelineID string, fileToOpen string) string {
 
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Sprintf(`{"error": "Failed to run editor: %v"}`, err)
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("Failed to run editor: %v", err))
 	}
-	return `{"message": "Editor closed"}`
+	return proxyma_bind.BindMessageJSON("Editor closed")
 }
 
 func isTerminalInteractive() bool {

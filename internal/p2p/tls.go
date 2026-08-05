@@ -43,8 +43,7 @@ func IssueNodeCertificate(caFolderPath, nodeFolderPath, nodeID string) error {
 		return fmt.Errorf("could not load CA (has the cluster been initialized?): %w", err)
 	}
 
-	nodeCertPath := filepath.Join(nodeFolderPath, fmt.Sprintf("%s.crt", nodeID))
-	nodeKeyPath := filepath.Join(nodeFolderPath, fmt.Sprintf("%s.key", nodeID))
+	nodeCertPath, nodeKeyPath := NodeCertPaths(nodeFolderPath, nodeID)
 
 	nodeCert, nodeKey, err := generateNodeCert(caCert, caKey, nodeID)
 	if err != nil {
@@ -406,4 +405,21 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 // CAKeyPath derives the CA private key path from the CA certificate path.
 func CAKeyPath(caCertPath string) string {
 	return strings.Replace(caCertPath, ".crt", ".key", 1)
+}
+
+// NodeCertPaths returns the node certificate and key paths under dir.
+func NodeCertPaths(dir, nodeID string) (certPath, keyPath string) {
+	return filepath.Join(dir, fmt.Sprintf("%s.crt", nodeID)), filepath.Join(dir, fmt.Sprintf("%s.key", nodeID))
+}
+
+// PeerCNFromTLS extracts the peer CommonName from a TLS connection state.
+func PeerCNFromTLS(state *tls.ConnectionState) (string, bool) {
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return "", false
+	}
+	cn := state.PeerCertificates[0].Subject.CommonName
+	if cn == "" {
+		return "", false
+	}
+	return cn, true
 }

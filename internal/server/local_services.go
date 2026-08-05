@@ -98,11 +98,106 @@ func (s *Server) LocalServiceDetail(name string) (schema protocol.ServiceSchema,
 	return schema, addr, err
 }
 
-func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
+func parseServicePayload(payloadStr string) map[string]any {
 	var payload map[string]any
 	if payloadStr != "" {
 		_ = json.Unmarshal([]byte(payloadStr), &payload)
 	}
+	if payload == nil {
+		payload = make(map[string]any)
+	}
+	return payload
+}
+
+func (s *Server) waitTaskResponse(taskID string, timeout time.Duration) (protocol.ServiceTaskResponse, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(1 * time.Second)
+		r, ok := s.Compute.GetTaskResponse(taskID)
+		if ok && (r.Status == "completed" || r.Status == "failed") {
+			return r, nil
+		}
+	}
+	return protocol.ServiceTaskResponse{}, fmt.Errorf("task timed out on execution")
+}
+
+func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPeerID string) {
+	if resp.Status != "completed" || resp.Outputs == nil {
+		return
+	}
+	var outputHash string
+	var outputName string
+	var outputSize int64
+
+	if h, ok := resp.Outputs["output_hash"].(string); ok && h != "" {
+		outputHash = h
+		outputName, _ = resp.Outputs["output_name"].(string)
+		if sz, ok := resp.Outputs["output_size"].(float64); ok {
+			outputSize = int64(sz)
+		}
+	} else {
+		for k, v := range resp.Outputs {
+			if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
+				outputHash = filepath.Base(strings.TrimPrefix(pathStr, "vfs://"))
+				outputName = k
+				break
+			}
+		}
+	}
+
+	if outputHash == "" {
+		return
+	}
+	if outputName == "" {
+		outputName = outputHash + ".pdf"
+	}
+	nextVersion := 1
+	if existing, exists := s.Storage.GetFileMeta(outputName); exists {
+		nextVersion = existing.Version + 1
+	}
+	outputMeta := protocol.IndexEntry{
+		Name:    outputName,
+		Hash:    outputHash,
+		Size:    outputSize,
+		Version: nextVersion,
+	}
+	s.Storage.Upsert(outputMeta)
+	s.Storage.SetSubscription(outputName, true)
+
+	if targetPeerID == "" || targetPeerID == s.Config.ID {
+		var rawLocalPath string
+		if p, ok := resp.Outputs["output_path"].(string); ok && !strings.HasPrefix(p, "vfs://") {
+			rawLocalPath = p
+		}
+		if rawLocalPath != "" {
+			if _, err := os.Stat(rawLocalPath); err == nil {
+				if f, err := os.Open(rawLocalPath); err == nil {
+					_ = s.Storage.SaveLocalFile(outputName, f)
+					_ = f.Close()
+				}
+			}
+		}
+		return
+	}
+
+	dlCtx, dlCancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
+	err := s.fetchBlobFromPeer(dlCtx, targetPeerID, outputMeta)
+	dlCancel()
+	if err == nil {
+		localPath := s.Storage.GetBlobPath(outputHash)
+		resp.Outputs["result_path"] = localPath
+		for k, v := range resp.Outputs {
+			if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
+				resp.Outputs[k] = localPath
+			}
+		}
+	} else {
+		s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
+	}
+}
+
+func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
+	payload := parseServicePayload(payloadStr)
 
 	var targetPeerID string
 	var err error
@@ -141,104 +236,16 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 		}
 	}
 
-	var resp protocol.ServiceTaskResponse
-	completed := false
-	for i := 0; i < 90; i++ {
-		time.Sleep(1 * time.Second)
-		r, ok := s.Compute.GetTaskResponse(taskID)
-		if ok {
-			if r.Status == "completed" || r.Status == "failed" {
-				resp = r
-				completed = true
-				break
-			}
-		}
+	resp, err := s.waitTaskResponse(taskID, TaskWaitTimeout)
+	if err != nil {
+		return protocol.ServiceTaskResponse{}, err
 	}
-	if !completed {
-		return protocol.ServiceTaskResponse{}, fmt.Errorf("task timed out on execution")
-	}
-
-	if completed && resp.Status == "completed" && resp.Outputs != nil {
-		var outputHash string
-		var outputName string
-		var outputSize int64
-
-		if h, ok := resp.Outputs["output_hash"].(string); ok && h != "" {
-			outputHash = h
-			outputName, _ = resp.Outputs["output_name"].(string)
-			if sz, ok := resp.Outputs["output_size"].(float64); ok {
-				outputSize = int64(sz)
-			}
-		} else {
-			for k, v := range resp.Outputs {
-				if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
-					outputHash = filepath.Base(strings.TrimPrefix(pathStr, "vfs://"))
-					outputName = k
-					break
-				}
-			}
-		}
-
-		if outputHash != "" {
-			if outputName == "" {
-				outputName = outputHash + ".pdf"
-			}
-			nextVersion := 1
-			if existing, exists := s.Storage.GetFileMeta(outputName); exists {
-				nextVersion = existing.Version + 1
-			}
-			outputMeta := protocol.IndexEntry{
-				Name:    outputName,
-				Hash:    outputHash,
-				Size:    outputSize,
-				Version: nextVersion,
-			}
-			s.Storage.Upsert(outputMeta)
-			s.Storage.SetSubscription(outputName, true)
-
-			if targetPeerID == "" || targetPeerID == s.Config.ID {
-				var rawLocalPath string
-				if p, ok := resp.Outputs["output_path"].(string); ok && !strings.HasPrefix(p, "vfs://") {
-					rawLocalPath = p
-				}
-				if rawLocalPath != "" {
-					if _, err := os.Stat(rawLocalPath); err == nil {
-						if f, err := os.Open(rawLocalPath); err == nil {
-							_ = s.Storage.SaveLocalFile(outputName, f)
-							_ = f.Close()
-						}
-					}
-				}
-			} else {
-				dlCtx, dlCancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
-				err := s.fetchBlobFromPeer(dlCtx, targetPeerID, outputMeta)
-				dlCancel()
-				if err == nil {
-					localPath := s.Storage.GetBlobPath(outputHash)
-					resp.Outputs["result_path"] = localPath
-					for k, v := range resp.Outputs {
-						if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
-							resp.Outputs[k] = localPath
-						}
-					}
-				} else {
-					s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
-				}
-			}
-		}
-	}
-
+	s.ingestTaskOutputs(&resp, targetPeerID)
 	return resp, nil
 }
 
 func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, chunkCallback func(chunk map[string]any)) error {
-	var payload map[string]any
-	if payloadStr != "" {
-		_ = json.Unmarshal([]byte(payloadStr), &payload)
-	}
-	if payload == nil {
-		payload = make(map[string]any)
-	}
+	payload := parseServicePayload(payloadStr)
 
 	handler, exists := s.Compute.GetHandler(serviceName)
 	if !exists {
@@ -278,7 +285,7 @@ func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, ch
 	out := make(chan map[string]any, 10)
 	errChan := make(chan error, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCStream)
 	defer cancel()
 
 	go func() {

@@ -2,7 +2,6 @@ package com.proxyma.android.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -16,16 +15,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FileTask
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.DynamicActionForm
-import com.proxyma.android.models.FormParameter
 import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import kotlin.concurrent.thread
 
 @Composable
 fun ServiceDetailLayout(
@@ -34,8 +30,7 @@ fun ServiceDetailLayout(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val parametersList = details.parameters ?: emptyList()
-    val isFileService = parametersList.any { it.type == "file" }
+    val formParams = (details.parameters ?: emptyList()).sortedByDescending { it.required }
 
     LazyColumn(
         modifier = Modifier
@@ -48,7 +43,7 @@ fun ServiceDetailLayout(
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(modifier.width(8.dp))
                 Text(details.name, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
         }
@@ -57,11 +52,11 @@ fun ServiceDetailLayout(
             ProxymaCard {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Description", fontWeight = FontWeight.Bold, color = Color.Gray)
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(modifier.height(4.dp))
                     Text(details.description ?: "No description provided.", color = Color.White)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(modifier.height(8.dp))
                     Text("Provider Address", fontWeight = FontWeight.Bold, color = Color.Gray)
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(modifier.height(4.dp))
                     Text(details.providerAddress ?: "Unknown", color = Color.White, fontSize = 13.sp)
                 }
             }
@@ -73,11 +68,11 @@ fun ServiceDetailLayout(
                 ProxymaCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Required Permissions", fontWeight = FontWeight.Bold, color = Color.Gray)
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(modifier.height(6.dp))
                         permissions.forEach { perm ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Check, contentDescription = "Check", tint = MintGreen, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(modifier.width(8.dp))
                                 Text(perm, color = Color.White)
                             }
                         }
@@ -90,39 +85,6 @@ fun ServiceDetailLayout(
             Text("Parameters", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
         }
 
-        val formParams = mutableListOf<FormParameter>()
-        
-        if (isFileService) {
-            if (parametersList.none { it.name.lowercase() == "input" }) {
-                formParams.add(FormParameter(
-                    name = "input",
-                    type = "file",
-                    required = true,
-                    description = "Input file to process (local path or VFS)",
-                    uiHint = "file_picker"
-                ))
-            }
-            if (parametersList.none { it.name.lowercase() == "output" }) {
-                formParams.add(FormParameter(
-                    name = "output",
-                    type = "string",
-                    required = false,
-                    description = "Output VFS name (optional, defaults to output_input)",
-                    uiHint = null
-                ))
-            }
-        }
-
-        parametersList.sortedByDescending { it.required }.forEach { param ->
-            val lowerName = param.name.lowercase()
-            if (isFileService && (lowerName == "input" || lowerName == "output")) {
-                // Already added custom input/output picker above
-            } else {
-                // Trust bind/schema uiHint; InferUIHint is SSOT on the Go side.
-                formParams.add(param)
-            }
-        }
-
         if (formParams.isEmpty()) {
             item {
                 Text("This service requires no parameters.", color = Color.Gray)
@@ -131,121 +93,41 @@ fun ServiceDetailLayout(
             item {
                 DynamicActionForm(
                     parameters = formParams,
-                    submitButtonText = if (isFileService) "Submit File Task" else "Execute Task",
+                    submitButtonText = if (details.isStreaming == true) "Start Stream" else "Execute Task",
                     onSubmit = { inputs, onComplete ->
-                        if (isFileService) {
-                            val input = inputs["input"]?.toString() ?: ""
-                            val output = inputs["output"]?.toString() ?: ""
-                            val otherParams = inputs.filterKeys { it.lowercase() != "input" && it.lowercase() != "output" }
-                            val paramJson = if (otherParams.isNotEmpty()) {
-                                Gson().toJson(otherParams)
-                            } else {
-                                ""
-                            }
-
-                            val taskId = "task_ui_${System.currentTimeMillis()}"
-                            val newTask = FileTask(
+                        val payloadJson = Gson().toJson(inputs)
+                        val taskId = "task_ui_${System.currentTimeMillis()}"
+                        val streaming = details.isStreaming == true
+                        fileTasks.add(
+                            0,
+                            FileTask(
                                 taskId = taskId,
                                 service = details.name,
-                                input = input,
-                                output = output,
-                                status = "running"
+                                input = payloadJson,
+                                output = if (streaming) "stream" else "result",
+                                status = if (streaming) "streaming" else "running",
+                                isStreaming = streaming
                             )
-                            fileTasks.add(0, newTask)
+                        )
+                        onBack()
 
-                            // Go back to the main Services view immediately so progress is visible
-                            onBack()
-
-                            thread {
-                                android.util.Log.d("ProxymaUI", "Starting runService for: " + details.name)
-                                val resultJson = proxyma_bind.Proxyma_bind.runService(details.name, paramJson)
-                                android.util.Log.d("ProxymaUI", "runService returned: " + resultJson)
-                                isRunningOnMainThread {
-                                    val map = parseJSONMap(resultJson)
-                                    val idx = fileTasks.indexOfFirst { it.taskId == taskId }
-                                    if (idx != -1) {
-                                        val errVal = map["error"] as? String
-                                        if (errVal != null) {
-                                            fileTasks[idx] = fileTasks[idx].copy(
-                                                status = "failed",
-                                                error = errVal
-                                            )
-                                            onComplete(Result.failure(Exception(errVal)))
-                                        } else {
-                                            val outputsMap = map["outputs"] as? Map<*, *>
-                                            val hash = outputsMap?.get("output_hash") as? String
-                                            val finalPath = if (hash != null) {
-                                                proxyma_bind.Proxyma_bind.getLocalBlobPath(hash)
-                                            } else {
-                                                null
-                                            }
-                                            fileTasks[idx] = fileTasks[idx].copy(
-                                                status = "completed",
-                                                resultPath = finalPath
-                                            )
-                                            onComplete(Result.success("Task completed successfully"))
-                                        }
-                                    } else {
-                                        onComplete(Result.success("Task completed"))
-                                    }
-                                }
-                            }
+                        if (streaming) {
+                            attachStreamToFileTask(
+                                fileTasks = fileTasks,
+                                taskId = taskId,
+                                serviceName = details.name,
+                                payloadJson = payloadJson,
+                                context = context,
+                                onDone = onComplete
+                            )
                         } else {
-                            val payloadJson = Gson().toJson(inputs)
-                            if (details.isStreaming == true) {
-                                val taskId = "task_stream_${System.currentTimeMillis()}"
-                                val newTask = FileTask(
-                                    taskId = taskId,
-                                    service = details.name,
-                                    input = payloadJson,
-                                    output = "stream",
-                                    status = "streaming",
-                                    isStreaming = true
-                                )
-                                fileTasks.add(0, newTask)
-                                onBack()
-
-                                proxyma_bind.Proxyma_bind.streamService(details.name, payloadJson, object : proxyma_bind.StreamEventListener {
-                                    override fun onChunk(chunkJSON: String) {
-                                        isRunningOnMainThread {
-                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
-                                            if (idx != -1) {
-                                                val curr = fileTasks[idx]
-                                                val updatedOutput = if (curr.streamOutput.isNullOrEmpty()) {
-                                                    chunkJSON
-                                                } else {
-                                                    curr.streamOutput + "\n" + chunkJSON
-                                                }
-                                                fileTasks[idx] = curr.copy(streamOutput = updatedOutput)
-                                            }
-                                        }
-                                    }
-
-                                    override fun onError(errMsg: String) {
-                                        isRunningOnMainThread {
-                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
-                                            if (idx != -1) {
-                                                fileTasks[idx] = fileTasks[idx].copy(status = "failed", error = errMsg)
-                                            }
-                                            onComplete(Result.failure(Exception(errMsg)))
-                                        }
-                                    }
-
-                                    override fun onComplete() {
-                                        isRunningOnMainThread {
-                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
-                                            if (idx != -1) {
-                                                fileTasks[idx] = fileTasks[idx].copy(status = "completed")
-                                            }
-                                            onComplete(Result.success("Streaming completed"))
-                                        }
-                                    }
-                                })
-                            } else {
-                                executeGoSubmit(onComplete, {
-                                    proxyma_bind.Proxyma_bind.runService(details.name, payloadJson)
-                                })
-                            }
+                            startUnaryFileTask(
+                                fileTasks = fileTasks,
+                                taskId = taskId,
+                                context = context,
+                                action = { proxyma_bind.Proxyma_bind.runService(details.name, payloadJson) },
+                                onDone = onComplete
+                            )
                         }
                     }
                 )

@@ -18,6 +18,9 @@ const (
 	PeerRPCQUICWait  = 8 * time.Second
 	PeerRPCRelayHold = 60 * time.Second // long-poll hold on relay
 	PeerRPCRelayTick = 15 * time.Second // client relay poll interval
+	TaskWaitTimeout  = 90 * time.Second
+	// DefaultInviteMinutes is the SSOT default invite TTL.
+	DefaultInviteMinutes = 15
 )
 
 // callPeer runs fn against one peer and updates online/offline liveness (L2).
@@ -90,4 +93,30 @@ func mapEachPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Con
 		run(peerID)
 	}
 	return results
+}
+
+// firstPeer runs fn across peers sequentially and returns the first successful result (L3).
+// Failed calls still update liveness via callPeer.
+func firstPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Context, peerID string) (T, error)) (T, bool) {
+	if opts.Timeout <= 0 {
+		opts.Timeout = PeerRPCDefault
+	}
+	var zero T
+	for peerID := range s.GetPeersCopy() {
+		if opts.SkipSelf && peerID == s.Config.ID {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		var val T
+		err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+			var callErr error
+			val, callErr = fn(ctx, peerID)
+			return callErr
+		})
+		cancel()
+		if err == nil {
+			return val, true
+		}
+	}
+	return zero, false
 }

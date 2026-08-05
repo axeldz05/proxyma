@@ -18,9 +18,10 @@ import (
 // GenerateInviteToken creates an invite token valid for 15 minutes.
 func GenerateInviteToken() string {
 	raw := dispatchUnixOrLocal("invite_generate", nil, func(s *server.Server) (any, error) {
-		return s.LocalInviteGenerate(15)
+		token, _, err := s.LocalInviteGenerate(server.DefaultInviteMinutes)
+		return token, err
 	})
-	if strings.Contains(raw, `"error"`) {
+	if IsBindError(raw) {
 		return raw
 	}
 	// Unix path returns JSON-encoded string; in-process returns plain token.
@@ -92,8 +93,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	_ = os.MkdirAll(certsDir, 0755)
 
 	caPath := filepath.Join(certsDir, "ca.crt")
-	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", nodeID))
-	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", nodeID))
+	certPath, keyPath := p2p.NodeCertPaths(certsDir, nodeID)
 
 	_ = os.WriteFile(caPath, []byte(caCert), 0644)
 	_ = os.WriteFile(certPath, []byte(cert), 0644)

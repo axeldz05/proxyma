@@ -167,7 +167,8 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			}
 
 		case "invite_generate":
-			respData, actionErr = s.LocalInviteGenerate(15)
+			token, _, err := s.LocalInviteGenerate(DefaultInviteMinutes)
+			respData, actionErr = token, err
 
 		case "logs":
 			respData = s.LocalLogs()

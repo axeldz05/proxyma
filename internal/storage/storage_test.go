@@ -23,7 +23,7 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -49,7 +49,7 @@ func TestLocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -83,7 +83,7 @@ func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 	expectedHash := testutil.CalculateHash(t, fileContent)
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(e protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -120,7 +120,7 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 	hashB := testutil.CalculateHash(t, "Content B")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(e protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -151,7 +151,7 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-snapshot-1")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -220,7 +220,7 @@ func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-vfs-version")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -244,7 +244,7 @@ func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-integrity")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -273,7 +273,7 @@ func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-tombstone-manifest")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -299,7 +299,7 @@ func TestHandleNotificationRespectsSubscription(t *testing.T) {
 	var downloadInvoked bool
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error {
 			downloadInvoked = true
@@ -345,7 +345,7 @@ func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-remote-del-new")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -368,7 +368,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "node-concurrent")
 
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -430,7 +430,7 @@ func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-cas")
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)
@@ -476,7 +476,7 @@ func TestCleanupTempFilesRespectsActiveDownloads(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-temp")
 	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath, nil, 0,
+		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error { return nil },
 	)

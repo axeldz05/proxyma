@@ -83,25 +83,12 @@ func (s *Server) FetchFileOnDemand(name string) error {
 		return nil
 	}
 
-	var downloadErr error
-	for peerID := range s.GetPeersCopy() {
-		if peerID == s.Config.ID {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), PeerRPCBlob)
-		err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
-			return s.fetchBlobFromPeer(ctx, peerID, entry)
-		})
-		cancel()
-		if err == nil {
-			s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
-			return nil
-		}
-		downloadErr = err
-	}
-
-	if downloadErr != nil {
-		return fmt.Errorf("failed to fetch file '%s' from cluster peers: %v", name, downloadErr)
+	_, ok = firstPeer(s, forEachPeerOpts{Timeout: PeerRPCBlob, SkipSelf: true}, func(ctx context.Context, peerID string) (struct{}, error) {
+		return struct{}{}, s.fetchBlobFromPeer(ctx, peerID, entry)
+	})
+	if ok {
+		s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
+		return nil
 	}
 	return fmt.Errorf("no peer holds physical replica for file '%s'", name)
 }

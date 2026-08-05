@@ -122,35 +122,53 @@ func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
 	return nil
 }
 
-func (s *Server) LocalPipelineValidate(schemaJSON string) error {
+func (s *Server) parseAndValidatePipeline(schemaJSON string) (protocol.PipelineSchema, error) {
 	var schema protocol.PipelineSchema
 	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
+		return schema, fmt.Errorf("invalid pipeline schema JSON: %w", err)
 	}
-
 	if err := s.ValidatePipelineSchema(schema); err != nil {
-		return fmt.Errorf("pipeline validation failed: %w", err)
+		return schema, fmt.Errorf("pipeline validation failed: %w", err)
+	}
+	return schema, nil
+}
+
+// applyPipelineAction persists and registers/unregisters a pipeline (L2 SSOT).
+func (s *Server) applyPipelineAction(schema protocol.PipelineSchema, action string) error {
+	switch action {
+	case "add":
+		if s.Storage != nil {
+			if err := s.Storage.SavePipelineSchema(schema); err != nil {
+				return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
+			}
+		}
+		s.Compute.RegisterPipeline(schema)
+	case "remove":
+		if s.Storage != nil {
+			if err := s.Storage.DeletePipelineSchema(schema.ID); err != nil {
+				return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
+			}
+		}
+		s.Compute.UnregisterPipeline(schema.ID)
+	default:
+		return fmt.Errorf("unknown pipeline action %q", action)
 	}
 	return nil
 }
 
+func (s *Server) LocalPipelineValidate(schemaJSON string) error {
+	_, err := s.parseAndValidatePipeline(schemaJSON)
+	return err
+}
+
 func (s *Server) LocalPipelineAdd(schemaJSON string) error {
-	var schema protocol.PipelineSchema
-	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return fmt.Errorf("invalid pipeline schema JSON: %w", err)
+	schema, err := s.parseAndValidatePipeline(schemaJSON)
+	if err != nil {
+		return err
 	}
-
-	if err := s.ValidatePipelineSchema(schema); err != nil {
-		return fmt.Errorf("pipeline validation failed: %w", err)
+	if err := s.applyPipelineAction(schema, "add"); err != nil {
+		return err
 	}
-
-	if s.Storage != nil {
-		if err := s.Storage.SavePipelineSchema(schema); err != nil {
-			return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
-		}
-	}
-
-	s.Compute.RegisterPipeline(schema)
 	go s.NotifySchema(schema, "add")
 	return nil
 }
@@ -159,15 +177,11 @@ func (s *Server) LocalPipelineRemove(id string) error {
 	if id == "" {
 		return fmt.Errorf("pipeline ID cannot be empty")
 	}
-
-	if s.Storage != nil {
-		if err := s.Storage.DeletePipelineSchema(id); err != nil {
-			return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
-		}
+	schema := protocol.PipelineSchema{ID: id}
+	if err := s.applyPipelineAction(schema, "remove"); err != nil {
+		return err
 	}
-
-	s.Compute.UnregisterPipeline(id)
-	go s.NotifySchema(protocol.PipelineSchema{ID: id}, "remove")
+	go s.NotifySchema(schema, "remove")
 	return nil
 }
 
@@ -206,31 +220,25 @@ func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string
 	return schema, nil
 }
 
-func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {
-	payload := protocol.PipelineNotification{
-		Schema: schema,
-		Action: action,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
-	defer cancel()
-	err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
-		return s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
-	})
+func (s *Server) notifyPipeline(ctx context.Context, peerID string, schema protocol.PipelineSchema, action string) error {
+	payload := protocol.PipelineNotification{Schema: schema, Action: action}
+	err := s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
 	if err != nil {
 		s.Config.Logger.Debug("Failed to notify peer about schema update", "peerID", peerID, "pipelineID", schema.ID, "error", err)
 	}
+	return err
+}
+
+func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	defer cancel()
+	_ = s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+		return s.notifyPipeline(ctx, peerID, schema, action)
+	})
 }
 
 func (s *Server) NotifySchema(schema protocol.PipelineSchema, action string) {
 	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true}, func(ctx context.Context, peerID string) error {
-		payload := protocol.PipelineNotification{
-			Schema: schema,
-			Action: action,
-		}
-		err := s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
-		if err != nil {
-			s.Config.Logger.Debug("Failed to notify peer about schema update", "peerID", peerID, "pipelineID", schema.ID, "error", err)
-		}
-		return err
+		return s.notifyPipeline(ctx, peerID, schema, action)
 	})
 }

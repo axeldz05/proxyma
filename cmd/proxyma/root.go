@@ -110,35 +110,31 @@ func init() {
 				resJSON := executeActionLocal(actionCopy.Domain, actionCopy.Name, argsMap)
 
 				// Check for errors in response
-				if strings.Contains(resJSON, `"error":`) {
-					var errResp struct {
-						Error string `json:"error"`
+				if proxyma_bind.IsBindError(resJSON) {
+					errMsg := proxyma_bind.ParseBindError(resJSON)
+					schemaFile := argsMap["schema-file"]
+					if schemaFile == "" && (strings.HasSuffix(argsMap["name"], ".json") || fileExists(argsMap["name"])) {
+						schemaFile = argsMap["name"]
 					}
-					if err := json.Unmarshal([]byte(resJSON), &errResp); err == nil && errResp.Error != "" {
-						schemaFile := argsMap["schema-file"]
-						if schemaFile == "" && (strings.HasSuffix(argsMap["name"], ".json") || fileExists(argsMap["name"])) {
-							schemaFile = argsMap["name"]
-						}
-						if schemaFile != "" {
-							fmt.Printf("❌ Failed to add pipeline schema from file '%s': %s\n", schemaFile, errResp.Error)
-							fmt.Printf("💡 Tip: You can open and edit this schema file in the visual editor by running:\n")
-							fmt.Printf("   proxyma service edit_pipeline --file %s\n\n", schemaFile)
+					if schemaFile != "" {
+						fmt.Printf("❌ Failed to add pipeline schema from file '%s': %s\n", schemaFile, errMsg)
+						fmt.Printf("💡 Tip: You can open and edit this schema file in the visual editor by running:\n")
+						fmt.Printf("   proxyma service edit_pipeline --file %s\n\n", schemaFile)
 
-							if isTerminalInteractive() {
-								fmt.Print("Would you like to open this file in the visual pipeline editor now? [y/N]: ")
-								var answer string
-								_, _ = fmt.Scanln(&answer)
-								answer = strings.ToLower(strings.TrimSpace(answer))
-								if answer == "y" || answer == "yes" {
-									resJSON = launchEditor("", schemaFile)
-									if !strings.Contains(resJSON, `"error":`) {
-										return nil
-									}
+						if isTerminalInteractive() {
+							fmt.Print("Would you like to open this file in the visual pipeline editor now? [y/N]: ")
+							var answer string
+							_, _ = fmt.Scanln(&answer)
+							answer = strings.ToLower(strings.TrimSpace(answer))
+							if answer == "y" || answer == "yes" {
+								resJSON = launchEditor("", schemaFile)
+								if !proxyma_bind.IsBindError(resJSON) {
+									return nil
 								}
 							}
 						}
-						return fmt.Errorf("%s", errResp.Error)
 					}
+					return fmt.Errorf("%s", errMsg)
 				}
 
 				// Render success output based on OutputType

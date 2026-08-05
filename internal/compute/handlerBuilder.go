@@ -9,8 +9,49 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"proxyma/internal/p2p"
 	"time"
 )
+
+// pumpJSONEncode writes channel items as NDJSON to w until in closes or ctx cancels.
+func pumpJSONEncode(ctx context.Context, w io.Writer, in <-chan map[string]any) error {
+	encoder := json.NewEncoder(w)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case item, ok := <-in:
+			if !ok {
+				return nil
+			}
+			if err := encoder.Encode(item); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// pumpJSONDecode reads NDJSON from r into out until EOF or ctx cancel.
+func pumpJSONDecode(ctx context.Context, r io.Reader, out chan<- map[string]any) error {
+	decoder := json.NewDecoder(r)
+	for {
+		var result map[string]any
+		if err := decoder.Decode(&result); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- result:
+		}
+	}
+}
 
 // BuildUnaryHandler wraps a simple unary function into a ServiceHandler.
 func BuildUnaryHandler(fn func(ctx context.Context, payload map[string]any) (map[string]any, error)) ServiceHandler {
@@ -41,39 +82,11 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 			defer func() { _ = cmd.Wait() }()
 
 			go func() {
-				encoder := json.NewEncoder(stdinPipe)
 				defer func() { _ = stdinPipe.Close() }()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case item, ok := <-in:
-						if !ok {
-							return
-						}
-						_ = encoder.Encode(item)
-					}
-				}
+				_ = pumpJSONEncode(ctx, stdinPipe, in)
 			}()
 
-			decoder := json.NewDecoder(stdoutPipe)
-			for {
-				var result map[string]any
-				if err := decoder.Decode(&result); err != nil {
-					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-						return nil, nil
-					}
-					if ctx.Err() != nil {
-						return nil, nil
-					}
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return nil, nil
-				case out <- result:
-				}
-			}
+			_ = pumpJSONDecode(ctx, stdoutPipe, out)
 			return nil, nil
 		}
 
@@ -110,9 +123,7 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 
 // Handler generator for gRPC webhooks
 func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	client := &http.Client{
-		Timeout: timeout,
-	}
+	client := p2p.NewHTTPClient(nil, timeout)
 
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		payloadBytes, err := json.Marshal(payload)
@@ -173,23 +184,9 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 			pr, pw := io.Pipe()
 
 			go func() {
-				encoder := json.NewEncoder(pw)
 				defer func() { _ = pw.Close() }()
-
-				for {
-					select {
-					case <-ctx.Done():
-						_ = pw.CloseWithError(ctx.Err())
-						return
-					case item, ok := <-in:
-						if !ok {
-							return
-						}
-						if err := encoder.Encode(item); err != nil {
-							_ = pw.CloseWithError(err)
-							return
-						}
-					}
+				if err := pumpJSONEncode(ctx, pw, in); err != nil {
+					_ = pw.CloseWithError(err)
 				}
 			}()
 
@@ -200,7 +197,11 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 			}
 			req.Header.Set("Content-Type", "application/x-ndjson")
 
-			client := &http.Client{}
+			clientTimeout := timeout
+			if clientTimeout <= 0 {
+				clientTimeout = p2p.DefaultRPCTimeout
+			}
+			client := p2p.NewHTTPClient(nil, clientTimeout)
 			resp, err := client.Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("bidi stream request failed: %w", err)
@@ -212,25 +213,10 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 				return nil, fmt.Errorf("remote bidi stream server returned status %d: %s", resp.StatusCode, string(bodyStr))
 			}
 
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				var result map[string]any
-				if err := decoder.Decode(&result); err != nil {
-					if errors.Is(err, io.EOF) {
-						return nil, nil
-					}
-					if ctx.Err() != nil {
-						return nil, ctx.Err()
-					}
-					return nil, fmt.Errorf("failed to decode bidi response chunk: %w", err)
-				}
-
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case out <- result:
-				}
+			if err := pumpJSONDecode(ctx, resp.Body, out); err != nil {
+				return nil, fmt.Errorf("failed to decode bidi response chunk: %w", err)
 			}
+			return nil, nil
 		}
 
 		sin := make(chan map[string]any, 1)

@@ -56,13 +56,16 @@ func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s
 	return dispatchUnixLocalOrOffline(action, args, localCall, nil)
 }
 
-// bindErrorJSON formats an error for bind/CLI consumers (SSOT).
-func bindErrorJSON(err error) string {
+// BindErrorJSON formats an error for bind/CLI consumers (SSOT).
+func BindErrorJSON(err error) string {
 	if err == nil {
 		return `{"error":""}`
 	}
 	return fmt.Sprintf(`{"error": %q}`, err.Error())
 }
+
+// bindErrorJSON is the unexported alias used inside this package.
+func bindErrorJSON(err error) string { return BindErrorJSON(err) }
 
 // ParseBindError extracts the error message from a bind JSON error envelope.
 func ParseBindError(s string) string {
@@ -75,6 +78,16 @@ func ParseBindError(s string) string {
 	return s
 }
 
+// IsBindError reports whether s is a non-empty bind error JSON envelope.
+func IsBindError(s string) bool {
+	var m map[string]string
+	if json.Unmarshal([]byte(s), &m) != nil {
+		return false
+	}
+	e, ok := m["error"]
+	return ok && e != ""
+}
+
 // bindOKJSON marshals a successful payload (or wraps a string message).
 func bindOKJSON(res any) string {
 	if str, ok := res.(string); ok {
@@ -84,10 +97,13 @@ func bindOKJSON(res any) string {
 	return string(b)
 }
 
-// bindMessageJSON returns a success envelope with a message field.
-func bindMessageJSON(msg string) string {
+// BindMessageJSON returns a success envelope with a message field.
+func BindMessageJSON(msg string) string {
 	return fmt.Sprintf(`{"message": %q}`, msg)
 }
+
+// bindMessageJSON is the unexported alias used inside this package.
+func bindMessageJSON(msg string) string { return BindMessageJSON(msg) }
 
 // dispatchUnixLocalOrOffline is L3: in-process localCall, else unix, else optional offline fallback.
 func dispatchUnixLocalOrOffline(
@@ -240,8 +256,7 @@ func StartNode(storagePath string, debug bool) string {
 	cfg.Logger = appLogger
 
 	certsDir := filepath.Dir(cfg.CAPath)
-	nodeCertFile := filepath.Join(certsDir, fmt.Sprintf("%s.crt", cfg.ID))
-	nodeKeyFile := filepath.Join(certsDir, fmt.Sprintf("%s.key", cfg.ID))
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(certsDir, cfg.ID)
 
 	stls, ctls, err := p2p.LoadNodeTLS(cfg.CAPath, nodeCertFile, nodeKeyFile)
 	if err != nil {

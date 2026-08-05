@@ -24,6 +24,8 @@ import com.proxyma.android.models.PipelineStep
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.executeGoCall
+import com.proxyma.android.utils.isBindError
+import com.proxyma.android.utils.parseBindError
 import com.proxyma.android.utils.toast
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,7 +65,7 @@ fun PipelineEditorDialog(
             if (node.isNotEmpty()) {
                 localNodeId = node
             }
-            if (!rawPeers.contains("\"error\"")) {
+            if (!isBindError(rawPeers)) {
                 try {
                     val listType = object : TypeToken<List<Peer>>() {}.type
                     val peersList = Gson().fromJson<List<Peer>>(rawPeers, listType)
@@ -184,13 +186,8 @@ fun PipelineEditorDialog(
                         onComplete = {},
                         action = { proxyma_bind.Proxyma_bind.addPipelineRaw(pipelineId.trim(), jsonStr) }
                     ) { res ->
-                        if (res.contains("\"error\"")) {
-                            var errorMsg = res
-                            try {
-                                val map = Gson().fromJson<Map<String, Any>>(res, object : TypeToken<Map<String, Any>>() {}.type)
-                                errorMsg = map["error"] as? String ?: res
-                            } catch (_: Exception) {}
-                            context.toast("Validation failed: $errorMsg", long = true)
+                        if (isBindError(res)) {
+                            context.toast("Validation failed: ${parseBindError(res).ifEmpty { res }}", long = true)
                         } else {
                             context.toast("Pipeline saved successfully!")
                             onDismiss()

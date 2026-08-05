@@ -85,7 +85,7 @@ func GetLocalBlobPath(hash string) string {
 	if s == nil {
 		return filepath.Join(appStorage, hash)
 	}
-	return s.Storage.GetLocalBlobPath(hash)
+	return s.Storage.GetBlobPath(hash)
 }
 
 // FetchFileOnDemand downloads an unsubscribed or missing file on demand from peers into local cache.

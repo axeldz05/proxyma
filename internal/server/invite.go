@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -52,20 +51,6 @@ func (im *InviteManager) Sweep() {
 		if now.After(expiration) {
 			delete(im.pendingInvites, secret)
 			im.logger.Debug("Expired invite removed from memory")
-		}
-	}
-}
-
-// StartSweeper starts a background loop that periodically sweeps expired invitations.
-func (im *InviteManager) StartSweeper(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			im.Sweep()
 		}
 	}
 }

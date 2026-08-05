@@ -56,10 +56,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 			},
 		},
 	}
-	client := &http.Client{
-		Transport: tr,
-		Timeout:   3 * time.Second,
-	}
+	client := NewHTTPClient(tr, 3*time.Second)
 
 	reqBody := protocol.JoinRequest{
 		Secret:  secret,

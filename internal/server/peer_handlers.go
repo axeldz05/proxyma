@@ -94,12 +94,8 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
 }
 
-type PeerIDRequest struct {
-	ID string `json:"id"`
-}
-
 func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[PeerIDRequest](w, r)
+	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
 	if !ok {
 		return
 	}
@@ -110,7 +106,7 @@ func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[PeerIDRequest](w, r)
+	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
 	if !ok {
 		return
 	}

@@ -1,13 +1,11 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
 	"time"
@@ -20,12 +18,11 @@ type StorageEngine struct {
 	vfs              IndexStore
 	subscriptions    *bolt.DB
 	logger           *slog.Logger
-	peerClient       p2p.PeerClient
 	notifyFunc       func(protocol.IndexEntry)
 	onDownloadNeeded func(file protocol.IndexEntry, rawSource string) error
 }
 
-func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, workers int, notify func(protocol.IndexEntry), downloadCallback func(protocol.IndexEntry, string) error) *StorageEngine {
+func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.IndexEntry), downloadCallback func(protocol.IndexEntry, string) error) *StorageEngine {
 	dbPath := filepath.Join(path, "metadata.db")
 	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
@@ -52,7 +49,6 @@ func NewStorageEngine(logger *slog.Logger, path string, pc p2p.PeerClient, worke
 		vfs:              NewVFS(db),
 		subscriptions:    db,
 		logger:           logger,
-		peerClient:       pc,
 		notifyFunc:       notify,
 		onDownloadNeeded: downloadCallback,
 	}
@@ -237,10 +233,6 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	return nil
 }
 
-func (se *StorageEngine) GetLocalBlobPath(hash string) string {
-	return se.GetBlobPath(hash)
-}
-
 // StageLocalFile opens a local path, saves it as a CAS blob, and upserts VFS metadata (L2).
 func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64, err error) {
 	fi, err := os.Stat(pathStr)
@@ -298,44 +290,18 @@ func (se *StorageEngine) countSubscribedHashReferences(hash string) int {
 
 func (se *StorageEngine) SavePeer(peerID string, record protocol.AddressRecord) error {
 	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("peers"))
-		if b == nil {
-			return fmt.Errorf("peers bucket not found")
-		}
-		data, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte(peerID), data)
+		return boltPutJSON(tx, "peers", peerID, record)
 	})
 }
 
 func (se *StorageEngine) DeletePeer(peerID string) error {
 	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("peers"))
-		if b == nil {
-			return fmt.Errorf("peers bucket not found")
-		}
-		return b.Delete([]byte(peerID))
+		return boltDelete(tx, "peers", peerID)
 	})
 }
 
 func (se *StorageEngine) LoadPeers() (map[string]protocol.AddressRecord, error) {
-	peers := make(map[string]protocol.AddressRecord)
-	err := se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("peers"))
-		if b == nil {
-			return nil
-		}
-		return b.ForEach(func(k, v []byte) error {
-			var record protocol.AddressRecord
-			if err := json.Unmarshal(v, &record); err == nil {
-				peers[string(k)] = record
-			}
-			return nil
-		})
-	})
-	return peers, err
+	return boltLoadMapJSON[protocol.AddressRecord](se.subscriptions, "peers")
 }
 
 func (se *StorageEngine) Close() error {
@@ -347,44 +313,18 @@ func (se *StorageEngine) Close() error {
 
 func (se *StorageEngine) SavePipelineSchema(schema protocol.PipelineSchema) error {
 	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("pipeline_schemas"))
-		if b == nil {
-			return fmt.Errorf("pipeline_schemas bucket not found")
-		}
-		data, err := json.Marshal(schema)
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte(schema.ID), data)
+		return boltPutJSON(tx, "pipeline_schemas", schema.ID, schema)
 	})
 }
 
 func (se *StorageEngine) DeletePipelineSchema(id string) error {
 	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("pipeline_schemas"))
-		if b == nil {
-			return fmt.Errorf("pipeline_schemas bucket not found")
-		}
-		return b.Delete([]byte(id))
+		return boltDelete(tx, "pipeline_schemas", id)
 	})
 }
 
 func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
-	schemas := make(map[string]protocol.PipelineSchema)
-	err := se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("pipeline_schemas"))
-		if b == nil {
-			return nil
-		}
-		return b.ForEach(func(k, v []byte) error {
-			var schema protocol.PipelineSchema
-			if err := json.Unmarshal(v, &schema); err == nil {
-				schemas[string(k)] = schema
-			}
-			return nil
-		})
-	})
-	return schemas, err
+	return boltLoadMapJSON[protocol.PipelineSchema](se.subscriptions, "pipeline_schemas")
 }
 
 

@@ -190,11 +190,11 @@ func (qm *QUICManager) handleIncomingConnection(conn *quic.Conn) {
 	// Store session once authenticated/handshaked
 	// PeerID is extracted from the client certificate CommonName
 	state := conn.ConnectionState()
-	if len(state.TLS.PeerCertificates) == 0 {
+	peerID, ok := PeerCNFromTLS(&state.TLS)
+	if !ok {
 		_ = conn.CloseWithError(0xff, "missing peer certificate")
 		return
 	}
-	peerID := state.TLS.PeerCertificates[0].Subject.CommonName
 
 	qm.SetSession(peerID, conn)
 

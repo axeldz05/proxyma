@@ -54,18 +54,20 @@ func resolvePayloadFromFlags(c *cobra.Command) string {
 }
 
 func executeActionLocal(domain string, action string, args map[string]string) string {
-	retErr := func(err string) string {
-		return fmt.Sprintf(`{"error": %q}`, err)
+	retErr := func(msg string) string {
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("%s", msg))
 	}
-	retMsg := func(msg string) string {
-		return fmt.Sprintf(`{"message": %q}`, msg)
-	}
+	retMsg := proxyma_bind.BindMessageJSON
+	// runAction wraps bind helpers that return "" on success or BindErrorJSON on failure.
 	runAction := func(fn func() string, successMsg string) string {
 		errStr := fn()
-		if errStr != "" {
-			return retErr(errStr)
+		if errStr == "" {
+			return retMsg(successMsg)
 		}
-		return retMsg(successMsg)
+		if proxyma_bind.IsBindError(errStr) {
+			return errStr
+		}
+		return retErr(errStr)
 	}
 
 	switch domain {
@@ -99,7 +101,8 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			}
 			errStr := proxyma_bind.FetchFileOnDemand(name)
 			if errStr != "" {
-				return retErr(fmt.Sprintf("failed to fetch file '%s' on demand: %s", name, errStr))
+				msg := proxyma_bind.ParseBindError(errStr)
+				return retErr(fmt.Sprintf("failed to fetch file '%s' on demand: %s", name, msg))
 			}
 			filesJson := proxyma_bind.GetVFSFilesJson()
 			var files []protocol.VFSFileStatus
@@ -138,8 +141,8 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 		switch action {
 		case "invite":
 			token := proxyma_bind.GenerateInviteToken()
-			if strings.Contains(token, `"error"`) {
-				return retErr(proxyma_bind.ParseBindError(token))
+			if proxyma_bind.IsBindError(token) {
+				return token
 			}
 			return retMsg(token)
 		case "join":
@@ -150,10 +153,13 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			}
 			nodeID := args["node_id"]
 			errStr := proxyma_bind.JoinCluster(cliStorage, token, nodeID, port)
-			if errStr != "" {
-				return retErr(proxyma_bind.ParseBindError(errStr))
+			if errStr == "" {
+				return retMsg("Joined cluster successfully!")
 			}
-			return retMsg("Joined cluster successfully!")
+			if proxyma_bind.IsBindError(errStr) {
+				return errStr
+			}
+			return retErr(errStr)
 		default:
 			return retErr(fmt.Sprintf("unknown action '%s' for domain '%s'", action, domain))
 		}
@@ -164,32 +170,12 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			return proxyma_bind.GetLogsJson()
 		case "stats":
 			statsJson := proxyma_bind.GetBandwidthStatsJson()
-			if strings.Contains(statsJson, `"error":`) {
+			if proxyma_bind.IsBindError(statsJson) {
 				return statsJson
 			}
 			var stats protocol.BandwidthStats
 			if err := json.Unmarshal([]byte(statsJson), &stats); err != nil {
 				return retErr(fmt.Sprintf("failed to parse stats: %v", err))
-			}
-
-			formatSpeed := func(bps int64) string {
-				if bps >= 1024*1024 {
-					return fmt.Sprintf("%.2f MB/s", float64(bps)/(1024*1024))
-				} else if bps >= 1024 {
-					return fmt.Sprintf("%.2f KB/s", float64(bps)/1024)
-				}
-				return fmt.Sprintf("%d B/s", bps)
-			}
-
-			formatSize := func(bytes int64) string {
-				if bytes >= 1024*1024*1024 {
-					return fmt.Sprintf("%.2f GB", float64(bytes)/(1024*1024*1024))
-				} else if bytes >= 1024*1024 {
-					return fmt.Sprintf("%.2f MB", float64(bytes)/(1024*1024))
-				} else if bytes >= 1024 {
-					return fmt.Sprintf("%.2f KB", float64(bytes)/1024)
-				}
-				return fmt.Sprintf("%d B", bytes)
 			}
 
 			type StatPair struct {
@@ -198,10 +184,10 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			}
 
 			pairs := []StatPair{
-				{Metric: "Download Speed", Value: formatSpeed(stats.DownloadSpeed)},
-				{Metric: "Upload Speed", Value: formatSpeed(stats.UploadSpeed)},
-				{Metric: "Total Received", Value: formatSize(stats.TotalReceived)},
-				{Metric: "Total Sent", Value: formatSize(stats.TotalSent)},
+				{Metric: "Download Speed", Value: formatRate(float64(stats.DownloadSpeed))},
+				{Metric: "Upload Speed", Value: formatRate(float64(stats.UploadSpeed))},
+				{Metric: "Total Received", Value: formatBytes(stats.TotalReceived)},
+				{Metric: "Total Sent", Value: formatBytes(stats.TotalSent)},
 			}
 
 			b, _ := json.Marshal(pairs)
@@ -257,7 +243,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 				}
 
 				res := proxyma_bind.StreamService(serviceName, payloadJSON, listener)
-				if strings.Contains(res, `"error":`) {
+				if proxyma_bind.IsBindError(res) {
 					return res
 				}
 
@@ -288,11 +274,14 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			newID := args["new_id"]
 			targetNode := args["target_node"]
 			clonedJson := proxyma_bind.ClonePipelineSchemaJson(id, newID, targetNode)
-			if strings.Contains(clonedJson, `"error":`) {
+			if proxyma_bind.IsBindError(clonedJson) {
 				return clonedJson
 			}
 			errStr := proxyma_bind.AddPipelineRaw(newID, clonedJson)
 			if errStr != "" {
+				if proxyma_bind.IsBindError(errStr) {
+					return errStr
+				}
 				return retErr(errStr)
 			}
 			return retMsg(fmt.Sprintf("Pipeline '%s' successfully cloned and registered locally!", id))

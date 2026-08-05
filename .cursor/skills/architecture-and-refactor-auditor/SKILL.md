@@ -167,14 +167,18 @@ Para detectar y mover código duplicado a paquetes comunes sin romper contratos 
 ### Paso 1: Identificación de Patrones Duplicados
 
 Al revisar el código, busca los siguientes patrones recurrentes:
-* **Fan-out de peers**: No reinventar loops + timeouts + liveness — usar `callPeer` / `forEachPeer` / `mapEachPeer`.
+* **Fan-out de peers**: No reinventar loops + timeouts + liveness — usar `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer`.
+* **Pipeline persist**: Un solo camino — `applyPipelineAction` (Local* + gossip).
 * **UIHint / pickers**: No snifar nombres en bind/Android — `protocol.InferUIHint` / `EffectiveUIHint`.
-* **Schema detail**: Un solo camino — `Server.LocalServiceDetail`.
-* **Errores bind/CLI**: `bindErrorJSON` / `ParseBindError` (no prefijo `"error:"`).
+* **Schema detail**: Un solo camino — `Server.LocalServiceDetail` / `GetServiceSchema` (offline).
+* **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError` (no prefijo `"error:"`, no double-wrap).
 * **Respuestas JSON en Handlers HTTP**: `utils.RespondJSON` / `RespondError` / `DecodeJSONOrError`.
-* **TLS / cert leaf**: `p2p.LoadNodeTLS`, `newNodeCertTemplate`, `CAKeyPath`.
+* **TLS / cert leaf**: `p2p.LoadNodeTLS`, `newNodeCertTemplate`, `CAKeyPath`, `NodeCertPaths`, `PeerCNFromTLS` / `peerCNFromRequest`.
+* **HTTP client**: `p2p.NewHTTPClient`.
 * **QUIC addr**: siempre `p2p.FirstQUICAddr`.
 * **IPC Unix**: `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline`; VFS vía `LocalVFSUpload` / `LocalVFSSubscribe`.
+* **Bolt JSON**: `boltPutJSON` / `boltLoadMapJSON`.
+* **NDJSON pumps**: `pumpJSONEncode` / `pumpJSONDecode`.
 * **Boilerplate CLI**: no dial propio — bind helpers.
 
 ### Paso 2: Ubicación de Abstracciones

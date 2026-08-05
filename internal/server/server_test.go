@@ -478,7 +478,7 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 func TestInviteAndJoinLifecycle(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "sponsor"), nil)
-	reqBody := server.InviteRequest{ValidForMinutes: 15}
+	reqBody := protocol.InviteRequest{ValidForMinutes: 15}
 	bodyBytes, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
@@ -487,7 +487,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "Should have created a token successfully")
 
-	var inviteResp server.InviteResponse
+	var inviteResp protocol.InviteResponse
 	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
 	require.NoError(t, err)
 
@@ -635,7 +635,7 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	sv := NewServer(t, testutil.DefaultConfig(t, "invite-expiry"), nil)
 
 	// Generate a real invite
-	reqBody := server.InviteRequest{ValidForMinutes: 15}
+	reqBody := protocol.InviteRequest{ValidForMinutes: 15}
 	bodyBytes, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
@@ -644,7 +644,7 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var inviteResp server.InviteResponse
+	var inviteResp protocol.InviteResponse
 	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
 	require.NoError(t, err)
 
@@ -1217,7 +1217,7 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var inviteResp server.InviteResponse
+	var inviteResp protocol.InviteResponse
 	err = json.NewDecoder(resp.Body).Decode(&inviteResp)
 	require.NoError(t, err)
 	require.NotEmpty(t, inviteResp.Token)
@@ -1238,7 +1238,7 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 	defer func() { _ = resp2.Body.Close() }()
 	require.Equal(t, http.StatusCreated, resp2.StatusCode)
 
-	var inviteResp2 server.InviteResponse
+	var inviteResp2 protocol.InviteResponse
 	err = json.NewDecoder(resp2.Body).Decode(&inviteResp2)
 	require.NoError(t, err)
 	require.NotEmpty(t, inviteResp2.Token)

@@ -79,7 +79,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Compute.SetAddress(cfg.Address)
-	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.peerClient, cfg.Workers, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
+	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
 		for peerID, peerAddress := range s.GetPeersCopy() {
 			if rawSource == peerAddress {
 				s.downloadQueue <- DownloadJob{

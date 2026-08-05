@@ -30,18 +30,7 @@ func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
 
 	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
 
-	switch req.Action {
-	case "add":
-		if s.Storage != nil {
-			_ = s.Storage.SavePipelineSchema(req.Schema)
-		}
-		s.Compute.RegisterPipeline(req.Schema)
-	case "remove":
-		if s.Storage != nil {
-			_ = s.Storage.DeletePipelineSchema(req.Schema.ID)
-		}
-		s.Compute.UnregisterPipeline(req.Schema.ID)
-	}
+	_ = s.applyPipelineAction(req.Schema, req.Action)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -65,9 +54,8 @@ func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
-	var msg p2p.HolePunchMessage
-	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, "Invalid request body")
+	msg, ok := utils.DecodeJSONOrError[p2p.HolePunchMessage](w, r)
+	if !ok {
 		return
 	}
 

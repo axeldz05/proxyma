@@ -127,6 +127,11 @@ fun parseJSONMap(json: String): Map<String, Any> {
 
 fun getActionError(res: String): String = parseJSONField(res, "error")
 
+/** Mirrors Go ParseBindError — sole Android entry for bind error envelopes. */
+fun parseBindError(res: String): String = getActionError(res)
+
+fun isBindError(res: String): Boolean = parseBindError(res).isNotEmpty()
+
 fun getActionMessage(res: String): String = parseJSONField(res, "message")
 
 fun getResultPath(res: String): String {
@@ -140,8 +145,88 @@ fun getResultPath(res: String): String {
         if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
             return resultPath
         }
+        val hash = outputs["output_hash"] as? String
+        if (!hash.isNullOrEmpty()) {
+            val local = proxyma_bind.Proxyma_bind.getLocalBlobPath(hash)
+            if (local.isNotEmpty()) return local
+        }
     }
     return ""
+}
+
+fun updateFileTask(
+    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
+    taskId: String,
+    transform: (com.proxyma.android.models.FileTask) -> com.proxyma.android.models.FileTask
+) {
+    val index = fileTasks.indexOfFirst { it.taskId == taskId }
+    if (index != -1) {
+        fileTasks[index] = transform(fileTasks[index])
+    }
+}
+
+fun startUnaryFileTask(
+    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
+    taskId: String,
+    context: Context? = null,
+    action: () -> String,
+    onDone: ((Result<String>) -> Unit)? = null
+) {
+    thread {
+        val res = action()
+        val err = parseBindError(res)
+        isRunningOnMainThread {
+            if (err.isNotEmpty()) {
+                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = err) }
+                context?.toast("❌ Execution failed: $err", long = true)
+                onDone?.invoke(Result.failure(Exception(err)))
+            } else {
+                val resPath = getResultPath(res).ifEmpty { null }
+                updateFileTask(fileTasks, taskId) {
+                    it.copy(status = "completed", resultPath = resPath)
+                }
+                context?.toast("✅ Execution completed!")
+                onDone?.invoke(Result.success(res))
+            }
+        }
+    }
+}
+
+fun attachStreamToFileTask(
+    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
+    taskId: String,
+    serviceName: String,
+    payloadJson: String,
+    context: Context? = null,
+    onDone: ((Result<String>) -> Unit)? = null
+) {
+    proxyma_bind.Proxyma_bind.streamService(serviceName, payloadJson, object : proxyma_bind.StreamEventListener {
+        override fun onChunk(chunkJSON: String) {
+            isRunningOnMainThread {
+                updateFileTask(fileTasks, taskId) { curr ->
+                    val updated = if (curr.streamOutput.isNullOrEmpty()) chunkJSON
+                    else curr.streamOutput + "\n" + chunkJSON
+                    curr.copy(streamOutput = updated)
+                }
+            }
+        }
+
+        override fun onError(errMsg: String) {
+            isRunningOnMainThread {
+                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = errMsg) }
+                context?.toast("❌ Stream error: $errMsg", long = true)
+                onDone?.invoke(Result.failure(Exception(errMsg)))
+            }
+        }
+
+        override fun onComplete() {
+            isRunningOnMainThread {
+                updateFileTask(fileTasks, taskId) { it.copy(status = "completed") }
+                context?.toast("✅ Stream completed!")
+                onDone?.invoke(Result.success("Streaming completed"))
+            }
+        }
+    })
 }
 
 private fun parseJSONField(json: String, key: String): String {
@@ -199,21 +284,16 @@ fun uploadUriToVfs(
     thread {
         try {
             val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
-            val tempFile = File(context.cacheDir, name)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            val res = proxyma_bind.Proxyma_bind.uploadFile(name, tempFile.absolutePath)
-            tempFile.delete()
-            val err = getActionError(res)
+            val cachedPath = copyUriToCache(context, uri)
+            val res = proxyma_bind.Proxyma_bind.uploadFile(name, cachedPath)
+            File(cachedPath).delete()
+            val err = parseBindError(res)
             isRunningOnMainThread {
                 if (err.isNotEmpty()) {
                     onComplete(Result.failure(Exception(err)))
                 } else {
                     val msg = getActionMessage(res)
-                    onComplete(Result.success(msg.ifEmpty { res }))
+                    onComplete(Result.success(msg.ifEmpty { name }))
                 }
             }
         } catch (e: Exception) {
@@ -235,7 +315,7 @@ fun executeGoCall(
     thread {
         try {
             val res = action()
-            val err = getActionError(res)
+            val err = parseBindError(res)
             isRunningOnMainThread {
                 onComplete?.invoke()
                 if (err.isNotEmpty()) {
@@ -261,11 +341,7 @@ fun executeGoSubmit(
     thread {
         try {
             val res = action()
-            val err = if (res.startsWith("error:")) {
-                res.substringAfter("error:").trim()
-            } else {
-                getActionError(res)
-            }
+            val err = parseBindError(res)
             isRunningOnMainThread {
                 if (err.isNotEmpty()) {
                     onComplete(Result.failure(Exception(err)))
@@ -284,7 +360,7 @@ fun executeGoSubmit(
 
 /** Shared Gson parse of bind GetServiceDetails JSON (SSOT for screens). */
 fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
-    if (raw.contains("\"error\"")) return null
+    if (isBindError(raw)) return null
     return try {
         Gson().fromJson(raw, com.proxyma.android.models.ServiceDetail::class.java)
     } catch (_: Exception) {

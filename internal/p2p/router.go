@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +175,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 					}
 				}
 
-				isLoopbackTarget := host == "127.0.0.1" || host == "localhost" || host == "::1"
+				isLoopbackTarget := utils.IsLoopbackHost(host)
 
 				if (isLoopbackTarget && port == ownPort) || (parsedAddr.Host == ownParsed.Host) {
 					if peerID != r.NodeID {

@@ -8,17 +8,18 @@ import (
 
 type LocalService = protocol.LocalService
 
-func (s *Server) LocalInviteGenerate(validForMinutes int) (string, error) {
+// LocalInviteGenerate creates an invite token and returns it with its expiry (SSOT).
+func (s *Server) LocalInviteGenerate(validForMinutes int) (token string, expires time.Time, err error) {
 	if validForMinutes <= 0 {
-		validForMinutes = 15
+		validForMinutes = DefaultInviteMinutes
 	}
 	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	expiration := time.Now().Add(time.Duration(validForMinutes) * time.Minute)
 	s.AddPendingInvite(secretHex, expiration)
-	return smartToken, nil
+	return smartToken, expiration, nil
 }
 
 func (s *Server) LocalBandwidthStats() protocol.BandwidthStats {

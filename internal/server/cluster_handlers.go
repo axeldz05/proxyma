@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,15 +10,6 @@ import (
 	"proxyma/internal/utils"
 	"time"
 )
-
-type InviteRequest struct {
-	ValidForMinutes int `json:"valid_for_minutes"`
-}
-
-type InviteResponse struct {
-	Token   string    `json:"token"`
-	Expires time.Time `json:"expires"`
-}
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	req, ok := utils.DecodeJSONOrError[protocol.JoinRequest](w, r)
@@ -75,35 +65,30 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[InviteRequest](w, r)
+	req, ok := utils.DecodeJSONOrError[protocol.InviteRequest](w, r)
 	if !ok {
 		return
 	}
 	if req.ValidForMinutes <= 0 {
-		req.ValidForMinutes = 15
+		req.ValidForMinutes = DefaultInviteMinutes
 	}
-	smartToken, err := s.LocalInviteGenerate(req.ValidForMinutes)
+	smartToken, expiration, err := s.LocalInviteGenerate(req.ValidForMinutes)
 	if err != nil {
 		s.Config.Logger.Error("Failed to generate smart token", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 
-	expiration := time.Now().Add(time.Duration(req.ValidForMinutes) * time.Minute)
-	utils.RespondJSON(w, http.StatusCreated, InviteResponse{
+	utils.RespondJSON(w, http.StatusCreated, protocol.InviteResponse{
 		Token:   smartToken,
 		Expires: expiration,
 	})
 }
 
 func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	peerID, ok := peerCNFromRequest(r)
+	if !ok {
 		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for CA rotation")
-		return
-	}
-	peerID := r.TLS.PeerCertificates[0].Subject.CommonName
-	if peerID == "" {
-		utils.RespondError(w, http.StatusForbidden, "Missing peer ID in client certificate")
 		return
 	}
 
@@ -129,15 +114,14 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 
 	certsDir := filepath.Dir(s.Config.CAPath)
 	caPath := s.Config.CAPath
-	certPath := filepath.Join(certsDir, fmt.Sprintf("%s.crt", s.Config.ID))
-	keyPath := filepath.Join(certsDir, fmt.Sprintf("%s.key", s.Config.ID))
+	certPath, keyPath := p2p.NodeCertPaths(certsDir, s.Config.ID)
 
 	// Fallback to storage path if key is not in certsDir (common in test fixture layouts)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		testKeyPath := filepath.Join(s.Config.StoragePath, fmt.Sprintf("%s.key", s.Config.ID))
-		if _, err := os.Stat(testKeyPath); err == nil {
-			keyPath = testKeyPath
-			certPath = filepath.Join(s.Config.StoragePath, fmt.Sprintf("%s.crt", s.Config.ID))
+		testCert, testKey := p2p.NodeCertPaths(s.Config.StoragePath, s.Config.ID)
+		if _, err := os.Stat(testKey); err == nil {
+			keyPath = testKey
+			certPath = testCert
 		}
 	}
 

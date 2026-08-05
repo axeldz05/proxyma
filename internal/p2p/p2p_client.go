@@ -53,9 +53,7 @@ func NewHTTPPeerClient(baseTransport http.RoundTripper, sponsorAddress string, l
 		SponsorAddress: sponsorAddress,
 		Logger:         logger,
 	}
-	client := &http.Client{
-		Transport: router,
-	}
+	client := NewHTTPClient(router, 0)
 	return &HTTPPeerClient{
 		client: client,
 		router: router,

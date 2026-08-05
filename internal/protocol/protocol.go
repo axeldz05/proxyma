@@ -236,6 +236,19 @@ type ServiceNotification struct {
 	Schema ServiceSchema `json:"schema"`
 }
 
+type InviteRequest struct {
+	ValidForMinutes int `json:"valid_for_minutes"`
+}
+
+type InviteResponse struct {
+	Token   string    `json:"token"`
+	Expires time.Time `json:"expires"`
+}
+
+type PeerIDRequest struct {
+	ID string `json:"id"`
+}
+
 type JoinRequest struct {
 	Secret  string `json:"secret"`
 	CSR     string `json:"csr"`

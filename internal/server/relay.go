@@ -82,12 +82,9 @@ func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		certCN := r.TLS.PeerCertificates[0].Subject.CommonName
-		if certCN != peerID {
-			utils.RespondError(w, http.StatusForbidden, "Unauthorized peer ID")
-			return
-		}
+	if certCN, ok := peerCNFromRequest(r); ok && certCN != peerID {
+		utils.RespondError(w, http.StatusForbidden, "Unauthorized peer ID")
+		return
 	}
 
 	queue, err := s.Relays.GetOrCreateQueue(peerID)
@@ -127,7 +124,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 
 	// Security validation: if no valid peer certificates are supplied via mTLS,
 	// only allow forwarding to the cluster joining endpoint.
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	if _, ok := peerCNFromRequest(r); !ok {
 		if req.Path != "/cluster/join" {
 			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not /cluster/join", "path", req.Path, "ip", r.RemoteAddr)
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")

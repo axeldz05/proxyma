@@ -11,7 +11,6 @@ import (
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
-	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 )
 
@@ -19,33 +18,17 @@ import (
 func GetServiceSchemaLocal(storagePath string, serviceName string) (*protocol.ServiceSchema, error) {
 	proxyma_bind.SetStoragePath(storagePath)
 	schemaJSON := proxyma_bind.GetServiceSchema(serviceName)
-
-	if !strings.Contains(schemaJSON, `"error":`) {
-		var schema protocol.ServiceSchema
-		if err := json.Unmarshal([]byte(schemaJSON), &schema); err == nil {
-			if schema.Name == "" {
-				schema.Name = serviceName
-			}
-			return &schema, nil
-		}
+	if proxyma_bind.IsBindError(schemaJSON) {
+		return nil, fmt.Errorf("%s", proxyma_bind.ParseBindError(schemaJSON))
 	}
-
-	// Offline fallback via shared L1 loader (no ad-hoc parse duplication).
-	svcs, err := compute.LoadServicesMap(storagePath)
-	if err == nil {
-		if svc, ok := svcs[serviceName]; ok {
-			s := svc.Schema
-			if s.Name == "" {
-				s.Name = serviceName
-			}
-			if s.Type == "" {
-				s.Type = svc.Type
-			}
-			return &s, nil
-		}
+	var schema protocol.ServiceSchema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		return nil, fmt.Errorf("service '%s' details unavailable: %w", serviceName, err)
 	}
-
-	return nil, fmt.Errorf("service '%s' details unavailable", serviceName)
+	if schema.Name == "" {
+		schema.Name = serviceName
+	}
+	return &schema, nil
 }
 
 // ParseInputsToJSON converts key1=val1,key2=val2 key-value strings or JSON objects into a valid JSON string.

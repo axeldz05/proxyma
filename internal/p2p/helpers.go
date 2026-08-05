@@ -18,6 +18,14 @@ import (
 // DefaultRPCTimeout is the shared timeout for short peer RPCs outside server.PeerRPC*.
 const DefaultRPCTimeout = 10 * time.Second
 
+// NewHTTPClient builds an http.Client with the given transport and timeout.
+// A nil RoundTripper uses http.DefaultTransport; a zero timeout means no client-level deadline.
+func NewHTTPClient(rt http.RoundTripper, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: rt,
+		Timeout:   timeout,
+	}
+}
 func validateAndBuildURL(peerID, path string) (string, error) {
 	if peerID == "" {
 		return "", fmt.Errorf("peer ID cannot be empty")
