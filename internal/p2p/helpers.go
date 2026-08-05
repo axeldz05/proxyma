@@ -3,11 +3,13 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strings"
 )
@@ -124,6 +126,57 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 	return nil
 }
 
+// ForwardRelay POSTs a RelayRequest to sponsorAddr/relay/forward and decodes the response (L2).
+func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string, relayReq protocol.RelayRequest) (protocol.RelayResponse, error) {
+	var zero protocol.RelayResponse
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	fwdBytes, err := json.Marshal(relayReq)
+	if err != nil {
+		return zero, err
+	}
+	fwdReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sponsorAddr+"/relay/forward", bytes.NewBuffer(fwdBytes))
+	if err != nil {
+		return zero, err
+	}
+	fwdReq.Header.Set("Content-Type", "application/json")
+	fwdResp, err := rt.RoundTrip(fwdReq)
+	if err != nil {
+		return zero, err
+	}
+	defer func() { _ = fwdResp.Body.Close() }()
+	if fwdResp.StatusCode != http.StatusOK {
+		return zero, fmt.Errorf("unexpected status code: %d", fwdResp.StatusCode)
+	}
+	var relayRes protocol.RelayResponse
+	if err := json.NewDecoder(fwdResp.Body).Decode(&relayRes); err != nil {
+		return zero, err
+	}
+	return relayRes, nil
+}
+
+// FirstQUICAddr returns the first quic:// address in the list.
+func FirstQUICAddr(addrs []string) (string, bool) {
+	for _, addr := range addrs {
+		if strings.HasPrefix(addr, "quic://") {
+			return addr, true
+		}
+	}
+	return "", false
+}
+
+// VerifyPeerCN checks that cert CommonName matches expectedPeerID.
+func VerifyPeerCN(cert *x509.Certificate, expectedPeerID string) error {
+	if cert == nil {
+		return fmt.Errorf("peer identity mismatch: missing certificate")
+	}
+	if cert.Subject.CommonName != expectedPeerID {
+		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cert.Subject.CommonName)
+	}
+	return nil
+}
+
 // BandwidthRecorder abstracts bandwidth tracking to prevent circular dependencies.
 type BandwidthRecorder interface {
 	RecordBytesSent(n int64, path string)
@@ -168,4 +221,3 @@ func (b *BandwidthRoundTripper) CloseIdleConnections() {
 		idler.CloseIdleConnections()
 	}
 }
-

@@ -7,8 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -73,22 +71,10 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	s.Bandwidth = NewBandwidthTracker()
 	s.Relays = NewRelayManager(s)
 
-	if updater, ok := s.peerClient.(interface {
-		UpdateSponsorAddress(addr string)
-	}); ok {
-		updater.UpdateSponsorAddress(cfg.BootstrapNode)
-	}
-
-	if setter, ok := s.peerClient.(interface {
-		SetNodeID(id string)
-	}); ok {
-		setter.SetNodeID(cfg.ID)
-	}
-
-	if setter, ok := s.peerClient.(interface {
-		SetOwnAddress(addr string)
-	}); ok {
-		setter.SetOwnAddress(cfg.Address)
+	if s.peerClient != nil {
+		s.peerClient.UpdateSponsorAddress(cfg.BootstrapNode)
+		s.peerClient.SetNodeID(cfg.ID)
+		s.peerClient.SetOwnAddress(cfg.Address)
 	}
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
@@ -111,11 +97,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		for peerID, record := range peers {
 			s.Peers.AddPeer(peerID, record)
 			s.Peers.SetPeerOffline(peerID, fmt.Errorf("not contacted yet"))
-			if updater, ok := s.peerClient.(interface {
-				UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-			}); ok {
-				updater.UpdatePeerRoute(peerID, record)
-			}
+			s.peerClient.UpdatePeerRoute(peerID, record)
 		}
 	} else {
 		cfg.Logger.Error("Failed to load persisted peers", "error", err)
@@ -128,42 +110,16 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		hasLocal, _ := s.Storage.HasPhysicalBlob(hash)
 		if !hasLocal {
 			if requesterNodeID != "" && requesterNodeID != s.Config.ID {
-				dlCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				defer cancel()
-				body, err := s.peerClient.DownloadBlob(dlCtx, requesterNodeID, hash)
-				if err != nil {
+				entry := protocol.IndexEntry{Hash: hash}
+				if err := s.fetchBlobFromPeer(ctx, requesterNodeID, entry); err != nil {
 					return "", fmt.Errorf("failed to download VFS blob %s from %s: %w", hash, requesterNodeID, err)
-				}
-				defer func() { _ = body.Close() }()
-				_, _, err = s.Storage.SavePhysicalBlob(body)
-				if err != nil {
-					return "", fmt.Errorf("failed to store downloaded VFS blob: %w", err)
 				}
 			}
 		}
 		return s.Storage.GetBlobPath(hash), nil
 	})
 	s.Compute.SetVFSBlobStager(func(pathStr string) (string, int64, error) {
-		if _, err := os.Stat(pathStr); err != nil {
-			return "", 0, err
-		}
-		f, err := os.Open(pathStr)
-		if err != nil {
-			return "", 0, err
-		}
-		defer func() { _ = f.Close() }()
-		hash, size, err := s.Storage.SavePhysicalBlob(f)
-		if err != nil {
-			return "", 0, err
-		}
-		s.Storage.Upsert(protocol.IndexEntry{
-			Name:    filepath.Base(pathStr),
-			Hash:    hash,
-			Size:    size,
-			Version: 1,
-		})
-		s.Storage.SetSubscription(filepath.Base(pathStr), true)
-		return hash, size, nil
+		return s.Storage.StageLocalFile(pathStr)
 	})
 
 	// Load persisted pipeline schemas
@@ -357,17 +313,12 @@ func (s *Server) RemovePeer(peerID string) {
 	if s.Storage != nil {
 		_ = s.Storage.DeletePeer(peerID)
 	}
-	if updater, ok := s.peerClient.(interface {
-		RemovePeerRoute(peerID string)
-	}); ok {
-		updater.RemovePeerRoute(peerID)
-	}
+	s.peerClient.RemovePeerRoute(peerID)
 }
 
 func (s *Server) announceOffline(ctx context.Context) {
-	peers := s.GetPeersCopy()
 	payload := map[string]string{"id": s.Config.ID}
-	for peerID := range peers {
+	for peerID := range s.GetPeersCopy() {
 		_ = s.peerClient.Offline(ctx, peerID, payload)
 	}
 }
@@ -388,11 +339,7 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 				s.Config.Logger.Error("Failed to save peer to DB", "peerID", peerID, "error", err)
 			}
 		}
-		if updater, ok := s.peerClient.(interface {
-			UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-		}); ok {
-			updater.UpdatePeerRoute(peerID, addressRecord)
-		}
+		s.peerClient.UpdatePeerRoute(peerID, addressRecord)
 		go func(targetPeer string) {
 			for _, schema := range s.Compute.ListPipelines() {
 				s.NotifySchemaToPeer(targetPeer, schema, "add")

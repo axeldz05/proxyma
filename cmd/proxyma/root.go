@@ -29,13 +29,6 @@ Allows synchronizing files and running compute tasks between nodes encrypted wit
 	}
 )
 
-type BandwidthStats struct {
-	DownloadSpeed int64 `json:"downloadSpeed"`
-	UploadSpeed   int64 `json:"uploadSpeed"`
-	TotalReceived int64 `json:"totalReceived"`
-	TotalSent     int64 `json:"totalSent"`
-}
-
 func formatBytes(bytesVal int64) string {
 	if bytesVal <= 0 {
 		return "0 B"
@@ -48,6 +41,46 @@ func formatBytes(bytesVal int64) string {
 		return fmt.Sprintf("%.2f KB", float64(bytesVal)/1024)
 	}
 	return fmt.Sprintf("%d B", bytesVal)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func resolveServiceName(args map[string]string) string {
+	return firstNonEmpty(args["name"], args["service"])
+}
+
+func resolvePayloadRaw(args map[string]string) string {
+	if raw := firstNonEmpty(args["inputs"], args["payload"], args["param"]); raw != "" {
+		return raw
+	}
+	if args["input"] != "" {
+		return "input_path=" + args["input"]
+	}
+	return ""
+}
+
+func resolveServiceNameFromFlags(c *cobra.Command) string {
+	name, _ := c.Flags().GetString("name")
+	if name == "" {
+		name, _ = c.Flags().GetString("service")
+	}
+	return name
+}
+
+func resolvePayloadFromFlags(c *cobra.Command) string {
+	for _, key := range []string{"inputs", "payload", "param"} {
+		if v, _ := c.Flags().GetString(key); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func init() {
@@ -93,18 +126,9 @@ func init() {
 			if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
 				origHelpFunc := actionCmd.HelpFunc()
 				actionCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-					svcName, _ := c.Flags().GetString("name")
-					if svcName == "" {
-						svcName, _ = c.Flags().GetString("service")
-					}
+					svcName := resolveServiceNameFromFlags(c)
 					if svcName != "" {
-						payloadVal, _ := c.Flags().GetString("inputs")
-						if payloadVal == "" {
-							payloadVal, _ = c.Flags().GetString("payload")
-						}
-						if payloadVal == "" {
-							payloadVal, _ = c.Flags().GetString("param")
-						}
+						payloadVal := resolvePayloadFromFlags(c)
 						handled, _ := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadVal, actionCopy.Name, true)
 						if handled {
 							return
@@ -134,18 +158,8 @@ func init() {
 				}
 
 				if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
-					svcName := argsMap["name"]
-					if svcName == "" {
-						svcName = argsMap["service"]
-					}
-					payloadRaw := argsMap["inputs"]
-					if payloadRaw == "" {
-						payloadRaw = argsMap["payload"]
-					}
-					if payloadRaw == "" {
-						payloadRaw = argsMap["param"]
-					}
-
+					svcName := resolveServiceName(argsMap)
+					payloadRaw := resolvePayloadRaw(argsMap)
 					handled, err := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadRaw, actionCopy.Name, false)
 					if handled && err != nil {
 						return err
@@ -411,7 +425,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			if strings.Contains(statsJson, `"error":`) {
 				return statsJson
 			}
-			var stats BandwidthStats
+			var stats protocol.BandwidthStats
 			if err := json.Unmarshal([]byte(statsJson), &stats); err != nil {
 				return retErr(fmt.Sprintf("failed to parse stats: %v", err))
 			}
@@ -474,21 +488,8 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			return proxyma_bind.RemoveService(serviceName)
 
 		case "run":
-			serviceName := args["name"]
-			if serviceName == "" {
-				serviceName = args["service"]
-			}
-			inputsRaw := args["inputs"]
-			if inputsRaw == "" {
-				inputsRaw = args["payload"]
-			}
-			if inputsRaw == "" {
-				inputsRaw = args["param"]
-			}
-			if inputsRaw == "" && args["input"] != "" {
-				inputsRaw = "input_path=" + args["input"]
-			}
-
+			serviceName := resolveServiceName(args)
+			inputsRaw := resolvePayloadRaw(args)
 			payloadJSON := ParseInputsToJSON(inputsRaw)
 
 			schema, _ := GetServiceSchemaLocal(cliStorage, serviceName)

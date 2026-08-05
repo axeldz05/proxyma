@@ -71,20 +71,20 @@ type QUICManager struct {
 	PublicUDPAddr string
 	PacketConn    *HolePunchPacketConn
 	QUICListener  *quic.Listener
-	Transport    *quic.Transport
-	Sessions     map[string]*quic.Conn
-	SessionsMu   sync.RWMutex
-	TLSClient    *tls.Config
-	TLSServer    *tls.Config
-	HTTPHandler  http.Handler
-	Logger       interface {
+	Transport     *quic.Transport
+	Sessions      map[string]*quic.Conn
+	SessionsMu    sync.RWMutex
+	TLSClient     *tls.Config
+	TLSServer     *tls.Config
+	HTTPHandler   http.Handler
+	Logger        interface {
 		Info(msg string, args ...any)
 		Debug(msg string, args ...any)
 		Warn(msg string, args ...any)
 		Error(msg string, args ...any)
 	}
-	dialsMu      sync.Mutex
-	dials        map[string]*dialResult
+	dialsMu sync.Mutex
+	dials   map[string]*dialResult
 }
 
 func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls.Config, handler http.Handler, logger any) *QUICManager {
@@ -295,7 +295,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		SenderID:  qm.LocalID,
 		PublicUDP: qm.PublicUDPAddr,
 	}
-	
+
 	// Send to `/holepunch/init` of the remote peer via relay
 	msgBytes, _ := json.Marshal(msg)
 	respBytes, err := sendRelayReq(peerID, "/holepunch/init", msgBytes)
@@ -382,9 +382,9 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		tlsState := qconn.ConnectionState().TLS
 		if len(tlsState.PeerCertificates) > 0 {
 			cert := tlsState.PeerCertificates[0]
-			if cert.Subject.CommonName != peerID {
+			if err := VerifyPeerCN(cert, peerID); err != nil {
 				_ = qconn.CloseWithError(0, "peer identity mismatch")
-				return nil, fmt.Errorf("peer identity mismatch in QUIC: expected %s, got %s", peerID, cert.Subject.CommonName)
+				return nil, fmt.Errorf("peer identity mismatch in QUIC: %w", err)
 			}
 		}
 
@@ -433,10 +433,9 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 	}
 }
 
-
 type quicResponseWriter struct {
-	stream *quic.Stream
-	header http.Header
+	stream        *quic.Stream
+	header        http.Header
 	headerWritten bool
 }
 

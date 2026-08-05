@@ -159,9 +159,7 @@ fun ParameterInput(
     }
 
     val isImagePicker = remember(param) {
-        param.uiHint == "image_picker" || (param.type == "file" && param.name.lowercase().let { 
-            it.contains("image") || it.contains("img") || it.contains("photo")
-        })
+        param.uiHint == "image_picker"
     }
 
     var isFileUploading by remember { mutableStateOf(false) }

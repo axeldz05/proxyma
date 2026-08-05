@@ -115,50 +115,25 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body:   bodyBytes,
+			Body: bodyBytes,
 		}
-		relayReqBytes, _ := json.Marshal(relayReq)
-
-		relayURL := fmt.Sprintf("%s/relay/forward", payload.RelayAddr)
-		logFn(fmt.Sprintf("Sending relayed join request to: %s", relayURL), nil)
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(relayReqBytes))
-		if reqErr == nil {
-			req.Header.Set("Content-Type", "application/json")
-			r, doErr := client.Do(req)
-			if doErr == nil {
-				if r.StatusCode == http.StatusOK {
-					var relayRes protocol.RelayResponse
-					if errDec := json.NewDecoder(r.Body).Decode(&relayRes); errDec == nil {
-						_ = r.Body.Close()
-						if relayRes.StatusCode == http.StatusOK {
-							resp = &http.Response{
-								StatusCode: relayRes.StatusCode,
-								Body:       io.NopCloser(bytes.NewReader(relayRes.Body)),
-							}
-							successfulAddr = payload.RelayAddr
-							logFn("Relay-assisted join succeeded!", nil)
-						} else {
-							logFn(fmt.Sprintf("Relayed join rejected by sponsor: Status %d, Error: %s", relayRes.StatusCode, string(relayRes.Body)), nil)
-							errs = append(errs, fmt.Sprintf("- [Relay %s]: Sponsor rejected join: Status %d", payload.RelayAddr, relayRes.StatusCode))
-						}
-					} else {
-						_ = r.Body.Close()
-						logFn("Failed to decode relay response payload", errDec)
-						errs = append(errs, fmt.Sprintf("- [Relay %s]: Failed to decode relay response: %v", payload.RelayAddr, errDec))
-					}
-				} else {
-					bodyStr, _ := io.ReadAll(r.Body)
-					_ = r.Body.Close()
-					logFn(fmt.Sprintf("Relay server returned status %d: %s", r.StatusCode, string(bodyStr)), nil)
-					errs = append(errs, fmt.Sprintf("- [Relay %s]: Relay server error: Status %d", payload.RelayAddr, r.StatusCode))
+		logFn(fmt.Sprintf("Sending relayed join request to: %s/relay/forward", payload.RelayAddr), nil)
+		relayRes, fwdErr := ForwardRelay(ctx, client.Transport, payload.RelayAddr, relayReq)
+		if fwdErr == nil {
+			if relayRes.StatusCode == http.StatusOK {
+				resp = &http.Response{
+					StatusCode: relayRes.StatusCode,
+					Body:       io.NopCloser(bytes.NewReader(relayRes.Body)),
 				}
+				successfulAddr = payload.RelayAddr
+				logFn("Relay-assisted join succeeded!", nil)
 			} else {
-				logFn("Relay connection/TLS error", doErr)
-				errs = append(errs, fmt.Sprintf("- [Relay %s]: Connection error: %v", payload.RelayAddr, doErr))
+				logFn(fmt.Sprintf("Relayed join rejected by sponsor: Status %d, Error: %s", relayRes.StatusCode, string(relayRes.Body)), nil)
+				errs = append(errs, fmt.Sprintf("- [Relay %s]: Sponsor rejected join: Status %d", payload.RelayAddr, relayRes.StatusCode))
 			}
 		} else {
-			logFn("Relay request creation failed", reqErr)
-			errs = append(errs, fmt.Sprintf("- [Relay %s]: Request creation failed: %v", payload.RelayAddr, reqErr))
+			logFn("Relay connection/TLS error", fwdErr)
+			errs = append(errs, fmt.Sprintf("- [Relay %s]: Connection error: %v", payload.RelayAddr, fwdErr))
 		}
 	}
 

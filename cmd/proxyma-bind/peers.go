@@ -1,23 +1,12 @@
 package proxyma_bind
 
 import (
-	"encoding/json"
-	"fmt"
+	"proxyma/internal/server"
 )
 
 // GetPeersJson returns active peers.
 func GetPeersJson() string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "peers", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	list := s.LocalPeersList()
-	b, _ := json.Marshal(list)
-	return string(b)
+	return dispatchUnixOrLocal("peers", nil, func(s *server.Server) (any, error) {
+		return s.LocalPeersList(), nil
+	})
 }

@@ -17,22 +17,21 @@ import (
 // GenerateInviteToken creates an invite token valid for 15 minutes.
 func GenerateInviteToken() string {
 	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
+	if s != nil {
+		token, err := s.LocalInviteGenerate(15)
 		if err != nil {
 			return "error: " + err.Error()
-		}
-		var token string
-		if err := json.Unmarshal(data, &token); err != nil {
-			return "error: invalid token response: " + err.Error()
 		}
 		return token
 	}
 
-	token, err := s.LocalInviteGenerate(15)
+	data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
 	if err != nil {
 		return "error: " + err.Error()
+	}
+	var token string
+	if err := json.Unmarshal(data, &token); err != nil {
+		return "error: invalid token response: " + err.Error()
 	}
 	return token
 }

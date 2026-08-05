@@ -49,7 +49,7 @@ func TestSmartTokenV2(t *testing.T) {
 	require.NotEmpty(t, payload.Addresses)
 	require.Equal(t, "my-sponsor-node", payload.SponsorID)
 	require.Equal(t, "https://relay.proxyma.net:8080", payload.RelayAddr)
-	
+
 	// The first IP should match the host
 	require.Contains(t, payload.Addresses[0], "192.168.1.100")
 	require.Contains(t, payload.Addresses[0], "8080")

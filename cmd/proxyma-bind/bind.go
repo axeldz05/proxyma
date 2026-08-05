@@ -1,6 +1,7 @@
 package proxyma_bind
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -72,33 +73,37 @@ func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s
 	return string(b)
 }
 
-func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
+// DialUnix opens a connection to the daemon unix socket (L1).
+func DialUnix(storagePath string) (net.Conn, error) {
 	cfg, err := protocol.LoadConfig(storagePath)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't load config: %w", err)
 	}
 	sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
-
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("daemon is unreachable. Is 'proxyma run' active? Error: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	return conn, nil
+}
 
-	req := protocol.UnixRequest{
-		Action: action,
-		Args:   args,
-	}
+// WriteUnixRequest marshals and writes a UnixRequest (L1).
+func WriteUnixRequest(conn net.Conn, action string, args map[string]string) error {
+	req := protocol.UnixRequest{Action: action, Args: args}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return fmt.Errorf("failed to marshal request: %w", err)
 	}
-
 	_, err = conn.Write(reqBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send command: %w", err)
+		return fmt.Errorf("failed to send command: %w", err)
 	}
+	return nil
+}
 
+// ReadUnixResponse reads one unary UnixResponse from conn (L1).
+func ReadUnixResponse(conn net.Conn) (protocol.UnixResponse, error) {
+	var resp protocol.UnixResponse
 	var respBytes []byte
 	buf := make([]byte, 4096)
 	for {
@@ -110,16 +115,49 @@ func sendUnixSocketCommand(storagePath string, action string, args map[string]st
 			break
 		}
 	}
-
-	var resp protocol.UnixResponse
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse daemon response: %w", err)
+		return resp, fmt.Errorf("failed to parse daemon response: %w", err)
+	}
+	return resp, nil
+}
+
+// ScanUnixNDJSON scans line-delimited UnixResponse messages (L1).
+func ScanUnixNDJSON(conn net.Conn, onLine func(protocol.UnixResponse) bool) error {
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		var resp protocol.UnixResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			continue
+		}
+		if !onLine(resp) {
+			return nil
+		}
+	}
+	return scanner.Err()
+}
+
+func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
+	conn, err := DialUnix(storagePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := WriteUnixRequest(conn, action, args); err != nil {
+		return nil, err
 	}
 
+	resp, err := ReadUnixResponse(conn)
+	if err != nil {
+		return nil, err
+	}
 	if !resp.Success {
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
-
 	return resp.Data, nil
 }
 

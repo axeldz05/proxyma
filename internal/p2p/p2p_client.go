@@ -32,6 +32,15 @@ type PeerClient interface {
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 	RotateTLS(ctx context.Context, peerID string, payload map[string]string) error
 	StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error)
+
+	// Routing / lifecycle (formerly ad-hoc type assertions)
+	UpdatePeerRoute(peerID string, record protocol.AddressRecord)
+	RemovePeerRoute(peerID string)
+	SetNodeID(id string)
+	SetOwnAddress(addr string)
+	UpdateSponsorAddress(addr string)
+	CloseIdleConnections()
+	SetQUICManager(qm *QUICManager)
 }
 
 type HTTPPeerClient struct {
@@ -189,4 +198,3 @@ func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, servi
 	}
 	return resp.Body, nil
 }
-

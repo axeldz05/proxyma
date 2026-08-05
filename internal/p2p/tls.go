@@ -396,9 +396,9 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
 
 	certTemplate := x509.Certificate{
-		SerialNumber:          serialNumber,
-		DNSNames:              []string{peerID, "localhost"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		SerialNumber: serialNumber,
+		DNSNames:     []string{peerID, "localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 		Subject: pkix.Name{
 			CommonName:   peerID,
 			Organization: []string{"Proxyma Cluster"},
@@ -422,5 +422,3 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 
 	return certPEM, nil
 }
-
-

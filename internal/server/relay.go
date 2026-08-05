@@ -220,9 +220,7 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		if err != nil {
 			s.Config.Logger.Debug("Relay poll failed, trying to failover", "error", err)
 
-			if idler, ok := s.peerClient.(interface{ CloseIdleConnections() }); ok {
-				idler.CloseIdleConnections()
-			}
+			s.peerClient.CloseIdleConnections()
 
 			// Try to find another sponsor from GetSponsorPeers()
 			sponsors := s.GetSponsorPeers()

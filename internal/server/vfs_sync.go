@@ -6,23 +6,17 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"sort"
-	"time"
 )
 
 func (s *Server) ExecuteSync() error {
-	for peerID := range s.GetPeersCopy() {
+	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync}, func(ctx context.Context, peerID string) error {
 		s.ensureQUICSession(peerID)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		ctx = context.WithValue(ctx, p2p.BypassHolePunchKey{}, true)
 		manifest, err := s.peerClient.FetchManifest(ctx, peerID)
-		cancel()
 		if err != nil {
 			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
-			s.SetPeerOffline(peerID, err)
-			continue
+			return err
 		}
-		s.SetPeerOnline(peerID, true)
 		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
 		for _, file := range missingFiles {
 			s.downloadQueue <- DownloadJob{
@@ -30,7 +24,8 @@ func (s *Server) ExecuteSync() error {
 				Source: peerID,
 			}
 		}
-	}
+		return nil
+	})
 	return nil
 }
 
@@ -49,25 +44,32 @@ func (s *Server) downloadWorker() {
 			}
 			s.ensureQUICSession(job.Source)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			body, err := s.peerClient.DownloadBlob(ctx, job.Source, job.File.Hash)
-			if err != nil {
-				s.Config.Logger.Error("Failed to download blob from peer", "hash", job.File.Hash, "peer", job.Source, "error", err)
-				s.SetPeerOffline(job.Source, err)
-				cancel()
-				continue
-			}
-			s.SetPeerOnline(job.Source, true)
-			err = s.Storage.StoreRemoteBlob(job.File, body)
-			_ = body.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
+			err := s.callPeer(ctx, job.Source, func(ctx context.Context, peerID string) error {
+				return s.fetchBlobFromPeer(ctx, peerID, job.File)
+			})
 			cancel()
 			if err != nil {
-				s.Config.Logger.Error("Failed to store remote blob", "hash", job.File.Hash, "error", err)
+				s.Config.Logger.Error("Failed to download blob from peer", "hash", job.File.Hash, "peer", job.Source, "error", err)
 			} else {
 				s.Config.Logger.Info("Successfully downloaded and stored blob", "file", job.File.Name, "hash", job.File.Hash)
 			}
 		}
 	}
+}
+
+// fetchBlobFromPeer downloads a blob from peer and stores it locally (L2).
+func (s *Server) fetchBlobFromPeer(ctx context.Context, peerID string, entry protocol.IndexEntry) error {
+	body, err := s.peerClient.DownloadBlob(ctx, peerID, entry.Hash)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = body.Close() }()
+	if entry.Name != "" {
+		return s.Storage.StoreRemoteBlob(entry, body)
+	}
+	_, _, err = s.Storage.SavePhysicalBlob(body)
+	return err
 }
 
 func (s *Server) FetchFileOnDemand(name string) error {
@@ -86,15 +88,8 @@ func (s *Server) FetchFileOnDemand(name string) error {
 		if peerID == s.Config.ID || len(addrRec.Addresses) == 0 {
 			continue
 		}
-		ctxTimeout, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		body, err := s.peerClient.DownloadBlob(ctxTimeout, peerID, entry.Hash)
-		if err != nil {
-			cancel()
-			downloadErr = err
-			continue
-		}
-		err = s.Storage.StoreRemoteBlob(entry, body)
-		_ = body.Close()
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), PeerRPCBlob)
+		err := s.fetchBlobFromPeer(ctxTimeout, peerID, entry)
 		cancel()
 		if err == nil {
 			s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
@@ -146,19 +141,15 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 }
 
 func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
-	for peerID := range s.GetPeersCopy() {
-		payload := protocol.PeerNotification{
-			File:   fileInfo,
-			Source: s.Config.Address,
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	payload := protocol.PeerNotification{
+		File:   fileInfo,
+		Source: s.Config.Address,
+	}
+	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault}, func(ctx context.Context, peerID string) error {
 		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
-			s.SetPeerOffline(peerID, err)
-		} else {
-			s.SetPeerOnline(peerID, true)
 		}
-	}
+		return err
+	})
 }

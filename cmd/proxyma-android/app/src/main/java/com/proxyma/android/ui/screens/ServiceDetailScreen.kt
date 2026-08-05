@@ -118,14 +118,14 @@ fun ServiceDetailLayout(
             if (isFileService && (lowerName == "input" || lowerName == "output")) {
                 // Already added custom input/output picker above
             } else {
-                val uiHint = if (param.type == "file") {
+                val uiHint = param.uiHint ?: if (param.type == "file") {
                     if (lowerName.contains("image") || lowerName.contains("img") || lowerName.contains("photo")) {
                         "image_picker"
                     } else {
                         "file_picker"
                     }
                 } else {
-                    param.uiHint
+                    null
                 }
                 formParams.add(param.copy(uiHint = uiHint))
             }

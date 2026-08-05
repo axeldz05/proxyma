@@ -1,46 +1,27 @@
 package proxyma_bind
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"proxyma/internal/protocol"
+	"proxyma/internal/server"
 )
 
 // GetBandwidthStatsJson returns real-time bandwidth statistics.
 func GetBandwidthStatsJson() string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "bandwidth", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	stats := s.LocalBandwidthStats()
-	b, _ := json.Marshal(stats)
-	return string(b)
+	return dispatchUnixOrLocal("bandwidth", nil, func(s *server.Server) (any, error) {
+		return s.LocalBandwidthStats(), nil
+	})
 }
 
 // GetLogsJson returns JSON logs.
 func GetLogsJson() string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "logs", nil)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+	return dispatchUnixOrLocal("logs", nil, func(s *server.Server) (any, error) {
+		protocol.LogBufferMu.RLock()
+		defer protocol.LogBufferMu.RUnlock()
+		if protocol.LogBuffer == nil {
+			return []protocol.LogRecord{}, nil
 		}
-		return string(data)
-	}
-
-	protocol.LogBufferMu.RLock()
-	defer protocol.LogBufferMu.RUnlock()
-	if protocol.LogBuffer == nil {
-		return "[]"
-	}
-	b, _ := json.Marshal(protocol.LogBuffer)
-	return string(b)
+		out := make([]protocol.LogRecord, len(protocol.LogBuffer))
+		copy(out, protocol.LogBuffer)
+		return out, nil
+	})
 }

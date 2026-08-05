@@ -238,28 +238,36 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 }
 
 func (se *StorageEngine) GetLocalBlobPath(hash string) string {
-	return se.physical.GetBlobPath(hash)
+	return se.GetBlobPath(hash)
 }
 
-func (se *StorageEngine) SaveLocalFileWithoutNotification(fileName string, content io.Reader) (string, int64, error) {
-	hash, fileSize, err := se.physical.SaveBlob(content)
+// StageLocalFile opens a local path, saves it as a CAS blob, and upserts VFS metadata (L2).
+func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64, err error) {
+	fi, err := os.Stat(pathStr)
 	if err != nil {
-		return "", 0, fmt.Errorf("error saving the blob %s: %w", fileName, err)
+		return "", 0, err
 	}
-
-	newVersion := 1
-	if existingMeta, exists := se.vfs.Get(fileName); exists {
-		newVersion = existingMeta.Version + 1
+	if fi.IsDir() {
+		return "", 0, fmt.Errorf("path is a directory: %s", pathStr)
 	}
-	fileMeta := protocol.IndexEntry{
-		Name:    fileName,
-		Size:    fileSize,
+	f, err := os.Open(pathStr)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = f.Close() }()
+	hash, size, err = se.SavePhysicalBlob(f)
+	if err != nil {
+		return "", 0, err
+	}
+	name := filepath.Base(pathStr)
+	se.Upsert(protocol.IndexEntry{
+		Name:    name,
 		Hash:    hash,
-		Version: newVersion,
-	}
-	se.vfs.Upsert(fileMeta)
-	se.SetSubscription(fileName, true)
-	return hash, fileSize, nil
+		Size:    size,
+		Version: 1,
+	})
+	se.SetSubscription(name, true)
+	return hash, size, nil
 }
 
 func (se *StorageEngine) CleanupTempFiles() {

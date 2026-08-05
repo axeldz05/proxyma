@@ -109,9 +109,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 			s.Config.Logger.Error("Failed to start QUIC listener", "error", err)
 		} else {
 			s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", s.publicUDPAddr)
-			if httpClient, ok := s.peerClient.(*p2p.HTTPPeerClient); ok {
-				httpClient.SetQUICManager(s.quicMgr)
-			}
+			s.peerClient.SetQUICManager(s.quicMgr)
 		}
 	}
 

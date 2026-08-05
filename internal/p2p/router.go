@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,14 +50,7 @@ func (r *P2PRoundTripper) UpdatePeerRoute(peerID string, record protocol.Address
 }
 
 func (r *P2PRoundTripper) prewarmConnection(peerID string, record protocol.AddressRecord) {
-	hasQuic := false
-	for _, addr := range record.Addresses {
-		if strings.HasPrefix(addr, "quic://") {
-			hasQuic = true
-			break
-		}
-	}
-	if !hasQuic {
+	if _, ok := FirstQUICAddr(record.Addresses); !ok {
 		return
 	}
 
@@ -91,22 +83,8 @@ func (r *P2PRoundTripper) sendRelayMessage(ctx context.Context, sponsorAddr stri
 		Path:   path,
 		Body:   body,
 	}
-	fwdBytes, _ := json.Marshal(relayReq)
-	fwdReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sponsorAddr+"/relay/forward", bytes.NewBuffer(fwdBytes))
+	relayRes, err := ForwardRelay(ctx, r.Base, sponsorAddr, relayReq)
 	if err != nil {
-		return nil, err
-	}
-	fwdReq.Header.Set("Content-Type", "application/json")
-	fwdResp, err := r.Base.RoundTrip(fwdReq)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = fwdResp.Body.Close() }()
-	if fwdResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", fwdResp.StatusCode)
-	}
-	var relayRes protocol.RelayResponse
-	if err := json.NewDecoder(fwdResp.Body).Decode(&relayRes); err != nil {
 		return nil, err
 	}
 	if relayRes.StatusCode != http.StatusOK {
@@ -219,10 +197,10 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err == nil {
 			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
 				cert := resp.TLS.PeerCertificates[0]
-				if cert.Subject.CommonName != peerID {
+				if err := VerifyPeerCN(cert, peerID); err != nil {
 					_ = resp.Body.Close()
 					r.logDebug("Rejecting direct connection: peer identity mismatch", "expected", peerID, "got", cert.Subject.CommonName)
-					lastErr = fmt.Errorf("peer identity mismatch: expected %s, got %s", peerID, cert.Subject.CommonName)
+					lastErr = err
 					continue
 				}
 			}
@@ -260,33 +238,20 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 			relayReq.Headers[k] = strings.Join(v, ",")
 		}
 
-		fwdBytes, _ := json.Marshal(relayReq)
-		fwdReq, _ := http.NewRequestWithContext(clone.Context(), http.MethodPost, sponsorAddr+"/relay/forward", bytes.NewBuffer(fwdBytes))
-		fwdReq.Header.Set("Content-Type", "application/json")
-
-		fwdResp, err := r.Base.RoundTrip(fwdReq)
+		relayRes, err := ForwardRelay(clone.Context(), r.Base, sponsorAddr, relayReq)
 		if err == nil {
-			if fwdResp.StatusCode == http.StatusOK {
-				var relayRes protocol.RelayResponse
-				if err := json.NewDecoder(fwdResp.Body).Decode(&relayRes); err == nil {
-					_ = fwdResp.Body.Close()
-
-					// Reconstruct the response
-					res := &http.Response{
-						StatusCode:    relayRes.StatusCode,
-						Status:        http.StatusText(relayRes.StatusCode),
-						Body:          io.NopCloser(bytes.NewReader(relayRes.Body)),
-						Header:        make(http.Header),
-						ContentLength: int64(len(relayRes.Body)),
-						Request:       req,
-					}
-					for k, v := range relayRes.Headers {
-						res.Header.Set(k, v)
-					}
-					return res, nil
-				}
+			res := &http.Response{
+				StatusCode:    relayRes.StatusCode,
+				Status:        http.StatusText(relayRes.StatusCode),
+				Body:          io.NopCloser(bytes.NewReader(relayRes.Body)),
+				Header:        make(http.Header),
+				ContentLength: int64(len(relayRes.Body)),
+				Request:       req,
 			}
-			_ = fwdResp.Body.Close()
+			for k, v := range relayRes.Headers {
+				res.Header.Set(k, v)
+			}
+			return res, nil
 		}
 	}
 

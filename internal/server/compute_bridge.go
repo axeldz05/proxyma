@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"strings"
 	"sync"
@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCShort)
 	defer cancel()
 
 	var bids []protocol.ServiceBid
@@ -34,14 +34,17 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		wg.Add(1)
 		go func(peerID string) {
 			defer wg.Done()
-			bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
+			var bid protocol.ServiceBid
+			err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+				var bidErr error
+				bid, bidErr = s.peerClient.FetchServiceBid(ctx, peerID, query)
+				return bidErr
+			})
 			if err != nil {
 				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
-				s.SetPeerOffline(peerID, err)
-			} else {
-				s.SetPeerOnline(peerID, true)
+				return
 			}
-			if err != nil || !bid.CanAccept {
+			if !bid.CanAccept {
 				return
 			}
 			mu.Lock()
@@ -73,19 +76,9 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 		for k, v := range req.Payload {
 			if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
 				if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-					f, err := os.Open(pathStr)
+					hash, _, err := s.Storage.StageLocalFile(pathStr)
 					if err == nil {
-						hash, _, err := s.Storage.SavePhysicalBlob(f)
-						_ = f.Close()
-						if err == nil {
-							s.Storage.Upsert(protocol.IndexEntry{
-								Name:    filepath.Base(pathStr),
-								Hash:    hash,
-								Size:    fi.Size(),
-								Version: 1,
-							})
-							req.Payload[k] = "vfs://" + hash
-						}
+						req.Payload[k] = "vfs://" + hash
 					}
 				}
 			}
@@ -94,16 +87,16 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 
 	s.Compute.RegisterOutgoingTask(req)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
 	defer cancel()
 
-	err := s.peerClient.SubmitTask(ctx, targetPeerID, req)
+	err := s.callPeer(ctx, targetPeerID, func(ctx context.Context, peerID string) error {
+		return s.peerClient.SubmitTask(ctx, peerID, req)
+	})
 	if err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
-		s.SetPeerOffline(targetPeerID, err)
 		return err
 	}
-	s.SetPeerOnline(targetPeerID, true)
 	return nil
 }
 
@@ -115,27 +108,16 @@ func (s *Server) ensureQUICSession(peerID string) {
 	if !ok {
 		return
 	}
-	hasQuic := false
-	for _, addr := range record.Addresses {
-		if strings.HasPrefix(addr, "quic://") {
-			hasQuic = true
-			break
-		}
-	}
-	if !hasQuic {
+	if _, ok := p2p.FirstQUICAddr(record.Addresses); !ok {
 		return
 	}
 	if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
 		return
 	}
 
-	if updater, ok := s.peerClient.(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute(peerID, record)
-	}
+	s.peerClient.UpdatePeerRoute(peerID, record)
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), PeerRPCQUICWait)
 	defer waitCancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

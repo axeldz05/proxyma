@@ -47,13 +47,12 @@ func TestP2PRoundTripperDirectRouting(t *testing.T) {
 
 	// 4. Verify it was correctly routed
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	
+
 	bodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "target-response", string(bodyBytes))
 	require.Equal(t, "/some/api/path", receivedPath)
 }
-
 
 func TestP2PRoundTripperRelayFallback(t *testing.T) {
 	t.Parallel()
@@ -63,7 +62,7 @@ func TestP2PRoundTripperRelayFallback(t *testing.T) {
 	sponsorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/relay/forward" {
 			fwdReceived = true
-			
+
 			// Simulate a successful relay response
 			respBody := `{"req_id":"test-123","status_code":200,"headers":{"X-Test":"Ok"},"body":"UmVsYXkgT0s="}` // Base64 of "Relay OK"
 			w.WriteHeader(http.StatusOK)
@@ -99,7 +98,7 @@ func TestP2PRoundTripperRelayFallback(t *testing.T) {
 	// 4. Verify it fell back to the sponsor
 	require.True(t, fwdReceived, "Sponsor should have received a /relay/forward request")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	
+
 	bodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "Relay OK", string(bodyBytes))

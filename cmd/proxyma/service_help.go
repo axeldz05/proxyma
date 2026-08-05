@@ -5,44 +5,43 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 )
 
 // GetServiceSchemaLocal fetches the ServiceSchema for a target service from the daemon or local registry.
 func GetServiceSchemaLocal(storagePath string, serviceName string) (*protocol.ServiceSchema, error) {
 	proxyma_bind.SetStoragePath(storagePath)
-	detailsJSON := proxyma_bind.GetServiceDetails(serviceName)
+	schemaJSON := proxyma_bind.GetServiceSchema(serviceName)
 
-	var schema protocol.ServiceSchema
-	if err := json.Unmarshal([]byte(detailsJSON), &schema); err == nil && (schema.Name != "" || len(schema.Parameters) > 0) {
-		if schema.Name == "" {
-			schema.Name = serviceName
+	if !strings.Contains(schemaJSON, `"error":`) {
+		var schema protocol.ServiceSchema
+		if err := json.Unmarshal([]byte(schemaJSON), &schema); err == nil {
+			if schema.Name == "" {
+				schema.Name = serviceName
+			}
+			return &schema, nil
 		}
-		return &schema, nil
 	}
 
-	// Fallback: Read services.json directly from storagePath if daemon unreachable
-	svcFile := filepath.Join(storagePath, "services.json")
-	data, err := os.ReadFile(svcFile)
+	// Offline fallback via shared L1 loader (no ad-hoc parse duplication).
+	svcs, err := compute.LoadServicesMap(storagePath)
 	if err == nil {
-		var svcs map[string]struct {
-			Schema protocol.ServiceSchema `json:"schema"`
-		}
-		if err := json.Unmarshal(data, &svcs); err == nil {
-			if svc, ok := svcs[serviceName]; ok {
-				s := svc.Schema
-				if s.Name == "" {
-					s.Name = serviceName
-				}
-				return &s, nil
+		if svc, ok := svcs[serviceName]; ok {
+			s := svc.Schema
+			if s.Name == "" {
+				s.Name = serviceName
 			}
+			if s.Type == "" {
+				s.Type = svc.Type
+			}
+			return &s, nil
 		}
 	}
 
@@ -96,6 +95,45 @@ func ParseInputsToJSON(inputsRaw string) string {
 	return string(b)
 }
 
+// sampleValue synthesizes a representative sample for a parameter (L1).
+func sampleValue(paramName string, param protocol.ServiceParameter) any {
+	if param.Default != "" {
+		switch param.Type {
+		case "bool":
+			return param.Default == "true" || param.Default == "1"
+		case "int":
+			var val int
+			_, _ = fmt.Sscanf(param.Default, "%d", &val)
+			return val
+		default:
+			return param.Default
+		}
+	}
+	lowerKey := strings.ToLower(paramName)
+	switch param.Type {
+	case "bool":
+		return true
+	case "int":
+		return 100
+	case "file":
+		return "/path/to/input_file"
+	default:
+		if strings.Contains(lowerKey, "path") || strings.Contains(lowerKey, "file") || strings.Contains(lowerKey, "doc") {
+			return "/path/to/input_file"
+		}
+		if strings.Contains(lowerKey, "lang") {
+			return "eng"
+		}
+		if strings.Contains(lowerKey, "user") || strings.Contains(lowerKey, "name") {
+			return "user_example"
+		}
+		if len(param.Options) > 0 {
+			return param.Options[0]
+		}
+		return "example_value"
+	}
+}
+
 // BuildSampleKVInputs generates a representative key1=val1,key2=val2 string sample.
 func BuildSampleKVInputs(schema *protocol.ServiceSchema) string {
 	keys := make([]string, 0, len(schema.Parameters))
@@ -106,85 +144,22 @@ func BuildSampleKVInputs(schema *protocol.ServiceSchema) string {
 
 	var kvPairs []string
 	for _, k := range keys {
-		param := schema.Parameters[k]
-		valStr := "example_value"
-		if param.Default != "" {
-			valStr = param.Default
-		} else {
-			lowerKey := strings.ToLower(k)
-			switch param.Type {
-			case "bool":
-				valStr = "true"
-			case "int":
-				valStr = "100"
-			case "file":
-				valStr = "/path/to/input_file"
-			default:
-				if strings.Contains(lowerKey, "path") || strings.Contains(lowerKey, "file") || strings.Contains(lowerKey, "doc") {
-					valStr = "/path/to/input_file"
-				} else if strings.Contains(lowerKey, "lang") {
-					valStr = "eng"
-				} else if strings.Contains(lowerKey, "user") || strings.Contains(lowerKey, "name") {
-					valStr = "user_example"
-				} else if len(param.Options) > 0 {
-					valStr = param.Options[0]
-				}
-			}
-		}
-		kvPairs = append(kvPairs, fmt.Sprintf("%s=%s", k, valStr))
+		val := sampleValue(k, schema.Parameters[k])
+		kvPairs = append(kvPairs, fmt.Sprintf("%s=%v", k, val))
 	}
-
 	return strings.Join(kvPairs, ",")
 }
 
 // BuildSampleJSONPayload constructs a representative JSON sample based on parameter definitions.
 func BuildSampleJSONPayload(schema *protocol.ServiceSchema) string {
 	sample := make(map[string]any)
-
-	// Sort parameter names for deterministic output
 	keys := make([]string, 0, len(schema.Parameters))
 	for k := range schema.Parameters {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-
 	for _, k := range keys {
-		param := schema.Parameters[k]
-		if param.Default != "" {
-			switch param.Type {
-			case "bool":
-				sample[k] = param.Default == "true" || param.Default == "1"
-			case "int":
-				var val int
-				_, _ = fmt.Sscanf(param.Default, "%d", &val)
-				sample[k] = val
-			default:
-				sample[k] = param.Default
-			}
-			continue
-		}
-
-		lowerKey := strings.ToLower(k)
-		switch param.Type {
-		case "bool":
-			sample[k] = true
-		case "int":
-			sample[k] = 100
-		case "file":
-			sample[k] = "/path/to/input_file"
-		default:
-			if strings.Contains(lowerKey, "path") || strings.Contains(lowerKey, "file") || strings.Contains(lowerKey, "doc") {
-				sample[k] = "/path/to/input_file"
-			} else if strings.Contains(lowerKey, "lang") {
-				sample[k] = "eng"
-			} else if strings.Contains(lowerKey, "user") || strings.Contains(lowerKey, "name") {
-				sample[k] = "user_example"
-			} else if len(param.Options) > 0 {
-				sample[k] = param.Options[0]
-			} else {
-				sample[k] = "example_value"
-			}
-		}
+		sample[k] = sampleValue(k, schema.Parameters[k])
 	}
 
 	var buf bytes.Buffer

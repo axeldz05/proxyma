@@ -216,7 +216,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	if req.ValidForMinutes <= 0 {
 		req.ValidForMinutes = 15
 	}
-	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
+	smartToken, err := s.LocalInviteGenerate(req.ValidForMinutes)
 	if err != nil {
 		s.Config.Logger.Error("Failed to generate smart token", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error")
@@ -224,8 +224,6 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiration := time.Now().Add(time.Duration(req.ValidForMinutes) * time.Minute)
-	s.Invites.Add(secretHex, expiration)
-
 	utils.RespondJSON(w, http.StatusCreated, InviteResponse{
 		Token:   smartToken,
 		Expires: expiration,
@@ -234,9 +232,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) GetPeers(w http.ResponseWriter, r *http.Request) {
 	peers := s.GetPeersRecordCopy()
-	if err := json.NewEncoder(w).Encode(peers); err != nil {
-		s.Config.Logger.Error("failed to encode getPeers response", "error", err)
-	}
+	utils.RespondJSON(w, http.StatusOK, peers)
 }
 
 func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {

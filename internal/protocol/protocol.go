@@ -83,16 +83,6 @@ type IndexEntry struct {
 	Deleted bool   `json:"deleted"`
 }
 
-type CLIFileEntry struct {
-	Name       string `json:"name"`
-	Version    int    `json:"version"`
-	Size       int64  `json:"size"`
-	Hash       string `json:"hash"`
-	Deleted    bool   `json:"deleted"`
-	Subscribed bool   `json:"subscribed"`
-	HasLocal   bool   `json:"has_local"`
-}
-
 type VFSFileStatus struct {
 	Name       string  `json:"name"`
 	Version    int     `json:"version"`
@@ -129,7 +119,20 @@ const (
 )
 
 func (t ServiceType) IsStreaming() bool {
-	return t == ServiceTypeGRPCBidi || t == ServiceTypeBidiGRPC || t == ServiceTypeBidi || t == ServiceTypeBidiStream || string(t) == "bidi_stream"
+	n := t.Normalize()
+	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi
+}
+
+// Normalize maps streaming aliases to a canonical type.
+// Canonical streaming types: grpc_bidi (HTTP bidi) and legacy aliases collapse to grpc_bidi
+// except plain "bidi" which stays as ServiceTypeBidi for script-based streams.
+func (t ServiceType) Normalize() ServiceType {
+	switch t {
+	case ServiceTypeBidiGRPC, ServiceTypeBidiStream:
+		return ServiceTypeGRPCBidi
+	default:
+		return t
+	}
 }
 
 func (t ServiceType) String() string {
@@ -162,6 +165,14 @@ type ServiceParameter struct {
 	Required bool     `json:"required"`
 	Default  string   `json:"default,omitempty"`
 	Options  []string `json:"options,omitempty"`
+	UIHint   string   `json:"ui_hint,omitempty"` // e.g. "image_picker", "file_picker"
+}
+
+// LocalService is the on-disk services.json entry (SSOT).
+type LocalService struct {
+	Type   ServiceType   `json:"type"`
+	Exec   string        `json:"exec,omitempty"`
+	Schema ServiceSchema `json:"schema"`
 }
 
 type ServiceBid struct {

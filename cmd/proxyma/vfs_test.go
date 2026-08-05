@@ -24,7 +24,7 @@ func TestVfsCmds(t *testing.T) {
 	t.Run("storage list - empty", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_list", req.Action)
-			return []protocol.CLIFileEntry{}, nil
+			return []protocol.VFSFileStatus{}, nil
 		})
 		defer func() { _ = l.Close() }()
 
@@ -36,7 +36,7 @@ func TestVfsCmds(t *testing.T) {
 	t.Run("storage list - entries", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 			require.Equal(t, "vfs_list", req.Action)
-			return []protocol.CLIFileEntry{
+			return []protocol.VFSFileStatus{
 				{
 					Name:       "file.txt",
 					Version:    2,

@@ -202,11 +202,10 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                         val pReq = paramDef?.required ?: false
                                         val pDef = paramDef?.defaultValue
                                         val pOpts = paramDef?.options
+                                        val uiHint = paramDef?.uiHint
 
-                                        val lowerFrom = fromPortName.lowercase()
-                                        val lowerTo = conn.to_port.lowercase()
-                                        val isFile = pType == "file" || lowerFrom.contains("path") || lowerFrom.contains("file") || lowerFrom.contains("doc") || lowerFrom.contains("pdf") || lowerFrom.contains("image") || lowerTo.contains("path") || lowerTo.contains("file")
-                                        val isImg = lowerFrom.contains("image") || lowerFrom.contains("ocr") || lowerFrom.contains("photo") || lowerFrom.contains("pic") || lowerFrom.contains("input_path") || lowerTo.contains("image") || lowerTo.contains("photo")
+                                        val isFile = pType == "file" || uiHint == "file_picker" || uiHint == "image_picker"
+                                        val isImg = uiHint == "image_picker"
 
                                         ServiceParameterSpec(
                                             name = fromPortName,
@@ -321,9 +320,8 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                 val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
                                 val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
                                 val specs = parsedDetails?.parameters?.map { p ->
-                                    val lower = p.name.lowercase()
-                                    val isFile = lower.contains("path") || lower.contains("file") || lower.contains("doc") || lower.contains("pdf") || lower.contains("image")
-                                    val isImg = lower.contains("image") || lower.contains("ocr") || lower.contains("photo") || lower.contains("pic") || lower.contains("input_path")
+                                    val isFile = p.type == "file" || p.uiHint == "file_picker" || p.uiHint == "image_picker"
+                                    val isImg = p.uiHint == "image_picker"
                                     ServiceParameterSpec(
                                         name = p.name,
                                         type = p.type,

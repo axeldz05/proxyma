@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 )
 
@@ -150,4 +151,12 @@ func (m *MockPeerClient) NotifyPipelineSchema(ctx context.Context, addr string, 
 func (m *MockPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
 	return nil, nil
 }
+
+func (m *MockPeerClient) UpdatePeerRoute(peerID string, record protocol.AddressRecord) {}
+func (m *MockPeerClient) RemovePeerRoute(peerID string)                                 {}
+func (m *MockPeerClient) SetNodeID(id string)                                           {}
+func (m *MockPeerClient) SetOwnAddress(addr string)                                     {}
+func (m *MockPeerClient) UpdateSponsorAddress(addr string)                              {}
+func (m *MockPeerClient) CloseIdleConnections()                                         {}
+func (m *MockPeerClient) SetQUICManager(qm *p2p.QUICManager)                             {}
 

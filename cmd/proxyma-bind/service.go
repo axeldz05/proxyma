@@ -1,14 +1,12 @@
 package proxyma_bind
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 )
@@ -20,6 +18,7 @@ type ParameterDetail struct {
 	Description  string   `json:"description"`
 	DefaultValue string   `json:"defaultValue,omitempty"`
 	Options      []string `json:"options,omitempty"`
+	UIHint       string   `json:"uiHint,omitempty"`
 }
 
 type ServiceDetail struct {
@@ -33,11 +32,7 @@ type ServiceDetail struct {
 	UI                  *protocol.ServiceUIConfig            `json:"ui,omitempty"`
 }
 
-type LocalService struct {
-	Type   protocol.ServiceType   `json:"type"`
-	Exec   string                 `json:"exec,omitempty"`
-	Schema protocol.ServiceSchema `json:"schema"`
-}
+type LocalService = protocol.LocalService
 
 // DiscoverServices returns active cluster services.
 func DiscoverServices() string {
@@ -46,33 +41,51 @@ func DiscoverServices() string {
 	})
 }
 
-// GetServiceDetails gets metadata for a given service.
-func GetServiceDetails(name string) string {
-	s := getSrv()
-
-	var schema protocol.ServiceSchema
-	var addr string
-	var err error
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_detail", map[string]string{
-			"name": name,
-		})
+// GetServiceSchema returns the raw protocol.ServiceSchema JSON for a service (L2).
+// Prefer this over GetServiceDetails when callers need Type/IsStreaming/Parameters map.
+func GetServiceSchema(name string) string {
+	return dispatchUnixOrLocal("service_detail", map[string]string{"name": name}, func(s *server.Server) (any, error) {
+		schema, exists := s.Compute.GetService(name)
+		if exists {
+			return schema, nil
+		}
+		_, _, schema, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
 		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+			return nil, err
+		}
+		return schema, nil
+	})
+}
+
+// resolveServiceSchema loads ServiceSchema + optional remote provider address.
+func resolveServiceSchema(name string) (schema protocol.ServiceSchema, addr string, err error) {
+	s := getSrv()
+	if s == nil {
+		data, err := sendUnixSocketCommand(appStorage, "service_detail", map[string]string{"name": name})
+		if err != nil {
+			return schema, "", err
 		}
 		if err := json.Unmarshal(data, &schema); err != nil {
-			return fmt.Sprintf(`{"error": "invalid service detail response: %v"}`, err)
+			return schema, "", fmt.Errorf("invalid service detail response: %w", err)
 		}
-	} else {
-		var exists bool
-		schema, exists = s.Compute.GetService(name)
-		if !exists {
-			_, addr, schema, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
-			if err != nil {
-				return fmt.Sprintf(`{"error": %q}`, err.Error())
-			}
+		return schema, "", nil
+	}
+	var exists bool
+	schema, exists = s.Compute.GetService(name)
+	if !exists {
+		_, addr, schema, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
+		if err != nil {
+			return schema, "", err
 		}
+	}
+	return schema, addr, nil
+}
+
+// GetServiceDetails gets Android-facing metadata for a given service (L3).
+func GetServiceDetails(name string) string {
+	schema, addr, err := resolveServiceSchema(name)
+	if err != nil {
+		return fmt.Sprintf(`{"error": %q}`, err.Error())
 	}
 
 	var reqPermissions []string
@@ -82,6 +95,7 @@ func GetServiceDetails(name string) string {
 	var params []ParameterDetail
 	for pName, rules := range schema.Parameters {
 		desc := fmt.Sprintf("Provide a text value for %s.", pName)
+		uiHint := rules.UIHint
 		switch rules.Type {
 		case "bool":
 			desc = fmt.Sprintf("Toggle to enable or disable the %s option.", pName)
@@ -89,9 +103,15 @@ func GetServiceDetails(name string) string {
 			desc = fmt.Sprintf("Enter a numerical value for %s.", pName)
 		case "file":
 			hasFileParam = true
-			lower := strings.ToLower(pName)
-			isImg := strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo")
-			if isImg {
+			if uiHint == "" {
+				lower := strings.ToLower(pName)
+				if strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo") {
+					uiHint = "image_picker"
+				} else {
+					uiHint = "file_picker"
+				}
+			}
+			if uiHint == "image_picker" {
 				hasImageParam = true
 				desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", pName)
 			} else {
@@ -106,6 +126,7 @@ func GetServiceDetails(name string) string {
 			Description:  desc,
 			DefaultValue: rules.Default,
 			Options:      rules.Options,
+			UIHint:       uiHint,
 		})
 	}
 
@@ -171,22 +192,6 @@ func GetServiceUIContent(name string) string {
 // AddService registers a new service configuration locally.
 func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile string) string {
 	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_add", map[string]string{
-			"name":        name,
-			"type":        serviceType,
-			"exec":        exec,
-			"desc":        desc,
-			"param":       param,
-			"no-required": noRequired,
-			"schema-file": schemaFile,
-		})
-		if err == nil {
-			return string(data)
-		}
-	}
-
 	if s != nil {
 		msg, err := s.LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile)
 		if err != nil {
@@ -195,105 +200,26 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 		return fmt.Sprintf(`{"message": %q}`, msg)
 	}
 
-	if serviceType == "" {
-		serviceType = "exec"
+	data, err := sendUnixSocketCommand(appStorage, "service_add", map[string]string{
+		"name":        name,
+		"type":        serviceType,
+		"exec":        exec,
+		"desc":        desc,
+		"param":       param,
+		"no-required": noRequired,
+		"schema-file": schemaFile,
+	})
+	if err == nil {
+		return string(data)
 	}
 
-	servicesFile := filepath.Join(appStorage, "services.json")
-	services := make(map[string]LocalService)
-
-	if data, err := os.ReadFile(servicesFile); err == nil {
-		_ = json.Unmarshal(data, &services)
+	// Offline: persist via shared L2 helpers (daemon not running).
+	serviceName, localService, buildErr := compute.BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired, schemaFile)
+	if buildErr != nil {
+		return fmt.Sprintf(`{"error": %q}`, buildErr.Error())
 	}
-
-	var localService LocalService
-	var serviceName string
-
-	if strings.HasSuffix(name, ".json") || schemaFile != "" {
-		fileToRead := name
-		if schemaFile != "" {
-			fileToRead = schemaFile
-		}
-		data, err := os.ReadFile(fileToRead)
-		if err != nil {
-			return fmt.Sprintf(`{"error": "couldn't read service file: %v"}`, err)
-		}
-		if schemaFile != "" {
-			var schema protocol.ServiceSchema
-			if err := json.Unmarshal(data, &schema); err != nil {
-				return fmt.Sprintf(`{"error": "invalid schema file format: %v"}`, err)
-			}
-			localService.Schema = schema
-			serviceName = name
-			localService.Schema.Name = serviceName
-		} else {
-			if err := json.Unmarshal(data, &localService); err != nil {
-				return fmt.Sprintf(`{"error": "invalid file format: %v"}`, err)
-			}
-			serviceName = localService.Schema.Name
-		}
-		if serviceName == "" {
-			return `{"error": "service name is missing in JSON schema"}`
-		}
-		if exec != "" {
-			localService.Exec = exec
-		}
-		if serviceType != string(protocol.ServiceTypeExec) && localService.Type == "" {
-			localService.Type = protocol.ServiceType(serviceType)
-		}
-	} else {
-		serviceName = name
-		schema := protocol.ServiceSchema{
-			Name:        serviceName,
-			Type:        protocol.ServiceType(serviceType),
-			Description: desc,
-			Parameters:  make(map[string]protocol.ServiceParameter),
-		}
-
-		noReqMap := make(map[string]bool)
-		if noRequired != "" {
-			for _, p := range strings.Split(noRequired, ",") {
-				noReqMap[strings.TrimSpace(p)] = true
-			}
-		}
-
-		if param != "" {
-			for _, p := range strings.Split(param, ",") {
-				parts := strings.Split(p, ":")
-				if len(parts) < 2 {
-					return fmt.Sprintf(`{"error": "invalid parameter format '%s'. Use name:type"}`, p)
-				}
-
-				paramName := strings.TrimSpace(parts[0])
-				paramType := strings.TrimSpace(parts[1])
-
-				isRequired := true
-				if strings.HasSuffix(paramName, "?") {
-					paramName = strings.TrimSuffix(paramName, "?")
-					isRequired = false
-				} else if noReqMap[paramName] {
-					isRequired = false
-				}
-
-				schema.Parameters[paramName] = protocol.ServiceParameter{
-					Type:     paramType,
-					Required: isRequired,
-				}
-			}
-		}
-
-		localService = LocalService{
-			Type:   protocol.ServiceType(serviceType),
-			Exec:   exec,
-			Schema: schema,
-		}
-	}
-
-	services[serviceName] = localService
-
-	newData, _ := json.MarshalIndent(services, "", "  ")
-	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
-		return fmt.Sprintf(`{"error": "error saving services file: %v"}`, err)
+	if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
+		return fmt.Sprintf(`{"error": "error saving services file: %v"}`, saveErr)
 	}
 	return fmt.Sprintf(`{"message": "Service '%s' added successfully. Restart the node to apply changes."}`, serviceName)
 }
@@ -301,16 +227,6 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 // RemoveService deletes a service configuration locally.
 func RemoveService(name string) string {
 	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_remove", map[string]string{
-			"name": name,
-		})
-		if err == nil {
-			return string(data)
-		}
-	}
-
 	if s != nil {
 		msg, err := s.LocalServiceRemove(name)
 		if err != nil {
@@ -319,22 +235,15 @@ func RemoveService(name string) string {
 		return fmt.Sprintf(`{"message": %q}`, msg)
 	}
 
-	servicesFile := filepath.Join(appStorage, "services.json")
-	services := make(map[string]LocalService)
-
-	if data, err := os.ReadFile(servicesFile); err == nil {
-		_ = json.Unmarshal(data, &services)
+	data, err := sendUnixSocketCommand(appStorage, "service_remove", map[string]string{
+		"name": name,
+	})
+	if err == nil {
+		return string(data)
 	}
 
-	if _, exists := services[name]; !exists {
-		return fmt.Sprintf(`{"error": "service '%s' not found"}`, name)
-	}
-
-	delete(services, name)
-
-	newData, _ := json.MarshalIndent(services, "", "  ")
-	if err := os.WriteFile(servicesFile, newData, 0644); err != nil {
-		return fmt.Sprintf(`{"error": "error saving services file: %v"}`, err)
+	if delErr := compute.DeleteLocalService(appStorage, name); delErr != nil {
+		return fmt.Sprintf(`{"error": %q}`, delErr.Error())
 	}
 	return fmt.Sprintf(`{"message": "Service '%s' removed successfully. Restart the node to apply changes."}`, name)
 }
@@ -360,52 +269,37 @@ func StreamService(name string, payloadJson string, listener StreamEventListener
 	s := getSrv()
 	if s == nil {
 		go func() {
-			cfg, err := protocol.LoadConfig(appStorage)
+			conn, err := DialUnix(appStorage)
 			if err != nil {
 				if listener != nil {
 					listener.OnError(err.Error())
 				}
 				return
 			}
-			sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
-			conn, err := net.Dial("unix", sockPath)
-			if err != nil {
+			defer func() { _ = conn.Close() }()
+
+			if err := WriteUnixRequest(conn, "service_stream", map[string]string{
+				"service": name,
+				"payload": payloadJson,
+			}); err != nil {
 				if listener != nil {
-					listener.OnError(fmt.Sprintf("daemon is unreachable: %v", err))
+					listener.OnError(err.Error())
 				}
 				return
 			}
-			defer func() { _ = conn.Close() }()
 
-			req := protocol.UnixRequest{
-				Action: "service_stream",
-				Args: map[string]string{
-					"service": name,
-					"payload": payloadJson,
-				},
-			}
-			reqBytes, _ := json.Marshal(req)
-			_, _ = conn.Write(reqBytes)
-
-			scanner := bufio.NewScanner(conn)
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line == "" {
-					continue
-				}
-				var resp protocol.UnixResponse
-				if err := json.Unmarshal([]byte(line), &resp); err == nil {
-					if !resp.Success {
-						if listener != nil {
-							listener.OnError(resp.Error)
-						}
-						return
+			_ = ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
+				if !resp.Success {
+					if listener != nil {
+						listener.OnError(resp.Error)
 					}
-					if listener != nil && resp.Data != nil {
-						listener.OnChunk(string(resp.Data))
-					}
+					return false
 				}
-			}
+				if listener != nil && resp.Data != nil {
+					listener.OnChunk(string(resp.Data))
+				}
+				return true
+			})
 			if listener != nil {
 				listener.OnComplete()
 			}
@@ -448,110 +342,60 @@ func GetTaskStatus(taskID string) string {
 	})
 }
 
-
 // AddPipeline registers a new service pipeline schema.
 func AddPipeline(id string, schemaFile string) string {
-	s := getSrv()
-
 	schemaBytes, err := os.ReadFile(schemaFile)
 	if err != nil {
 		return fmt.Sprintf(`{"error": %q}`, err.Error())
 	}
-	var schema protocol.PipelineSchema
-	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
-		return fmt.Sprintf(`{"error": "invalid pipeline schema json: %s"}`, err.Error())
-	}
-	schema.ID = id
-
-	schemaJSON, _ := json.Marshal(schema)
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "pipeline_add", map[string]string{
-			"schema": string(schemaJSON),
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
-
-	err = s.LocalPipelineAdd(string(schemaJSON))
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return `{"message": "Pipeline added successfully"}`
+	return AddPipelineRaw(id, string(schemaBytes))
 }
 
-// AddPipelineRaw registers a pipeline schema directly from its JSON string.
-func AddPipelineRaw(id string, schemaJSON string) string {
-	s := getSrv()
-
+func registerPipelineJSON(id, schemaJSON string) string {
 	var schema protocol.PipelineSchema
 	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
 		return fmt.Sprintf(`{"error": "invalid pipeline schema json: %s"}`, err.Error())
 	}
 	schema.ID = id
-
 	normalizedJSON, _ := json.Marshal(schema)
 
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "pipeline_add", map[string]string{
-			"schema": string(normalizedJSON),
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+	return dispatchUnixOrLocal("pipeline_add", map[string]string{
+		"schema": string(normalizedJSON),
+	}, func(s *server.Server) (any, error) {
+		if err := s.LocalPipelineAdd(string(normalizedJSON)); err != nil {
+			return nil, err
 		}
-		return string(data)
-	}
+		return map[string]string{"message": "Pipeline added successfully"}, nil
+	})
+}
 
-	err := s.LocalPipelineAdd(string(normalizedJSON))
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return `{"message": "Pipeline added successfully"}`
+// AddPipelineRaw registers a pipeline schema directly from its JSON string.
+func AddPipelineRaw(id string, schemaJSON string) string {
+	return registerPipelineJSON(id, schemaJSON)
 }
 
 // ValidatePipelineRaw validates a pipeline schema JSON string against the daemon without saving it.
 func ValidatePipelineRaw(schemaJSON string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "pipeline_validate", map[string]string{
-			"schema": schemaJSON,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+	return dispatchUnixOrLocal("pipeline_validate", map[string]string{
+		"schema": schemaJSON,
+	}, func(s *server.Server) (any, error) {
+		if err := s.LocalPipelineValidate(schemaJSON); err != nil {
+			return nil, err
 		}
-		return string(data)
-	}
-
-	err := s.LocalPipelineValidate(schemaJSON)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return `{"message": "Pipeline schema is valid"}`
+		return map[string]string{"message": "Pipeline schema is valid"}, nil
+	})
 }
-
 
 // RemovePipeline deletes a service pipeline schema.
 func RemovePipeline(id string) string {
-	s := getSrv()
-
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "pipeline_remove", map[string]string{
-			"id": id,
-		})
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+	return dispatchUnixOrLocal("pipeline_remove", map[string]string{
+		"id": id,
+	}, func(s *server.Server) (any, error) {
+		if err := s.LocalPipelineRemove(id); err != nil {
+			return nil, err
 		}
-		return string(data)
-	}
-
-	err := s.LocalPipelineRemove(id)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return `{"message": "Pipeline removed successfully"}`
+		return map[string]string{"message": "Pipeline removed successfully"}, nil
+	})
 }
 
 // ListPipelines returns a list of registered pipelines.
