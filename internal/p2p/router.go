@@ -293,11 +293,8 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(clone *http.Request, req *http.Re
 		return nil, nil, false
 	}
 	hasQuicAddress := false
-	for _, addr := range record.Addresses {
-		if strings.HasPrefix(addr, "quic://") {
-			hasQuicAddress = true
-			break
-		}
+	if _, ok := FirstQUICAddr(record.Addresses); ok {
+		hasQuicAddress = true
 	}
 	if !hasQuicAddress {
 		return nil, nil, false

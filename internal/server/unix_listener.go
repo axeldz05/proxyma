@@ -31,6 +31,26 @@ func (s *Server) listenUnixSocket() {
 	}
 }
 
+func writeUnixResponse(c net.Conn, respData any, actionErr error) {
+	var unixResp protocol.UnixResponse
+	if actionErr != nil {
+		unixResp = protocol.UnixResponse{Success: false, Error: actionErr.Error()}
+	} else {
+		var raw json.RawMessage
+		if respData != nil {
+			raw, _ = json.Marshal(respData)
+		}
+		unixResp = protocol.UnixResponse{Success: true, Data: raw}
+	}
+	respBytes, _ := json.Marshal(unixResp)
+	_, _ = c.Write(respBytes)
+}
+
+func writeUnixNDJSON(c net.Conn, resp protocol.UnixResponse) {
+	respB, _ := json.Marshal(resp)
+	_, _ = c.Write(append(respB, '\n'))
+}
+
 func (s *Server) handleUnixConnection(c net.Conn) {
 	defer func() { _ = c.Close() }()
 	buf := make([]byte, 1)
@@ -42,10 +62,7 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 	// Legacy 1-byte command compat
 	if buf[0] == 1 {
 		s.Config.Logger.Info("Sync triggered via legacy unix socket command")
-		if s.Config.BootstrapNode != "" {
-			_ = s.AnnouncePresence(s.Config.BootstrapNode)
-		}
-		err = s.ExecuteSync()
+		err = s.announceAndSync()
 		if err != nil {
 			s.Config.Logger.Error("Sync via legacy unix socket failed", "error", err)
 			_, _ = c.Write([]byte{0})
@@ -60,8 +77,7 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		reader := io.MultiReader(bytes.NewReader(buf), c)
 		var req protocol.UnixRequest
 		if err := json.NewDecoder(reader).Decode(&req); err != nil {
-			respBytes, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: "invalid JSON request: " + err.Error()})
-			_, _ = c.Write(respBytes)
+			writeUnixResponse(c, nil, fmt.Errorf("invalid JSON request: %w", err))
 			return
 		}
 
@@ -70,28 +86,13 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 
 		switch req.Action {
 		case "sync":
-			if s.Config.BootstrapNode != "" {
-				_ = s.AnnouncePresence(s.Config.BootstrapNode)
-			}
-			actionErr = s.ExecuteSync()
+			actionErr = s.announceAndSync()
 
 		case "vfs_list":
 			respData = s.LocalVFSList()
 
 		case "vfs_upload":
-			filePath := req.Args["path"]
-			fileName := req.Args["name"]
-			if filePath == "" || fileName == "" {
-				actionErr = fmt.Errorf("missing path or name parameter")
-				break
-			}
-			f, err := os.Open(filePath)
-			if err != nil {
-				actionErr = fmt.Errorf("failed to open file: %w", err)
-				break
-			}
-			actionErr = s.Storage.SaveLocalFile(fileName, f)
-			_ = f.Close()
+			actionErr = s.LocalVFSUpload(req.Args["name"], req.Args["path"])
 
 		case "vfs_subscribe", "vfs_unsubscribe", "vfs_delete", "vfs_purge", "vfs_fetch":
 			fileName := req.Args["name"]
@@ -101,15 +102,9 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			}
 			switch req.Action {
 			case "vfs_subscribe":
-				s.Storage.SetSubscription(fileName, true)
-				go func() {
-					if s.Config.BootstrapNode != "" {
-						_ = s.AnnouncePresence(s.Config.BootstrapNode)
-					}
-					_ = s.ExecuteSync()
-				}()
+				actionErr = s.LocalVFSSubscribe(fileName, true)
 			case "vfs_unsubscribe":
-				s.Storage.SetSubscription(fileName, false)
+				actionErr = s.LocalVFSSubscribe(fileName, false)
 			case "vfs_delete":
 				actionErr = s.Storage.DeleteLocalFile(fileName)
 			case "vfs_purge":
@@ -122,22 +117,12 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			respData, actionErr = s.LocalServiceDiscover()
 
 		case "service_detail":
-			name := req.Args["name"]
-			if name == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
-			}
-			schema, exists := s.Compute.GetService(name)
-			if exists {
-				respData = schema
-				break
-			}
-			_, _, schema2, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
+			schema, _, err := s.LocalServiceDetail(req.Args["name"])
 			if err != nil {
 				actionErr = err
 				break
 			}
-			respData = schema2
+			respData = schema
 
 		case "service_add":
 			respData, actionErr = s.LocalServiceAdd(
@@ -158,13 +143,10 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			payloadStr := req.Args["payload"]
 			err := s.LocalServiceStreamRun(svcName, payloadStr, func(chunk map[string]any) {
 				chunkBytes, _ := json.Marshal(chunk)
-				chunkResp := protocol.UnixResponse{Success: true, Data: chunkBytes}
-				respB, _ := json.Marshal(chunkResp)
-				_, _ = c.Write(append(respB, '\n'))
+				writeUnixNDJSON(c, protocol.UnixResponse{Success: true, Data: chunkBytes})
 			})
 			if err != nil {
-				errResp, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: err.Error()})
-				_, _ = c.Write(append(errResp, '\n'))
+				writeUnixNDJSON(c, protocol.UnixResponse{Success: false, Error: err.Error()})
 			}
 			return
 
@@ -188,11 +170,7 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			respData, actionErr = s.LocalInviteGenerate(15)
 
 		case "logs":
-			protocol.LogBufferMu.RLock()
-			logsCopy := make([]protocol.LogRecord, len(protocol.LogBuffer))
-			copy(logsCopy, protocol.LogBuffer)
-			protocol.LogBufferMu.RUnlock()
-			respData = logsCopy
+			respData = s.LocalLogs()
 
 		case "bandwidth":
 			respData = s.LocalBandwidthStats()
@@ -222,18 +200,6 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			actionErr = fmt.Errorf("unknown action: %s", req.Action)
 		}
 
-		var unixResp protocol.UnixResponse
-		if actionErr != nil {
-			unixResp = protocol.UnixResponse{Success: false, Error: actionErr.Error()}
-		} else {
-			var raw json.RawMessage
-			if respData != nil {
-				raw, _ = json.Marshal(respData)
-			}
-			unixResp = protocol.UnixResponse{Success: true, Data: raw}
-		}
-
-		respBytes, _ := json.Marshal(unixResp)
-		_, _ = c.Write(respBytes)
+		writeUnixResponse(c, respData, actionErr)
 	}
 }

@@ -118,16 +118,8 @@ fun ServiceDetailLayout(
             if (isFileService && (lowerName == "input" || lowerName == "output")) {
                 // Already added custom input/output picker above
             } else {
-                val uiHint = param.uiHint ?: if (param.type == "file") {
-                    if (lowerName.contains("image") || lowerName.contains("img") || lowerName.contains("photo")) {
-                        "image_picker"
-                    } else {
-                        "file_picker"
-                    }
-                } else {
-                    null
-                }
-                formParams.add(param.copy(uiHint = uiHint))
+                // Trust bind/schema uiHint; InferUIHint is SSOT on the Go side.
+                formParams.add(param)
             }
         }
 

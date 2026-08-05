@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
@@ -45,11 +44,7 @@ func DiscoverServices() string {
 // Prefer this over GetServiceDetails when callers need Type/IsStreaming/Parameters map.
 func GetServiceSchema(name string) string {
 	return dispatchUnixOrLocal("service_detail", map[string]string{"name": name}, func(s *server.Server) (any, error) {
-		schema, exists := s.Compute.GetService(name)
-		if exists {
-			return schema, nil
-		}
-		_, _, schema, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
+		schema, _, err := s.LocalServiceDetail(name)
 		if err != nil {
 			return nil, err
 		}
@@ -70,22 +65,14 @@ func resolveServiceSchema(name string) (schema protocol.ServiceSchema, addr stri
 		}
 		return schema, "", nil
 	}
-	var exists bool
-	schema, exists = s.Compute.GetService(name)
-	if !exists {
-		_, addr, schema, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
-		if err != nil {
-			return schema, "", err
-		}
-	}
-	return schema, addr, nil
+	return s.LocalServiceDetail(name)
 }
 
 // GetServiceDetails gets Android-facing metadata for a given service (L3).
 func GetServiceDetails(name string) string {
 	schema, addr, err := resolveServiceSchema(name)
 	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
+		return bindErrorJSON(err)
 	}
 
 	var reqPermissions []string
@@ -103,14 +90,7 @@ func GetServiceDetails(name string) string {
 			desc = fmt.Sprintf("Enter a numerical value for %s.", pName)
 		case "file":
 			hasFileParam = true
-			if uiHint == "" {
-				lower := strings.ToLower(pName)
-				if strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo") {
-					uiHint = "image_picker"
-				} else {
-					uiHint = "file_picker"
-				}
-			}
+			uiHint = protocol.EffectiveUIHint(pName, rules)
 			if uiHint == "image_picker" {
 				hasImageParam = true
 				desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", pName)
@@ -154,25 +134,9 @@ func GetServiceDetails(name string) string {
 
 // GetServiceUIContent retrieves HTML/JS content for a service's delegated UI if available.
 func GetServiceUIContent(name string) string {
-	s := getSrv()
-	var schema protocol.ServiceSchema
-
-	if s != nil {
-		var exists bool
-		schema, exists = s.Compute.GetService(name)
-		if !exists {
-			return ""
-		}
-	} else {
-		data, err := sendUnixSocketCommand(appStorage, "service_detail", map[string]string{
-			"name": name,
-		})
-		if err != nil {
-			return ""
-		}
-		if err := json.Unmarshal(data, &schema); err != nil {
-			return ""
-		}
+	schema, _, err := resolveServiceSchema(name)
+	if err != nil {
+		return ""
 	}
 
 	if schema.UI == nil {
@@ -191,16 +155,7 @@ func GetServiceUIContent(name string) string {
 
 // AddService registers a new service configuration locally.
 func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile string) string {
-	s := getSrv()
-	if s != nil {
-		msg, err := s.LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return fmt.Sprintf(`{"message": %q}`, msg)
-	}
-
-	data, err := sendUnixSocketCommand(appStorage, "service_add", map[string]string{
+	return dispatchUnixLocalOrOffline("service_add", map[string]string{
 		"name":        name,
 		"type":        serviceType,
 		"exec":        exec,
@@ -208,44 +163,40 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 		"param":       param,
 		"no-required": noRequired,
 		"schema-file": schemaFile,
+	}, func(s *server.Server) (any, error) {
+		msg, err := s.LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile)
+		if err != nil {
+			return nil, err
+		}
+		return bindMessageJSON(msg), nil
+	}, func() (any, error) {
+		serviceName, localService, buildErr := compute.BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired, schemaFile)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
+			return nil, fmt.Errorf("error saving services file: %w", saveErr)
+		}
+		return bindMessageJSON(fmt.Sprintf("Service '%s' added successfully. Restart the node to apply changes.", serviceName)), nil
 	})
-	if err == nil {
-		return string(data)
-	}
-
-	// Offline: persist via shared L2 helpers (daemon not running).
-	serviceName, localService, buildErr := compute.BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired, schemaFile)
-	if buildErr != nil {
-		return fmt.Sprintf(`{"error": %q}`, buildErr.Error())
-	}
-	if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
-		return fmt.Sprintf(`{"error": "error saving services file: %v"}`, saveErr)
-	}
-	return fmt.Sprintf(`{"message": "Service '%s' added successfully. Restart the node to apply changes."}`, serviceName)
 }
 
 // RemoveService deletes a service configuration locally.
 func RemoveService(name string) string {
-	s := getSrv()
-	if s != nil {
+	return dispatchUnixLocalOrOffline("service_remove", map[string]string{
+		"name": name,
+	}, func(s *server.Server) (any, error) {
 		msg, err := s.LocalServiceRemove(name)
 		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
+			return nil, err
 		}
-		return fmt.Sprintf(`{"message": %q}`, msg)
-	}
-
-	data, err := sendUnixSocketCommand(appStorage, "service_remove", map[string]string{
-		"name": name,
+		return bindMessageJSON(msg), nil
+	}, func() (any, error) {
+		if delErr := compute.DeleteLocalService(appStorage, name); delErr != nil {
+			return nil, delErr
+		}
+		return bindMessageJSON(fmt.Sprintf("Service '%s' removed successfully. Restart the node to apply changes.", name)), nil
 	})
-	if err == nil {
-		return string(data)
-	}
-
-	if delErr := compute.DeleteLocalService(appStorage, name); delErr != nil {
-		return fmt.Sprintf(`{"error": %q}`, delErr.Error())
-	}
-	return fmt.Sprintf(`{"message": "Service '%s' removed successfully. Restart the node to apply changes."}`, name)
 }
 
 // RunService runs a task and waits up to 30s.

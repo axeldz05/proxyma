@@ -55,9 +55,9 @@ type PipelineNotification struct {
 }
 
 type PipelineContext struct {
-	Steps        []PipelineStep            `json:"steps"`
-	CurrentStep  int                       `json:"current_step"`
-	Outputs      map[string]map[string]any `json:"outputs"`
+	Steps       []PipelineStep            `json:"steps"`
+	CurrentStep int                       `json:"current_step"`
+	Outputs     map[string]map[string]any `json:"outputs"`
 }
 
 type DiscoveryQuery struct {
@@ -168,6 +168,27 @@ type ServiceParameter struct {
 	UIHint   string   `json:"ui_hint,omitempty"` // e.g. "image_picker", "file_picker"
 }
 
+// InferUIHint returns a UI hint for a parameter from its name and type (L1 SSOT).
+// Empty string means no special picker. Prefer explicit UIHint on the schema when set.
+func InferUIHint(paramName, paramType string) string {
+	if paramType != "file" {
+		return ""
+	}
+	lower := strings.ToLower(paramName)
+	if strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo") {
+		return "image_picker"
+	}
+	return "file_picker"
+}
+
+// EffectiveUIHint returns explicit hint if set, otherwise InferUIHint.
+func EffectiveUIHint(paramName string, p ServiceParameter) string {
+	if p.UIHint != "" {
+		return p.UIHint
+	}
+	return InferUIHint(paramName, p.Type)
+}
+
 // LocalService is the on-disk services.json entry (SSOT).
 type LocalService struct {
 	Type   ServiceType   `json:"type"`
@@ -264,7 +285,6 @@ func LoadConfig(storagePath string) (NodeConfig, error) {
 	err = json.NewDecoder(file).Decode(&cfg)
 	return cfg, err
 }
-
 
 // RelayRequest encapsulates an HTTP request to be forwarded by the Sponsor
 type RelayRequest struct {

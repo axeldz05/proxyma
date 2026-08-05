@@ -42,7 +42,6 @@ import com.proxyma.android.models.PipelineConnection
 import com.proxyma.android.models.PipelineSchema
 import com.proxyma.android.models.PipelineStep
 import com.proxyma.android.models.ServiceDetail
-import com.proxyma.android.models.ServiceParameterSpec
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
@@ -77,7 +76,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
     var runTargetName by remember { mutableStateOf<String?>(null) }
     var runTargetIsPipeline by remember { mutableStateOf(false) }
     var runTargetIsStreaming by remember { mutableStateOf(false) }
-    var runTargetSpecs by remember { mutableStateOf<List<ServiceParameterSpec>?>(null) }
+    var runTargetSpecs by remember { mutableStateOf<List<FormParameter>?>(null) }
 
     fun triggerManualDiscovery() {
         thread {
@@ -194,33 +193,21 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                         var paramDef: FormParameter? = null
                                         if (tgtSvc.isNotEmpty()) {
                                             val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
-                                            val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
-                                            paramDef = parsedDetails?.parameters?.find { it.name == conn.to_port }
+                                            paramDef = parseServiceDetail(rawDetails)?.parameters?.find { it.name == conn.to_port }
                                         }
 
-                                        val pType = paramDef?.type ?: "string"
-                                        val pReq = paramDef?.required ?: false
-                                        val pDef = paramDef?.defaultValue
-                                        val pOpts = paramDef?.options
-                                        val uiHint = paramDef?.uiHint
-
-                                        val isFile = pType == "file" || uiHint == "file_picker" || uiHint == "image_picker"
-                                        val isImg = uiHint == "image_picker"
-
-                                        ServiceParameterSpec(
+                                        FormParameter(
                                             name = fromPortName,
-                                            type = pType,
-                                            required = pReq,
-                                            isFileInput = isFile,
-                                            isImageInput = isImg,
-                                            defaultValue = pDef,
-                                            options = pOpts
+                                            type = paramDef?.type ?: "string",
+                                            required = paramDef?.required ?: false,
+                                            description = paramDef?.description ?: "",
+                                            uiHint = paramDef?.uiHint,
+                                            defaultValue = paramDef?.defaultValue,
+                                            options = paramDef?.options
                                         )
                                     }.distinctBy { it.name }
                                 } else {
-                                    listOf(
-                                        ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
-                                    )
+                                    DEFAULT_RUN_PARAMS
                                 }
 
                                 isRunningOnMainThread {
@@ -318,22 +305,8 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         onRun = {
                             thread {
                                 val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
-                                val parsedDetails = try { Gson().fromJson(rawDetails, ServiceDetail::class.java) } catch (_: Exception) { null }
-                                val specs = parsedDetails?.parameters?.map { p ->
-                                    val isFile = p.type == "file" || p.uiHint == "file_picker" || p.uiHint == "image_picker"
-                                    val isImg = p.uiHint == "image_picker"
-                                    ServiceParameterSpec(
-                                        name = p.name,
-                                        type = p.type,
-                                        required = p.required,
-                                        isFileInput = isFile,
-                                        isImageInput = isImg,
-                                        defaultValue = p.defaultValue,
-                                        options = p.options
-                                    )
-                                } ?: listOf(
-                                    ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
-                                )
+                                val parsedDetails = parseServiceDetail(rawDetails)
+                                val specs = parsedDetails?.parameters?.takeIf { it.isNotEmpty() } ?: DEFAULT_RUN_PARAMS
                                 val isStream = parsedDetails?.isStreaming == true
                                 isRunningOnMainThread {
                                     runTargetName = svcName
@@ -353,13 +326,9 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 CircularProgressIndicator(color = VioletPrimary)
             }
         } else {
-            val gson = remember { Gson() }
             val details: ServiceDetail = remember(serviceDetailJson) {
-                try {
-                    gson.fromJson(serviceDetailJson, ServiceDetail::class.java)
-                } catch (e: Exception) {
-                    ServiceDetail("", "Failed to parse info", false, "", emptyList(), emptyList(), null, null, e.message)
-                }
+                parseServiceDetail(serviceDetailJson)
+                    ?: ServiceDetail("", "Failed to parse info", false, "", emptyList(), emptyList(), null, null, "parse error")
             }
 
             if (details.ui != null && details.ui.type == "web_app") {
@@ -579,7 +548,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
 fun RunTaskDialog(
     targetName: String,
     isPipeline: Boolean,
-    parameterSpecs: List<ServiceParameterSpec>,
+    parameterSpecs: List<FormParameter>,
     onDismiss: () -> Unit,
     onExecute: (payloadMap: Map<String, String>) -> Unit
 ) {
@@ -617,8 +586,8 @@ fun RunTaskDialog(
 
     LaunchedEffect(parameterSpecs) {
         parameterSpecs.forEach { spec ->
-            if (!spec.defaultValue.isNullOrEmpty() && paramValues[spec.name].isNullOrEmpty()) {
-                paramValues[spec.name] = spec.defaultValue
+            if (!param.defaultValue.isNullOrEmpty() && paramValues[param.name].isNullOrEmpty()) {
+                paramValues[param.name] = param.defaultValue
             }
         }
     }
@@ -637,19 +606,19 @@ fun RunTaskDialog(
                     }
                 } else {
                     items(parameterSpecs) { spec ->
-                        val currentValue = paramValues[spec.name] ?: ""
+                        val currentValue = paramValues[param.name] ?: ""
                         ServiceParameterField(
-                            spec = spec,
+                            param = spec,
                             currentValue = currentValue,
-                            onValueChange = { paramValues[spec.name] = it },
+                            onValueChange = { paramValues[param.name] = it },
                             onPickFile = {
-                                activeParamForPicker = spec.name
+                                activeParamForPicker = param.name
                                 filePickerLauncher.launch("*/*")
                             },
                             onTakePhoto = {
                                 val (uri, file) = createTempCameraFile(context)
                                 cameraPhotoFile = file
-                                activeParamForCamera = spec.name
+                                activeParamForCamera = param.name
                                 cameraLauncher.launch(uri)
                             }
                         )
@@ -689,7 +658,7 @@ private fun parsePipelineSchema(json: String): PipelineSchema? {
 
 @Composable
 fun ServiceParameterField(
-    spec: ServiceParameterSpec,
+    param: FormParameter,
     currentValue: String,
     onValueChange: (String) -> Unit,
     onPickFile: () -> Unit,
@@ -702,16 +671,16 @@ fun ServiceParameterField(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "${spec.name}${if (spec.required) " *" else " (opt)"}",
+                text = "${param.name}${if (param.required) " *" else " (opt)"}",
                 fontWeight = FontWeight.Bold,
-                color = if (spec.required) Color.White else Color.LightGray,
+                color = if (param.required) Color.White else Color.LightGray,
                 fontSize = 14.sp
             )
-            Text("type: ${spec.type}", fontSize = 11.sp, color = Color.Gray)
+            Text("type: ${param.type}", fontSize = 11.sp, color = Color.Gray)
         }
         Spacer(Modifier.height(4.dp))
 
-        if (!spec.options.isNullOrEmpty()) {
+        if (!param.options.isNullOrEmpty()) {
             var expandedOptions by remember { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
@@ -724,7 +693,7 @@ fun ServiceParameterField(
                     expanded = expandedOptions,
                     onDismissRequest = { expandedOptions = false }
                 ) {
-                    spec.options.forEach { opt ->
+                    param.options.forEach { opt ->
                         DropdownMenuItem(
                             text = { Text(opt) },
                             onClick = {
@@ -741,7 +710,7 @@ fun ServiceParameterField(
         OutlinedTextField(
             value = currentValue,
             onValueChange = onValueChange,
-            label = { Text("Value / Path for ${spec.name}") },
+            label = { Text("Value / Path for ${param.name}") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
@@ -750,12 +719,12 @@ fun ServiceParameterField(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            if (spec.isFileInput) {
+            if (param.isFilePicker()) {
                 IconButton(onClick = onPickFile) {
                     Icon(Icons.Default.Folder, contentDescription = "Pick File", tint = MintGreen)
                 }
             }
-            if (spec.isImageInput) {
+            if (param.isImagePicker()) {
                 IconButton(onClick = onTakePhoto) {
                     Icon(Icons.Default.PhotoCamera, contentDescription = "Take Photo", tint = VioletSecondary)
                 }

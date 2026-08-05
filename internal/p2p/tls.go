@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"proxyma/internal/protocol"
+	"strings"
 	"time"
 )
 
@@ -141,6 +142,23 @@ func GenerateNodeCSR(nodeID string) (csrPEM []byte, privateKeyPEM []byte, err er
 	return csrPEM, privateKeyPEM, nil
 }
 
+// newNodeCertTemplate builds a leaf node certificate template (SSOT for KeyUsage/SANs).
+func newNodeCertTemplate(subject pkix.Name, dnsNames []string) x509.Certificate {
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
+	return x509.Certificate{
+		SerialNumber:          serialNumber,
+		DNSNames:              dnsNames,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		Subject:               subject,
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+}
+
 func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte, err error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
@@ -161,20 +179,7 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 		return nil, err
 	}
 
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
-
-	certTemplate := x509.Certificate{
-		SerialNumber:          serialNumber,
-		DNSNames:              []string{csr.Subject.CommonName, "localhost"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		Subject:               csr.Subject,
-		NotBefore:             time.Now().Add(-24 * time.Hour),
-		NotAfter:              time.Now().AddDate(1, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-	}
+	certTemplate := newNodeCertTemplate(csr.Subject, []string{csr.Subject.CommonName, "localhost"})
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, csr.PublicKey, caPrivKey)
 	if err != nil {
@@ -251,22 +256,10 @@ func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID 
 		return nil, nil, err
 	}
 
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
-
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			Organization: []string{"Proxyma Node"},
-			CommonName:   nodeID,
-		},
-		DNSNames:    []string{nodeID, "localhost"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		NotBefore:   time.Now().Add(-24 * time.Hour),
-		NotAfter:    time.Now().AddDate(1, 0, 0),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-	}
+	template := newNodeCertTemplate(pkix.Name{
+		Organization: []string{"Proxyma Node"},
+		CommonName:   nodeID,
+	}, []string{nodeID, "localhost"})
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, caCert, &priv.PublicKey, caKey)
 	if err != nil {
@@ -392,23 +385,10 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 		return nil, err
 	}
 
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
-
-	certTemplate := x509.Certificate{
-		SerialNumber: serialNumber,
-		DNSNames:     []string{peerID, "localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		Subject: pkix.Name{
-			CommonName:   peerID,
-			Organization: []string{"Proxyma Cluster"},
-		},
-		NotBefore:             time.Now().Add(-24 * time.Hour),
-		NotAfter:              time.Now().AddDate(1, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-	}
+	certTemplate := newNodeCertTemplate(pkix.Name{
+		CommonName:   peerID,
+		Organization: []string{"Proxyma Cluster"},
+	}, []string{peerID, "localhost"})
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, peerPubKey, caPrivKey)
 	if err != nil {
@@ -421,4 +401,9 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 	})
 
 	return certPEM, nil
+}
+
+// CAKeyPath derives the CA private key path from the CA certificate path.
+func CAKeyPath(caCertPath string) string {
+	return strings.Replace(caCertPath, ".crt", ".key", 1)
 }

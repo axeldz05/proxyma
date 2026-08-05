@@ -50,13 +50,9 @@ fun PipelineEditorDialog(
             for (svc in uniqueServices) {
                 if (svc.isNotEmpty()) {
                     val raw = proxyma_bind.Proxyma_bind.getServiceDetails(svc)
-                    if (!raw.contains("\"error\"")) {
-                        try {
-                            val detail = Gson().fromJson(raw, ServiceDetail::class.java)
-                            if (detail != null) {
-                                map[svc] = detail
-                            }
-                        } catch (_: Exception) {}
+                    val detail = com.proxyma.android.utils.parseServiceDetail(raw)
+                    if (detail != null) {
+                        map[svc] = detail
                     }
                 }
             }

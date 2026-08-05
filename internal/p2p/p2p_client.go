@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"proxyma/internal/protocol"
 	"strings"
-	"time"
 )
 
 type PeerClient interface {
@@ -148,13 +147,13 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, que
 }
 
 func (c *HTTPPeerClient) AddPeer(peerID string, payload *bytes.Buffer) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
 	defer cancel()
 	return doVoid(ctx, c, "POST", peerID, "peers/add", payload, http.StatusOK)
 }
 
 func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
 	defer cancel()
 	return doJSON[map[string]protocol.AddressRecord](ctx, c, "POST", sponsorAddres, "peers/announce", peerRequest)
 }

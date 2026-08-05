@@ -117,19 +117,10 @@ func BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired,
 				isRequired = false
 			}
 
-			uiHint := ""
-			if paramType == "file" {
-				uiHint = "file_picker"
-				lower := strings.ToLower(paramName)
-				if strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo") {
-					uiHint = "image_picker"
-				}
-			}
-
 			schema.Parameters[paramName] = protocol.ServiceParameter{
 				Type:     paramType,
 				Required: isRequired,
-				UIHint:   uiHint,
+				UIHint:   protocol.InferUIHint(paramName, paramType),
 			}
 		}
 	}

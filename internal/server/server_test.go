@@ -1788,4 +1788,3 @@ func TestLoadLocalServices_GRPCBidi(t *testing.T) {
 	require.Equal(t, "hello_bidi", resp.Outputs["input"])
 	require.Equal(t, true, resp.Outputs["bidi_processed"])
 }
-

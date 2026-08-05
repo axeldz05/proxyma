@@ -47,3 +47,13 @@ func ExtractPort(address string) string {
 	}
 	return ""
 }
+
+// IsLoopbackHost reports whether addr's host is localhost/loopback or a bare hostname without dots.
+func IsLoopbackHost(addr string) bool {
+	parsed, err := url.Parse(addr)
+	if err != nil {
+		return true
+	}
+	host := parsed.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || !strings.Contains(host, ".")
+}

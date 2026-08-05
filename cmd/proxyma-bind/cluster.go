@@ -11,29 +11,24 @@ import (
 
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/server"
 	"proxyma/internal/utils"
 )
 
 // GenerateInviteToken creates an invite token valid for 15 minutes.
 func GenerateInviteToken() string {
-	s := getSrv()
-	if s != nil {
-		token, err := s.LocalInviteGenerate(15)
-		if err != nil {
-			return "error: " + err.Error()
-		}
+	raw := dispatchUnixOrLocal("invite_generate", nil, func(s *server.Server) (any, error) {
+		return s.LocalInviteGenerate(15)
+	})
+	if strings.Contains(raw, `"error"`) {
+		return raw
+	}
+	// Unix path returns JSON-encoded string; in-process returns plain token.
+	var token string
+	if err := json.Unmarshal([]byte(raw), &token); err == nil {
 		return token
 	}
-
-	data, err := sendUnixSocketCommand(appStorage, "invite_generate", nil)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	var token string
-	if err := json.Unmarshal(data, &token); err != nil {
-		return "error: invalid token response: " + err.Error()
-	}
-	return token
+	return raw
 }
 
 // JoinCluster joins an existing cluster, writes configuration, and starts the node.
@@ -45,7 +40,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	token = strings.TrimSpace(token)
 	token = strings.Trim(token, "\"'")
 	if token == "" {
-		return "error: smart token is required"
+		return bindErrorJSON(fmt.Errorf("smart token is required"))
 	}
 
 	if nodeID == "" {
@@ -89,7 +84,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 
 	caCert, cert, privKeyPEM, successfulAddr, err := p2p.JoinCluster(ctx, token, nodeID, localAddr, logFn)
 	if err != nil {
-		return fmt.Sprintf("error: join failed: %v", err)
+		return bindErrorJSON(fmt.Errorf("join failed: %w", err))
 	}
 
 	certsDir := filepath.Join(appStorage, "certs")
@@ -120,14 +115,14 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 
 	err = protocol.SaveConfig(newCfg)
 	if err != nil {
-		return fmt.Sprintf("error: failed to save config: %v", err)
+		return bindErrorJSON(fmt.Errorf("failed to save config: %w", err))
 	}
 
 	// Stop previous server instance and start newly configured one
 	StopNode()
 	startErr := StartNode(appStorage, true)
 	if startErr != "" {
-		return fmt.Sprintf("error: start failed: %s", startErr)
+		return bindErrorJSON(fmt.Errorf("start failed: %s", startErr))
 	}
 
 	go func() {

@@ -84,6 +84,20 @@ func (s *Server) LocalServiceDiscover() ([]string, error) {
 	return result, nil
 }
 
+// LocalServiceDetail resolves a service schema locally or via cluster bidding (SSOT).
+func (s *Server) LocalServiceDetail(name string) (schema protocol.ServiceSchema, addr string, err error) {
+	if name == "" {
+		return schema, "", fmt.Errorf("missing name parameter")
+	}
+	var exists bool
+	schema, exists = s.Compute.GetService(name)
+	if exists {
+		return schema, "", nil
+	}
+	_, addr, schema, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: name})
+	return schema, addr, err
+}
+
 func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
 	var payload map[string]any
 	if payloadStr != "" {
@@ -236,7 +250,7 @@ func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, ch
 			return fmt.Errorf("streaming service '%s' is not registered on this node", serviceName)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), PeerRPCStream)
 		defer cancel()
 
 		streamBody, err := s.peerClient.StreamService(ctx, targetPeerID, serviceName, payload)

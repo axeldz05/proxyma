@@ -1,8 +1,6 @@
 package proxyma_bind
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 
 	"proxyma/internal/server"
@@ -31,14 +29,7 @@ func UploadFile(name string, filePath string) string {
 		"path": filePath,
 		"name": name,
 	}, func(s *server.Server) (any, error) {
-		f, err := os.Open(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
-		}
-		defer func() { _ = f.Close() }()
-
-		err = s.Storage.SaveLocalFile(name, f)
-		if err != nil {
+		if err := s.LocalVFSUpload(name, filePath); err != nil {
 			return nil, err
 		}
 		return "", nil
@@ -54,11 +45,8 @@ func SetSubscription(name string, subscribe bool) string {
 	return dispatchUnixOrLocal(action, map[string]string{
 		"name": name,
 	}, func(s *server.Server) (any, error) {
-		s.Storage.SetSubscription(name, subscribe)
-		if subscribe {
-			go func() {
-				_ = s.ExecuteSync()
-			}()
+		if err := s.LocalVFSSubscribe(name, subscribe); err != nil {
+			return nil, err
 		}
 		return "", nil
 	})

@@ -32,32 +32,35 @@ Antes de refactorizar o mover código, inspecciona los archivos principales de c
 
 ### 2. Capa Servidor y Orquestación ([internal/server](file:///home/drusila/Projects/proxyma/internal/server))
 * [server.go](file:///home/drusila/Projects/proxyma/internal/server/server.go): Ciclo de vida del servidor demonio, servidor HTTP mTLS y listener de Unix domain socket.
-* [local_api.go](file:///home/drusila/Projects/proxyma/internal/server/local_api.go): API de control local IPC (`handleUnixConnection`, validación de pipelines y servicios locales).
-* [handlers.go](file:///home/drusila/Projects/proxyma/internal/server/handlers.go): Endpoints HTTP inter-nodo y guardia de autenticación mTLS ([mTLSGuard](file:///home/drusila/Projects/proxyma/internal/server/handlers.go#L19)).
-* [vfs_sync.go](file:///home/drusila/Projects/proxyma/internal/server/vfs_sync.go): Sincronización VFS en segundo plano y workers de descarga de blobs.
-* [compute_bridge.go](file:///home/drusila/Projects/proxyma/internal/server/compute_bridge.go): Búsqueda de licitaciones (bidding) de servicios y despacho de tareas inter-nodo.
-* [nat.go](file:///home/drusila/Projects/proxyma/internal/server/nat.go), [relay.go](file:///home/drusila/Projects/proxyma/internal/server/relay.go), [bandwidth.go](file:///home/drusila/Projects/proxyma/internal/server/bandwidth.go): Mapeo NAT, cliente de polling de relay y telemetría de ancho de banda.
+* [unix_listener.go](file:///home/drusila/Projects/proxyma/internal/server/unix_listener.go): Dispatcher IPC unix → métodos `Local*` (`writeUnixResponse`, `announceAndSync`).
+* [local_services.go](file:///home/drusila/Projects/proxyma/internal/server/local_services.go): **`LocalServiceDetail`** (SSOT schema), load/run/stream/add/remove.
+* [vfs_sync.go](file:///home/drusila/Projects/proxyma/internal/server/vfs_sync.go): Sync, `fetchBlobFromPeer`, `LocalVFSUpload` / `LocalVFSSubscribe` / `LocalLogs`.
+* [peer_rpc.go](file:///home/drusila/Projects/proxyma/internal/server/peer_rpc.go): **`callPeer` / `forEachPeer` / `mapEachPeer`** + timeouts `PeerRPC*`.
+* [handlers.go](file:///home/drusila/Projects/proxyma/internal/server/handlers.go): Solo `MountHandlers` (wire-up).
+* [mtls.go](file:///home/drusila/Projects/proxyma/internal/server/mtls.go), [peer_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/peer_handlers.go), [cluster_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/cluster_handlers.go), [stream_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/stream_handlers.go): HTTP por dominio.
+* [compute_bridge.go](file:///home/drusila/Projects/proxyma/internal/server/compute_bridge.go): Bidding (`mapEachPeer`) y despacho.
+* [nat.go](file:///home/drusila/Projects/proxyma/internal/server/nat.go), [relay.go](file:///home/drusila/Projects/proxyma/internal/server/relay.go), [bandwidth.go](file:///home/drusila/Projects/proxyma/internal/server/bandwidth.go): NAT, relay, telemetría.
 
 ### 3. Capa P2P y Seguridad ([internal/p2p](file:///home/drusila/Projects/proxyma/internal/p2p))
-* [tls.go](file:///home/drusila/Projects/proxyma/internal/p2p/tls.go): Generación y rotación de CA, firmado de CSRs X.509 y carga de credenciales TLS.
-* [p2p_client.go](file:///home/drusila/Projects/proxyma/internal/p2p/p2p_client.go): Cliente RPC para comunicación con nodos remotos (`DownloadBlob`, `SubmitTask`, etc.).
-* [router.go](file:///home/drusila/Projects/proxyma/internal/p2p/router.go), [join.go](file:///home/drusila/Projects/proxyma/internal/p2p/join.go), [invite.go](file:///home/drusila/Projects/proxyma/internal/p2p/invite.go): Tabla de ruteo P2P, enrolamiento de nodos e invitaciones por token.
-* [holepunch.go](file:///home/drusila/Projects/proxyma/internal/p2p/holepunch.go): Perforación de puertos UDP y sesiones QUIC.
+* [tls.go](file:///home/drusila/Projects/proxyma/internal/p2p/tls.go): CA/CSR/`LoadNodeTLS`/`newNodeCertTemplate`/`CAKeyPath`.
+* [p2p_client.go](file:///home/drusila/Projects/proxyma/internal/p2p/p2p_client.go): Cliente RPC (`DefaultRPCTimeout`).
+* [helpers.go](file:///home/drusila/Projects/proxyma/internal/p2p/helpers.go): `FirstQUICAddr`, `ForwardRelay`, `VerifyPeerCN`.
+* [router.go](file:///home/drusila/Projects/proxyma/internal/p2p/router.go), [join.go](file:///home/drusila/Projects/proxyma/internal/p2p/join.go), [holepunch.go](file:///home/drusila/Projects/proxyma/internal/p2p/holepunch.go).
 
 ### 4. Capa de Almacenamiento y VFS ([internal/storage](file:///home/drusila/Projects/proxyma/internal/storage))
-* [storage_engine.go](file:///home/drusila/Projects/proxyma/internal/storage/storage_engine.go): Motor de orquestación de almacenamiento y cola de replicación.
-* [vfs.go](file:///home/drusila/Projects/proxyma/internal/storage/vfs.go): Base de datos BoltDB para índices y metadatos del VFS.
-* [physical/storage.go](file:///home/drusila/Projects/proxyma/internal/storage/physical/storage.go): Almacenamiento direccionable por contenido (CAS) en el sistema de archivos local.
+* [storage_engine.go](file:///home/drusila/Projects/proxyma/internal/storage/storage_engine.go): Motor de orquestación y `StageLocalFile`.
+* [vfs.go](file:///home/drusila/Projects/proxyma/internal/storage/vfs.go): BoltDB metadatos.
+* [physical/storage.go](file:///home/drusila/Projects/proxyma/internal/storage/physical/storage.go): CAS local.
 
 ### 5. Capa de Cómputo ([internal/compute](file:///home/drusila/Projects/proxyma/internal/compute))
-* [compute.go](file:///home/drusila/Projects/proxyma/internal/compute/compute.go): Motor ejecutor de tareas asíncronas con control de concurrencia (pool de semáforos).
-* [handlerBuilder.go](file:///home/drusila/Projects/proxyma/internal/compute/handlerBuilder.go): Construcción de ejecutores para scripts locales y microservicios gRPC.
-* [registry.go](file:///home/drusila/Projects/proxyma/internal/compute/registry.go): Registro local de tareas y manejadores de servicios.
+* [services_config.go](file:///home/drusila/Projects/proxyma/internal/compute/services_config.go): SSOT `services.json` + `BuildLocalServiceFromArgs` (escribe `InferUIHint`).
+* [compute.go](file:///home/drusila/Projects/proxyma/internal/compute/compute.go), [handlerBuilder.go](file:///home/drusila/Projects/proxyma/internal/compute/handlerBuilder.go), [registry.go](file:///home/drusila/Projects/proxyma/internal/compute/registry.go).
 
-### 6. Protocolo y Utilidades ([internal/protocol](file:///home/drusila/Projects/proxyma/internal/protocol), [internal/utils](file:///home/drusila/Projects/proxyma/internal/utils))
-* [protocol.go](file:///home/drusila/Projects/proxyma/internal/protocol/protocol.go): Estructuras de datos puras, esquemas JSON y constructor del logger global.
-* [http_utils.go](file:///home/drusila/Projects/proxyma/internal/utils/http_utils.go): Helpers HTTP (`RespondJSON`, `RespondError`, `DecodeJSONOrError`).
-* [net_utils.go](file:///home/drusila/Projects/proxyma/internal/utils/net_utils.go), [stun.go](file:///home/drusila/Projects/proxyma/internal/utils/stun.go): Red e IP helpers, cliente STUN.
+### 6. Protocolo y Utilidades
+* [protocol.go](file:///home/drusila/Projects/proxyma/internal/protocol/protocol.go): Tipos + **`InferUIHint` / `EffectiveUIHint`**.
+* [http_utils.go](file:///home/drusila/Projects/proxyma/internal/utils/http_utils.go): `RespondJSON` / `DecodeJSONOrError`.
+* [net_utils.go](file:///home/drusila/Projects/proxyma/internal/utils/net_utils.go): **`IsLoopbackHost`**, IPs, puertos.
+
 
 ---
 
@@ -164,15 +167,15 @@ Para detectar y mover código duplicado a paquetes comunes sin romper contratos 
 ### Paso 1: Identificación de Patrones Duplicados
 
 Al revisar el código, busca los siguientes patrones recurrentes:
-* **Respuestas JSON en Handlers HTTP**:
-  - *Mal*: Repetir `w.Header().Set("Content-Type", "application/json")` y `json.NewEncoder(w).Encode(...)` en múltiples endpoints HTTP.
-  - *Solución*: Usar `utils.RespondJSON(w, status, payload)` y `utils.RespondError(w, status, message)` de [http_utils.go](file:///home/drusila/Projects/proxyma/internal/utils/http_utils.go).
-* **Configuración de TLS Client/Server**:
-  - *Mal*: Instanciar `&tls.Config{...}` disperso en `server.go`, `p2p_client.go`, `holepunch.go` y tests.
-  - *Solución*: Centralizar los constructores en [tls.go](file:///home/drusila/Projects/proxyma/internal/p2p/tls.go) (`NewServerTLSConfig`, `NewClientTLSConfig`).
-* **Boilerplate IPC de Socket Unix en CLI**:
-  - *Mal*: Repetir conexión dial a `/tmp/proxyma.sock` y codificación `json.NewEncoder` en cada comando Cobra.
-  - *Solución*: Utilizar la función centralizadora de IPC en [helpers.go](file:///home/drusila/Projects/proxyma/cmd/proxyma/helpers.go).
+* **Fan-out de peers**: No reinventar loops + timeouts + liveness — usar `callPeer` / `forEachPeer` / `mapEachPeer`.
+* **UIHint / pickers**: No snifar nombres en bind/Android — `protocol.InferUIHint` / `EffectiveUIHint`.
+* **Schema detail**: Un solo camino — `Server.LocalServiceDetail`.
+* **Errores bind/CLI**: `bindErrorJSON` / `ParseBindError` (no prefijo `"error:"`).
+* **Respuestas JSON en Handlers HTTP**: `utils.RespondJSON` / `RespondError` / `DecodeJSONOrError`.
+* **TLS / cert leaf**: `p2p.LoadNodeTLS`, `newNodeCertTemplate`, `CAKeyPath`.
+* **QUIC addr**: siempre `p2p.FirstQUICAddr`.
+* **IPC Unix**: `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline`; VFS vía `LocalVFSUpload` / `LocalVFSSubscribe`.
+* **Boilerplate CLI**: no dial propio — bind helpers.
 
 ### Paso 2: Ubicación de Abstracciones
 

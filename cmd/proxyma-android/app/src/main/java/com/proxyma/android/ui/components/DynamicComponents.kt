@@ -154,13 +154,8 @@ fun ParameterInput(
     val stringValue = (value ?: "").toString()
     val boolValue = value as? Boolean ?: false
 
-    val isFilePicker = remember(param) {
-        param.type == "file" || param.uiHint == "file_picker" || param.uiHint == "image_picker"
-    }
-
-    val isImagePicker = remember(param) {
-        param.uiHint == "image_picker"
-    }
+    val isFilePicker = remember(param) { param.isFilePicker() }
+    val isImagePicker = remember(param) { param.isImagePicker() }
 
     var isFileUploading by remember { mutableStateOf(false) }
 

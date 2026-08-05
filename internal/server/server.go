@@ -41,10 +41,10 @@ type Server struct {
 	clientTLSConfig *tls.Config
 	tlsMutex        sync.RWMutex
 
-	udpConn         *net.UDPConn
-	publicUDPAddr   string
-	quicMgr         *p2p.QUICManager
-	natMapper       *p2p.NATMapper
+	udpConn       *net.UDPConn
+	publicUDPAddr string
+	quicMgr       *p2p.QUICManager
+	natMapper     *p2p.NATMapper
 }
 
 type DownloadJob struct {
@@ -292,8 +292,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
-
-
 // Delegated methods for backward compatibility & Continuous Granularity.
 
 func (s *Server) SetPeerOnline(peerID string, online bool) {
@@ -318,9 +316,9 @@ func (s *Server) RemovePeer(peerID string) {
 
 func (s *Server) announceOffline(ctx context.Context) {
 	payload := map[string]string{"id": s.Config.ID}
-	for peerID := range s.GetPeersCopy() {
-		_ = s.peerClient.Offline(ctx, peerID, payload)
-	}
+	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
+		return s.peerClient.Offline(ctx, peerID, payload)
+	})
 }
 
 func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
@@ -478,7 +476,3 @@ func (s *Server) wrapWithBandwidthCounting(next http.Handler) http.Handler {
 		next.ServeHTTP(cw, r)
 	})
 }
-
-
-
-

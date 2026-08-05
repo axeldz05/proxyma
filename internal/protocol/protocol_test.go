@@ -25,3 +25,16 @@ func TestAddressRecordUnmarshaling(t *testing.T) {
 	require.Equal(t, "203.0.113.5:8443", record.Addresses[1])
 	require.Equal(t, int64(12345), record.Sequence)
 }
+
+func TestInferUIHint(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "image_picker", protocol.InferUIHint("image_path", "file"))
+	require.Equal(t, "image_picker", protocol.InferUIHint("photo", "file"))
+	require.Equal(t, "image_picker", protocol.InferUIHint("img_src", "file"))
+	require.Equal(t, "file_picker", protocol.InferUIHint("document", "file"))
+	require.Equal(t, "", protocol.InferUIHint("document", "string"))
+
+	p := protocol.ServiceParameter{Type: "file", UIHint: "audio_picker"}
+	require.Equal(t, "audio_picker", protocol.EffectiveUIHint("img", p))
+	require.Equal(t, "file_picker", protocol.EffectiveUIHint("doc", protocol.ServiceParameter{Type: "file"}))
+}

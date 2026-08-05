@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"sort"
@@ -82,14 +83,15 @@ func (s *Server) FetchFileOnDemand(name string) error {
 		return nil
 	}
 
-	peersSnapshot := s.GetPeersRecordCopy()
 	var downloadErr error
-	for peerID, addrRec := range peersSnapshot {
-		if peerID == s.Config.ID || len(addrRec.Addresses) == 0 {
+	for peerID := range s.GetPeersCopy() {
+		if peerID == s.Config.ID {
 			continue
 		}
-		ctxTimeout, cancel := context.WithTimeout(context.Background(), PeerRPCBlob)
-		err := s.fetchBlobFromPeer(ctxTimeout, peerID, entry)
+		ctx, cancel := context.WithTimeout(context.Background(), PeerRPCBlob)
+		err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+			return s.fetchBlobFromPeer(ctx, peerID, entry)
+		})
 		cancel()
 		if err == nil {
 			s.Config.Logger.Info("Successfully fetched unsubscribed blob on demand into cache", "file", name, "hash", entry.Hash)
@@ -123,13 +125,13 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 		}
 
 		list = append(list, protocol.VFSFileStatus{
-			Name:        name,
-			Size:        entry.Size,
-			Hash:        entry.Hash,
-			Version:     entry.Version,
-			Deleted:     entry.Deleted,
-			HasLocal:    hasLocal,
-			Subscribed:  isSubscribed,
+			Name:       name,
+			Size:       entry.Size,
+			Hash:       entry.Hash,
+			Version:    entry.Version,
+			Deleted:    entry.Deleted,
+			HasLocal:   hasLocal,
+			Subscribed: isSubscribed,
 			UpSpeed:    sentSpeed,
 			DownSpeed:  recvSpeed,
 		})
@@ -138,6 +140,51 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 		return list[i].Name < list[j].Name
 	})
 	return list
+}
+
+// announceAndSync announces to bootstrap (if set) then runs ExecuteSync.
+func (s *Server) announceAndSync() error {
+	if s.Config.BootstrapNode != "" {
+		_ = s.AnnouncePresence(s.Config.BootstrapNode)
+	}
+	return s.ExecuteSync()
+}
+
+// LocalVFSUpload opens path and saves into VFS under name (SSOT for bind+unix).
+func (s *Server) LocalVFSUpload(name, filePath string) error {
+	if filePath == "" || name == "" {
+		return fmt.Errorf("missing path or name parameter")
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return s.Storage.SaveLocalFile(name, f)
+}
+
+// LocalVFSSubscribe sets subscription and optionally kicks announce+sync in background.
+func (s *Server) LocalVFSSubscribe(name string, subscribe bool) error {
+	if name == "" {
+		return fmt.Errorf("missing name parameter")
+	}
+	s.Storage.SetSubscription(name, subscribe)
+	if subscribe {
+		go func() { _ = s.announceAndSync() }()
+	}
+	return nil
+}
+
+// LocalLogs returns a copy of the in-memory log buffer.
+func (s *Server) LocalLogs() []protocol.LogRecord {
+	protocol.LogBufferMu.RLock()
+	defer protocol.LogBufferMu.RUnlock()
+	if protocol.LogBuffer == nil {
+		return []protocol.LogRecord{}
+	}
+	out := make([]protocol.LogRecord, len(protocol.LogBuffer))
+	copy(out, protocol.LogBuffer)
+	return out
 }
 
 func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {

@@ -7,17 +7,11 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"strings"
-	"sync"
 	"time"
 )
 
 func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCShort)
-	defer cancel()
-
 	var bids []protocol.ServiceBid
-	var mu sync.Mutex
-	var wg sync.WaitGroup
 
 	if schema, ok := s.Compute.GetService(query.Service); ok {
 		bids = append(bids, protocol.ServiceBid{
@@ -29,31 +23,19 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		})
 	}
 
-	peers := s.GetPeersCopy()
-	for peerID := range peers {
-		wg.Add(1)
-		go func(peerID string) {
-			defer wg.Done()
-			var bid protocol.ServiceBid
-			err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
-				var bidErr error
-				bid, bidErr = s.peerClient.FetchServiceBid(ctx, peerID, query)
-				return bidErr
-			})
-			if err != nil {
-				s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
-				return
-			}
-			if !bid.CanAccept {
-				return
-			}
-			mu.Lock()
+	peerBids := mapEachPeer(s, forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) (protocol.ServiceBid, error) {
+		bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
+		if err != nil {
+			s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
+			return bid, err
+		}
+		return bid, nil
+	})
+	for _, bid := range peerBids {
+		if bid.CanAccept {
 			bids = append(bids, bid)
-			mu.Unlock()
-		}(peerID)
+		}
 	}
-
-	wg.Wait()
 
 	if len(bids) == 0 {
 		return "", "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)

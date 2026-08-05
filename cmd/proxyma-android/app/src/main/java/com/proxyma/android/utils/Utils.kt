@@ -281,3 +281,24 @@ fun executeGoSubmit(
         }
     }
 }
+
+/** Shared Gson parse of bind GetServiceDetails JSON (SSOT for screens). */
+fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
+    if (raw.contains("\"error\"")) return null
+    return try {
+        Gson().fromJson(raw, com.proxyma.android.models.ServiceDetail::class.java)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+val DEFAULT_RUN_PARAMS = listOf(
+    com.proxyma.android.models.FormParameter(
+        name = "input_path",
+        type = "file",
+        required = true,
+        description = "Input file",
+        uiHint = "image_picker"
+    )
+)
+

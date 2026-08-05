@@ -24,7 +24,12 @@ data class FormParameter(
     val uiHint: String? = null,
     val defaultValue: String? = null,
     val options: List<String>? = null
-)
+) {
+    fun isFilePicker(): Boolean =
+        type == "file" || uiHint == "file_picker" || uiHint == "image_picker"
+
+    fun isImagePicker(): Boolean = uiHint == "image_picker"
+}
 
 data class ServiceUIConfig(
     val type: String? = null,
@@ -82,7 +87,8 @@ data class ServiceParameter(
     val type: String,
     val required: Boolean = false,
     val default: String? = null,
-    val options: List<String>? = null
+    val options: List<String>? = null,
+    val uiHint: String? = null
 )
 
 data class ServiceSchema(
@@ -92,13 +98,4 @@ data class ServiceSchema(
     val outputs: Map<String, ServiceParameter>? = null
 )
 
-data class ServiceParameterSpec(
-    val name: String,
-    val type: String = "string",
-    val required: Boolean = false,
-    val isFileInput: Boolean = false,
-    val isImageInput: Boolean = false,
-    val defaultValue: String? = null,
-    val options: List<String>? = null
-)
 

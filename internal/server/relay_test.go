@@ -69,10 +69,10 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 		Body:    []byte("hello relay"),
 	}
 	bodyBytes, _ := json.Marshal(relayReq)
-	
+
 	fwdReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/relay/forward", bytes.NewBuffer(bodyBytes))
 	fwdReq.Header.Set("Content-Type", "application/json")
-	
+
 	fwdResultCh := make(chan *http.Response)
 	go func() {
 		resp, _ := sponsor.Client().Do(fwdReq)
@@ -99,7 +99,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 		Body:       []byte("response relay"),
 	}
 	resBytes, _ := json.Marshal(relayRes)
-	
+
 	replyReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/relay/reply", bytes.NewBuffer(resBytes))
 	replyReq.Header.Set("Content-Type", "application/json")
 	replyResp, err := targetClient.Do(replyReq)

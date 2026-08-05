@@ -97,7 +97,7 @@ func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wait for a request up to 10 seconds
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), PeerRPCSync)
 	defer cancel()
 
 	select {
@@ -152,8 +152,8 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for the response up to 60 seconds
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Wait for the response up to PeerRPCRelayHold
+	ctx, cancel := context.WithTimeout(r.Context(), PeerRPCRelayHold)
 	defer cancel()
 
 	select {
@@ -214,7 +214,7 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 			}
 		}
 
-		pollCtx, pollCancel := context.WithTimeout(ctx, 15*time.Second)
+		pollCtx, pollCancel := context.WithTimeout(ctx, PeerRPCRelayTick)
 		relayReq, err := s.peerClient.PollRelay(pollCtx, sponsorAddr, s.Config.ID)
 		pollCancel()
 		if err != nil {
@@ -310,7 +310,7 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 	}
 
 	// Send reply back to Sponsor
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSync)
 	defer cancel()
 
 	err := s.peerClient.ReplyRelay(ctx, sponsorAddr, relayRes)

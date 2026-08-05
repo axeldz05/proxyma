@@ -12,7 +12,11 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strings"
+	"time"
 )
+
+// DefaultRPCTimeout is the shared timeout for short peer RPCs outside server.PeerRPC*.
+const DefaultRPCTimeout = 10 * time.Second
 
 func validateAndBuildURL(peerID, path string) (string, error) {
 	if peerID == "" {

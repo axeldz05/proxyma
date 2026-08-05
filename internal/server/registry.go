@@ -61,24 +61,9 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 			for _, staleID := range staleIDs {
 				delete(pr.peers, staleID)
 			}
-			pr.activePeersMu.Lock()
 			for _, staleID := range staleIDs {
-				delete(pr.activePeers, staleID)
+				pr.purgePeerMaps(staleID)
 			}
-			pr.activePeersMu.Unlock()
-
-			pr.peerErrorsMu.Lock()
-			for _, staleID := range staleIDs {
-				delete(pr.peerErrors, staleID)
-			}
-			pr.peerErrorsMu.Unlock()
-
-			pr.clusterServicesMu.Lock()
-			for _, staleID := range staleIDs {
-				delete(pr.clusterServices, staleID)
-			}
-			pr.clusterServicesMu.Unlock()
-
 			for _, staleID := range staleIDs {
 				pr.logger.Info("Removing stale peer replaced by new peer ID at same address", "stalePeerID", staleID, "newPeerID", peerID, "address", newPrimaryAddr)
 			}
@@ -121,12 +106,9 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 	return true
 }
 
-// RemovePeer removes a peer and its status/services from the registry.
-func (pr *PeerRegistry) RemovePeer(peerID string) {
-	pr.peersMu.Lock()
-	delete(pr.peers, peerID)
-	pr.peersMu.Unlock()
-
+// purgePeerLocked removes peerID from all registry maps. Callers must hold peersMu when deleting from peers;
+// other map locks are taken internally.
+func (pr *PeerRegistry) purgePeerMaps(peerID string) {
 	pr.activePeersMu.Lock()
 	delete(pr.activePeers, peerID)
 	pr.activePeersMu.Unlock()
@@ -138,6 +120,19 @@ func (pr *PeerRegistry) RemovePeer(peerID string) {
 	pr.clusterServicesMu.Lock()
 	delete(pr.clusterServices, peerID)
 	pr.clusterServicesMu.Unlock()
+
+	pr.peerCertsMu.Lock()
+	delete(pr.peerCerts, peerID)
+	pr.peerCertsMu.Unlock()
+}
+
+// RemovePeer removes a peer and its status/services from the registry.
+func (pr *PeerRegistry) RemovePeer(peerID string) {
+	pr.peersMu.Lock()
+	delete(pr.peers, peerID)
+	pr.peersMu.Unlock()
+
+	pr.purgePeerMaps(peerID)
 
 	pr.logger.Info("peerID removed from peers", "peerID", peerID)
 }
@@ -285,4 +280,3 @@ func (pr *PeerRegistry) GetPeerCertificate(peerID string) (*x509.Certificate, bo
 	cert, exists := pr.peerCerts[peerID]
 	return cert, exists
 }
-

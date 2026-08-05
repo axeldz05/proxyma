@@ -275,11 +275,8 @@ func (qm *QUICManager) InitiateHolePunch(ctx context.Context, peerID string, rem
 func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remoteAddresses []string, sendRelayReq func(string, string, []byte) ([]byte, error)) (*quic.Conn, error) {
 	// Find the remote public UDP address in remoteAddresses list
 	var remoteUDP string
-	for _, addr := range remoteAddresses {
-		if strings.HasPrefix(addr, "quic://") {
-			remoteUDP = strings.TrimPrefix(addr, "quic://")
-			break
-		}
+	if quicAddr, ok := FirstQUICAddr(remoteAddresses); ok {
+		remoteUDP = strings.TrimPrefix(quicAddr, "quic://")
 	}
 	if remoteUDP == "" {
 		return nil, fmt.Errorf("remote peer does not advertise quic:// public address")

@@ -53,24 +53,69 @@ func GetStoragePath() string {
 }
 
 func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s *server.Server) (any, error)) string {
-	s := getSrv()
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, action, args)
-		if err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error())
-		}
-		return string(data)
-	}
+	return dispatchUnixLocalOrOffline(action, args, localCall, nil)
+}
 
-	res, err := localCall(s)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
+// bindErrorJSON formats an error for bind/CLI consumers (SSOT).
+func bindErrorJSON(err error) string {
+	if err == nil {
+		return `{"error":""}`
 	}
+	return fmt.Sprintf(`{"error": %q}`, err.Error())
+}
+
+// ParseBindError extracts the error message from a bind JSON error envelope.
+func ParseBindError(s string) string {
+	var m map[string]string
+	if json.Unmarshal([]byte(s), &m) == nil {
+		if e, ok := m["error"]; ok && e != "" {
+			return e
+		}
+	}
+	return s
+}
+
+// bindOKJSON marshals a successful payload (or wraps a string message).
+func bindOKJSON(res any) string {
 	if str, ok := res.(string); ok {
 		return str
 	}
 	b, _ := json.Marshal(res)
 	return string(b)
+}
+
+// bindMessageJSON returns a success envelope with a message field.
+func bindMessageJSON(msg string) string {
+	return fmt.Sprintf(`{"message": %q}`, msg)
+}
+
+// dispatchUnixLocalOrOffline is L3: in-process localCall, else unix, else optional offline fallback.
+func dispatchUnixLocalOrOffline(
+	action string,
+	args map[string]string,
+	localCall func(s *server.Server) (any, error),
+	offline func() (any, error),
+) string {
+	s := getSrv()
+	if s != nil {
+		res, err := localCall(s)
+		if err != nil {
+			return bindErrorJSON(err)
+		}
+		return bindOKJSON(res)
+	}
+	data, err := sendUnixSocketCommand(appStorage, action, args)
+	if err == nil {
+		return string(data)
+	}
+	if offline != nil {
+		res, offErr := offline()
+		if offErr != nil {
+			return bindErrorJSON(offErr)
+		}
+		return bindOKJSON(res)
+	}
+	return bindErrorJSON(err)
 }
 
 // DialUnix opens a connection to the daemon unix socket (L1).
@@ -417,11 +462,7 @@ func GetDomainSchemaJson(domainName string) string {
 	return uischema.GetDomainJSON(domainName)
 }
 
-// GetUISchemaJSON serializes the global UI schema domains to JSON.
+// GetUISchemaJSON is an alias of GetUISchemaJson (SSOT via uischema.GetRegistryJSON).
 func GetUISchemaJSON() string {
-	b, err := json.Marshal(uischema.Registry)
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err.Error())
-	}
-	return string(b)
+	return GetUISchemaJson()
 }
