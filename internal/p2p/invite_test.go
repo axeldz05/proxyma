@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"os"
-	"path/filepath"
 	"proxyma/internal/p2p"
 	"strings"
 	"testing"
@@ -17,7 +16,7 @@ import (
 
 func TestSmartTokenV2(t *testing.T) {
 	tmpDir := t.TempDir()
-	caCertPath := filepath.Join(tmpDir, "ca.crt")
+	caCertPath, _ := p2p.CACertPaths(tmpDir)
 
 	// Generate a dummy self-signed CA PEM for hashing
 	caBytes := []byte("-----BEGIN CERTIFICATE-----\nMIIB8zCCAXqgAwIBAgIJAOc84G...") // truncated PEM structure
@@ -91,7 +90,7 @@ func TestSmartTokenBackwardsCompatibility(t *testing.T) {
 
 func TestParseHostAddressHandling(t *testing.T) {
 	tmpDir := t.TempDir()
-	caCertPath := filepath.Join(tmpDir, "ca.crt")
+	caCertPath, _ := p2p.CACertPaths(tmpDir)
 	pemData := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: []byte("ca"),

@@ -445,9 +445,8 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	require.NoError(t, p2p.InitCluster(caPath))
 	require.NoError(t, p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID))
 
-	caCertFile := filepath.Join(caPath, "ca.crt")
-	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
-	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
+	caCertFile, _ := p2p.CACertPaths(caPath)
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(cfg.StoragePath, cfg.ID)
 	serverTLS, _, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err)
 

@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -137,10 +135,12 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 		}
 	} else {
 		for k, v := range resp.Outputs {
-			if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
-				outputHash = filepath.Base(strings.TrimPrefix(pathStr, "vfs://"))
-				outputName = k
-				break
+			if pathStr, ok := v.(string); ok {
+				if hash, isVFS := protocol.ParseVFSURI(pathStr); isVFS {
+					outputHash = hash
+					outputName = k
+					break
+				}
 			}
 		}
 	}
@@ -166,7 +166,7 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 
 	if targetPeerID == "" || targetPeerID == s.Config.ID {
 		var rawLocalPath string
-		if p, ok := resp.Outputs["output_path"].(string); ok && !strings.HasPrefix(p, "vfs://") {
+		if p, ok := resp.Outputs["output_path"].(string); ok && !protocol.IsVFSURI(p) {
 			rawLocalPath = p
 		}
 		if rawLocalPath != "" {
@@ -187,8 +187,10 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 		localPath := s.Storage.GetBlobPath(outputHash)
 		resp.Outputs["result_path"] = localPath
 		for k, v := range resp.Outputs {
-			if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
-				resp.Outputs[k] = localPath
+			if pathStr, ok := v.(string); ok {
+				if protocol.IsVFSURI(pathStr) || pathStr == outputHash {
+					resp.Outputs[k] = localPath
+				}
 			}
 		}
 	} else {
@@ -220,18 +222,17 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 		Payload:         payload,
 	}
 
-	s.Compute.RegisterOutgoingTask(taskReq)
-
 	if targetPeerID == s.Config.ID {
+		s.Compute.RegisterOutgoingTask(taskReq)
 		err = s.Compute.SubmitTask(taskReq)
 		if err != nil {
 			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
 			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to submit local task: %w", err)
 		}
 	} else {
+		// DispatchTask owns RegisterOutgoingTask + MarkTaskAsFailed for remote submit.
 		err = s.DispatchTask(targetPeerID, taskReq)
 		if err != nil {
-			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
 			return protocol.ServiceTaskResponse{}, err
 		}
 	}
@@ -320,13 +321,53 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 		return "", fmt.Errorf("error saving services file: %w", err)
 	}
 	s.LoadLocalServices()
+	schema := localService.Schema
+	if schema.Name == "" {
+		schema.Name = serviceName
+	}
+	if schema.Type == "" {
+		schema.Type = localService.Type
+	}
+	go s.NotifyService(schema, "add")
 	return fmt.Sprintf("Service '%s' added successfully.", serviceName), nil
 }
 
 func (s *Server) LocalServiceRemove(name string) (string, error) {
+	schema, _ := s.Compute.GetService(name)
+	if schema.Name == "" {
+		schema.Name = name
+	}
 	if err := compute.DeleteLocalService(s.Config.StoragePath, name); err != nil {
 		return "", err
 	}
 	s.LoadLocalServices()
+	go s.NotifyService(schema, "remove")
 	return fmt.Sprintf("Service '%s' removed successfully.", name), nil
+}
+
+func (s *Server) notifyService(ctx context.Context, peerID string, schema protocol.ServiceSchema, action string) error {
+	payload := protocol.ServiceNotification{
+		Action: action,
+		NodeID: s.Config.ID,
+		Schema: schema,
+	}
+	err := s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
+	if err != nil {
+		s.Config.Logger.Debug("Failed to notify peer about service update", "peerID", peerID, "service", schema.Name, "error", err)
+	}
+	return err
+}
+
+func (s *Server) NotifyServiceToPeer(peerID string, schema protocol.ServiceSchema, action string) {
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	defer cancel()
+	_ = s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+		return s.notifyService(ctx, peerID, schema, action)
+	})
+}
+
+func (s *Server) NotifyService(schema protocol.ServiceSchema, action string) {
+	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true}, func(ctx context.Context, peerID string) error {
+		return s.notifyService(ctx, peerID, schema, action)
+	})
 }

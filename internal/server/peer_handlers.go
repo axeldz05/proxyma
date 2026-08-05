@@ -110,7 +110,7 @@ func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.SetPeerOnline(req.ID, false)
+	s.SetPeerOffline(req.ID, nil)
 	s.Config.Logger.Info("Peer went offline", "peer_id", req.ID)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer marked as offline"})
 }

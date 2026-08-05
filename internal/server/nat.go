@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+// configTCPPort returns the configured listen TCP port (default 8443) as string and int.
+func (s *Server) configTCPPort() (portStr string, portInt int) {
+	portStr = utils.ExtractPort(s.Config.Address)
+	portInt = 8443
+	if portStr != "" {
+		_, _ = fmt.Sscanf(portStr, "%d", &portInt)
+	} else {
+		portStr = "8443"
+	}
+	return portStr, portInt
+}
+
+// advertisedTCPPort returns the public TCP port (UPnP mapped override when available).
+func (s *Server) advertisedTCPPort() string {
+	portStr, _ := s.configTCPPort()
+	if s.natMapper != nil {
+		if mappedTCP, _ := s.natMapper.GetMappedPorts(); mappedTCP > 0 {
+			return fmt.Sprintf("%d", mappedTCP)
+		}
+	}
+	return portStr
+}
+
 func (s *Server) determineSponsorAndNATStatus() {
 	s.Config.Logger.Info("Determining NAT and Sponsor status...")
 
@@ -54,11 +77,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 
 	// Try UPnP/NAT-PMP mapping if enabled (default)
 	if !s.Config.DisableUPnP {
-		tcpPortStr := utils.ExtractPort(s.Config.Address)
-		tcpPort := 8443
-		if tcpPortStr != "" {
-			_, _ = fmt.Sscanf(tcpPortStr, "%d", &tcpPort)
-		}
+		_, tcpPort := s.configTCPPort()
 		udpPort := conn.LocalAddr().(*net.UDPAddr).Port
 
 		s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
@@ -122,17 +141,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 
 	// 3. Probe ourselves via a peer in the cluster (Bootstrap Node)
 	if s.Config.BootstrapNode != "" {
-		// Parse our own listening port
-		ownPort := utils.ExtractPort(s.Config.Address)
-		if ownPort == "" {
-			ownPort = "8443"
-		}
-		if s.natMapper != nil {
-			mappedTCP, _ := s.natMapper.GetMappedPorts()
-			if mappedTCP > 0 {
-				ownPort = fmt.Sprintf("%d", mappedTCP)
-			}
-		}
+		ownPort := s.advertisedTCPPort()
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
 

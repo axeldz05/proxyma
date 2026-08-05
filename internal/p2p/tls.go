@@ -19,9 +19,10 @@ import (
 	"time"
 )
 
+const leafOrgName = "Proxyma Cluster"
+
 func InitCluster(caFolderPath string) error {
-	caPath := filepath.Join(caFolderPath, "ca.crt")
-	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+	caPath, caKeyPath := CACertPaths(caFolderPath)
 
 	if fileExists(caPath) && fileExists(caKeyPath) {
 		return nil
@@ -35,8 +36,7 @@ func InitCluster(caFolderPath string) error {
 }
 
 func IssueNodeCertificate(caFolderPath, nodeFolderPath, nodeID string) error {
-	caPath := filepath.Join(caFolderPath, "ca.crt")
-	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+	caPath, caKeyPath := CACertPaths(caFolderPath)
 
 	caCert, caKey, err := loadCertAndKey(caPath, caKeyPath)
 	if err != nil {
@@ -115,15 +115,12 @@ func GenerateNodeCSR(nodeID string) (csrPEM []byte, privateKeyPEM []byte, err er
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal private key: %w", err)
 	}
-	privateKeyPEM = pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: privBytes,
-	})
+	privateKeyPEM = encodeECKeyPEM(privBytes)
 
 	template := x509.CertificateRequest{
 		Subject: pkix.Name{
 			CommonName:   nodeID,
-			Organization: []string{"Proxyma Cluster"},
+			Organization: []string{leafOrgName},
 		},
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 	}
@@ -185,36 +182,17 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 		return nil, fmt.Errorf("failed to sign certificate: %w", err)
 	}
 
-	certPEM = pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certBytes,
-	})
+	certPEM = encodeCertPEM(certBytes)
 
 	return certPEM, nil
 }
 
 func loadCAPair(certPath, keyPath string) (*x509.Certificate, any, error) {
-	certBytes, err := os.ReadFile(certPath)
+	cert, key, err := loadCertAndKey(certPath, keyPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	certBlock, _ := pem.Decode(certBytes)
-	caCert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	keyBlock, _ := pem.Decode(keyBytes)
-	caPrivKey, err := x509.ParseECPrivateKey(keyBlock.Bytes) // Asumiendo que tu CA también usa ECDSA
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return caCert, caPrivKey, nil
+	return cert, key, nil
 }
 
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -256,7 +234,7 @@ func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID 
 	}
 
 	template := newNodeCertTemplate(pkix.Name{
-		Organization: []string{"Proxyma Node"},
+		Organization: []string{leafOrgName},
 		CommonName:   nodeID,
 	}, []string{nodeID, "localhost"})
 
@@ -295,8 +273,8 @@ func saveCertAndKey(certPath, keyPath string, cert *x509.Certificate, key *ecdsa
 	if err != nil {
 		return err
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}); err != nil {
-		return fmt.Errorf("failed to encode certificate: %w", err)
+	if _, err := keyOut.Write(encodeECKeyPEM(privBytes)); err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
 	}
 	if err := keyOut.Close(); err != nil {
 		return err
@@ -355,7 +333,7 @@ func SetupNewNode(storagePath, nodeID, address string) error {
 		return fmt.Errorf("error generating node certificates: %w", err)
 	}
 
-	caPath := filepath.Join(certsDir, "ca.crt")
+	caPath, _ := CACertPaths(certsDir)
 	cfg := protocol.NodeConfig{
 		ID:          nodeID,
 		Address:     address,
@@ -368,8 +346,7 @@ func SetupNewNode(storagePath, nodeID, address string) error {
 }
 
 func RotateCA(caFolderPath string) error {
-	caPath := filepath.Join(caFolderPath, "ca.crt")
-	caKeyPath := filepath.Join(caFolderPath, "ca.key")
+	caPath, caKeyPath := CACertPaths(caFolderPath)
 
 	caCert, caKey, err := generateCA()
 	if err != nil {
@@ -386,7 +363,7 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 
 	certTemplate := newNodeCertTemplate(pkix.Name{
 		CommonName:   peerID,
-		Organization: []string{"Proxyma Cluster"},
+		Organization: []string{leafOrgName},
 	}, []string{peerID, "localhost"})
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, peerPubKey, caPrivKey)
@@ -394,17 +371,26 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 		return nil, fmt.Errorf("failed to sign certificate: %w", err)
 	}
 
-	certPEM = pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certBytes,
-	})
+	return encodeCertPEM(certBytes), nil
+}
 
-	return certPEM, nil
+func encodeCertPEM(certDER []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+}
+
+func encodeECKeyPEM(keyDER []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 
 // CAKeyPath derives the CA private key path from the CA certificate path.
 func CAKeyPath(caCertPath string) string {
 	return strings.Replace(caCertPath, ".crt", ".key", 1)
+}
+
+// CACertPaths returns ca.crt and ca.key under dir.
+func CACertPaths(dir string) (certPath, keyPath string) {
+	certPath = filepath.Join(dir, "ca.crt")
+	return certPath, CAKeyPath(certPath)
 }
 
 // NodeCertPaths returns the node certificate and key paths under dir.

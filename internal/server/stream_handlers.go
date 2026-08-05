@@ -74,7 +74,7 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 		rUDPAddr, err := net.ResolveUDPAddr("udp", msg.PublicUDP)
 		if err == nil {
 			go func() {
-				pingPayload := append([]byte{0xff, 0xff, 0xff, 0xff}, []byte("ping:"+s.Config.ID)...)
+				pingPayload := p2p.HolePunchPingPayload(s.Config.ID)
 				// Send 20 pings, 150ms apart
 				for i := 0; i < 20; i++ {
 					_, _ = s.quicMgr.PacketConn.WriteTo(pingPayload, rUDPAddr)
@@ -86,9 +86,8 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
-	serviceName := r.URL.Query().Get("service")
-	if serviceName == "" {
-		utils.RespondError(w, http.StatusBadRequest, "Missing service query parameter")
+	serviceName, ok := utils.GetRequiredQueryParam(w, r, "service")
+	if !ok {
 		return
 	}
 

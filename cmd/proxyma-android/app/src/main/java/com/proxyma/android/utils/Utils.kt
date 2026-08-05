@@ -165,6 +165,29 @@ fun updateFileTask(
     }
 }
 
+fun runBindOnBg(
+    action: () -> String,
+    onResult: (Result<String>) -> Unit
+) {
+    thread {
+        try {
+            val res = action()
+            val err = parseBindError(res)
+            isRunningOnMainThread {
+                if (err.isNotEmpty()) {
+                    onResult(Result.failure(Exception(err)))
+                } else {
+                    onResult(Result.success(res))
+                }
+            }
+        } catch (e: Exception) {
+            isRunningOnMainThread {
+                onResult(Result.failure(e))
+            }
+        }
+    }
+}
+
 fun startUnaryFileTask(
     fileTasks: MutableList<com.proxyma.android.models.FileTask>,
     taskId: String,
@@ -172,23 +195,23 @@ fun startUnaryFileTask(
     action: () -> String,
     onDone: ((Result<String>) -> Unit)? = null
 ) {
-    thread {
-        val res = action()
-        val err = parseBindError(res)
-        isRunningOnMainThread {
-            if (err.isNotEmpty()) {
-                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = err) }
-                context?.toast("❌ Execution failed: $err", long = true)
-                onDone?.invoke(Result.failure(Exception(err)))
-            } else {
+    runBindOnBg(action) { result ->
+        result.fold(
+            onSuccess = { res ->
                 val resPath = getResultPath(res).ifEmpty { null }
                 updateFileTask(fileTasks, taskId) {
                     it.copy(status = "completed", resultPath = resPath)
                 }
                 context?.toast("✅ Execution completed!")
                 onDone?.invoke(Result.success(res))
+            },
+            onFailure = { err ->
+                val msg = err.message ?: "failed"
+                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = msg) }
+                context?.toast("❌ Execution failed: $msg", long = true)
+                onDone?.invoke(Result.failure(err))
             }
-        }
+        )
     }
 }
 
@@ -281,26 +304,21 @@ fun uploadUriToVfs(
     onComplete: (Result<String>) -> Unit
 ) {
     onStart()
-    thread {
+    val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
+    runBindOnBg({
+        val cachedPath = copyUriToCache(context, uri)
         try {
-            val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
-            val cachedPath = copyUriToCache(context, uri)
-            val res = proxyma_bind.Proxyma_bind.uploadFile(name, cachedPath)
+            proxyma_bind.Proxyma_bind.uploadFile(name, cachedPath)
+        } finally {
             File(cachedPath).delete()
-            val err = parseBindError(res)
-            isRunningOnMainThread {
-                if (err.isNotEmpty()) {
-                    onComplete(Result.failure(Exception(err)))
-                } else {
-                    val msg = getActionMessage(res)
-                    onComplete(Result.success(msg.ifEmpty { name }))
-                }
-            }
-        } catch (e: Exception) {
-            isRunningOnMainThread {
-                onComplete(Result.failure(e))
-            }
         }
+    }) { result ->
+        result.fold(
+            onSuccess = { res ->
+                onComplete(Result.success(getActionMessage(res).ifEmpty { name }))
+            },
+            onFailure = { onComplete(Result.failure(it)) }
+        )
     }
 }
 
@@ -312,24 +330,12 @@ fun executeGoCall(
     onSuccess: ((String) -> Unit)? = null
 ) {
     onStart?.invoke()
-    thread {
-        try {
-            val res = action()
-            val err = parseBindError(res)
-            isRunningOnMainThread {
-                onComplete?.invoke()
-                if (err.isNotEmpty()) {
-                    context.toast(err, long = true)
-                } else {
-                    onSuccess?.invoke(res)
-                }
-            }
-        } catch (e: Exception) {
-            isRunningOnMainThread {
-                onComplete?.invoke()
-                context.toast("Error: ${e.message}", long = true)
-            }
-        }
+    runBindOnBg(action) { result ->
+        onComplete?.invoke()
+        result.fold(
+            onSuccess = { res -> onSuccess?.invoke(res) },
+            onFailure = { err -> context.toast(err.message ?: "Error", long = true) }
+        )
     }
 }
 
@@ -338,24 +344,45 @@ fun executeGoSubmit(
     action: () -> String,
     onSuccess: ((String) -> Unit)? = null
 ) {
-    thread {
-        try {
-            val res = action()
-            val err = parseBindError(res)
-            isRunningOnMainThread {
-                if (err.isNotEmpty()) {
-                    onComplete(Result.failure(Exception(err)))
-                } else {
-                    onSuccess?.invoke(res)
-                    onComplete(Result.success(res))
-                }
-            }
-        } catch (e: Exception) {
-            isRunningOnMainThread {
-                onComplete(Result.failure(e))
-            }
-        }
+    runBindOnBg(action) { result ->
+        result.onSuccess { res -> onSuccess?.invoke(res) }
+        onComplete(result)
     }
+}
+
+fun enqueueFileTask(
+    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
+    name: String,
+    payloadJson: String,
+    streaming: Boolean,
+    context: Context? = null,
+    unaryAction: (() -> String)? = null,
+    onDone: ((Result<String>) -> Unit)? = null
+): String {
+    val taskId = "task_${System.currentTimeMillis()}"
+    fileTasks.add(
+        0,
+        com.proxyma.android.models.FileTask(
+            taskId = taskId,
+            service = name,
+            input = payloadJson,
+            output = if (streaming) "stream" else "result",
+            status = if (streaming) "streaming" else "running",
+            isStreaming = streaming
+        )
+    )
+    if (streaming) {
+        attachStreamToFileTask(fileTasks, taskId, name, payloadJson, context, onDone)
+    } else {
+        startUnaryFileTask(
+            fileTasks = fileTasks,
+            taskId = taskId,
+            context = context,
+            action = unaryAction ?: { """{"error":"missing unary action"}""" },
+            onDone = onDone
+        )
+    }
+    return taskId
 }
 
 /** Shared Gson parse of bind GetServiceDetails JSON (SSOT for screens). */
@@ -368,13 +395,14 @@ fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
     }
 }
 
-val DEFAULT_RUN_PARAMS = listOf(
-    com.proxyma.android.models.FormParameter(
-        name = "input_path",
-        type = "file",
-        required = true,
-        description = "Input file",
-        uiHint = "image_picker"
-    )
-)
+fun parsePipelineSchema(json: String): com.proxyma.android.models.PipelineSchema? {
+    return try {
+        Gson().fromJson(json, com.proxyma.android.models.PipelineSchema::class.java)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** Empty fallback when schema has no parameters — never invent UI hints client-side. */
+val DEFAULT_RUN_PARAMS = emptyList<com.proxyma.android.models.FormParameter>()
 

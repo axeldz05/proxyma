@@ -6,7 +6,6 @@ import (
 	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
-	"strings"
 	"time"
 )
 
@@ -56,12 +55,14 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
 	if req.Payload != nil {
 		for k, v := range req.Payload {
-			if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
-				if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-					hash, _, err := s.Storage.StageLocalFile(pathStr)
-					if err == nil {
-						req.Payload[k] = "vfs://" + hash
-					}
+			pathStr, ok := v.(string)
+			if !ok || pathStr == "" || protocol.IsVFSURI(pathStr) {
+				continue
+			}
+			if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
+				hash, _, err := s.Storage.StageLocalFile(pathStr)
+				if err == nil {
+					req.Payload[k] = protocol.VFSURI(hash)
 				}
 			}
 		}

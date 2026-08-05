@@ -74,19 +74,19 @@ func GetServiceSchema(name string) string {
 }
 
 // resolveServiceSchema loads ServiceSchema + optional remote provider address.
+// When the in-process server is nil, delegates to GetServiceSchema (unix + offline arm).
 func resolveServiceSchema(name string) (schema protocol.ServiceSchema, addr string, err error) {
-	s := getSrv()
-	if s == nil {
-		data, err := sendUnixSocketCommand(appStorage, "service_detail", map[string]string{"name": name})
-		if err != nil {
-			return schema, "", err
-		}
-		if err := json.Unmarshal(data, &schema); err != nil {
-			return schema, "", fmt.Errorf("invalid service detail response: %w", err)
-		}
-		return schema, "", nil
+	if s := getSrv(); s != nil {
+		return s.LocalServiceDetail(name)
 	}
-	return s.LocalServiceDetail(name)
+	raw := GetServiceSchema(name)
+	if IsBindError(raw) {
+		return schema, "", fmt.Errorf("%s", ParseBindError(raw))
+	}
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return schema, "", fmt.Errorf("invalid service schema: %w", err)
+	}
+	return schema, "", nil
 }
 
 // GetServiceDetails gets Android-facing metadata for a given service (L3).
@@ -238,66 +238,28 @@ type StreamEventListener interface {
 
 // StreamService runs a streaming task notifying listener of chunks in real time.
 func StreamService(name string, payloadJson string, listener StreamEventListener) string {
-	s := getSrv()
-	if s == nil {
-		go func() {
-			conn, err := DialUnix(appStorage)
-			if err != nil {
-				if listener != nil {
-					listener.OnError(err.Error())
-				}
-				return
+	dispatchUnixStreamOrLocal(
+		"service_stream",
+		map[string]string{"service": name, "payload": payloadJson},
+		func(s *server.Server, onChunk func(map[string]any)) error {
+			return s.LocalServiceStreamRun(name, payloadJson, onChunk)
+		},
+		func(chunkJSON string) {
+			if listener != nil {
+				listener.OnChunk(chunkJSON)
 			}
-			defer func() { _ = conn.Close() }()
-
-			if err := WriteUnixRequest(conn, "service_stream", map[string]string{
-				"service": name,
-				"payload": payloadJson,
-			}); err != nil {
-				if listener != nil {
-					listener.OnError(err.Error())
-				}
-				return
+		},
+		func(errMsg string) {
+			if listener != nil {
+				listener.OnError(errMsg)
 			}
-
-			_ = ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
-				if !resp.Success {
-					if listener != nil {
-						listener.OnError(resp.Error)
-					}
-					return false
-				}
-				if listener != nil && resp.Data != nil {
-					listener.OnChunk(string(resp.Data))
-				}
-				return true
-			})
+		},
+		func() {
 			if listener != nil {
 				listener.OnComplete()
 			}
-		}()
-
-		return `{"status": "streaming_started"}`
-	}
-
-	go func() {
-		err := s.LocalServiceStreamRun(name, payloadJson, func(chunk map[string]any) {
-			if listener != nil {
-				b, _ := json.Marshal(chunk)
-				listener.OnChunk(string(b))
-			}
-		})
-		if err != nil {
-			if listener != nil {
-				listener.OnError(err.Error())
-			}
-		} else {
-			if listener != nil {
-				listener.OnComplete()
-			}
-		}
-	}()
-
+		},
+	)
 	return `{"status": "streaming_started"}`
 }
 

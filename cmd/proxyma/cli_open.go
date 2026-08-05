@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
 )
@@ -54,6 +55,17 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+// resolveExistingJSONPath returns candidate when it looks like an existing .json schema path.
+func resolveExistingJSONPath(candidate string) string {
+	if candidate == "" {
+		return ""
+	}
+	if strings.HasSuffix(candidate, ".json") || fileExists(candidate) {
+		return candidate
+	}
+	return ""
 }
 
 type cliStreamListener struct {

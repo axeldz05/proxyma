@@ -32,7 +32,9 @@ import java.io.File
 fun DynamicActionForm(
     parameters: List<FormParameter>,
     submitButtonText: String,
-    onSubmit: (inputs: Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit
+    onSubmit: (inputs: Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit,
+    localFilePath: Boolean = false,
+    enableCamera: Boolean = false
 ) {
     val context = LocalContext.current
     var isSubmitting by remember { mutableStateOf(false) }
@@ -98,7 +100,9 @@ fun DynamicActionForm(
                 onValueChange = { newValue ->
                     inputs[param.name] = newValue
                     validationErrors.remove(param.name)
-                }
+                },
+                localFilePath = localFilePath,
+                enableCamera = enableCamera
             )
         }
 
@@ -125,7 +129,7 @@ fun DynamicActionForm(
                 onSubmit(inputs.toMap()) { result ->
                     isSubmitting = false
                     result.onSuccess { msg ->
-                        context.toast(msg)
+                        if (msg.isNotEmpty()) context.toast(msg)
                     }
                     result.onFailure { err ->
                         context.toast(err.message ?: "Action failed", long = true)

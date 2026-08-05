@@ -23,6 +23,25 @@ type HolePunchMessage struct {
 	PublicUDP string `json:"public_udp"`
 }
 
+var holePunchMagic = []byte{0xff, 0xff, 0xff, 0xff}
+
+// HolePunchPingPayload builds a UDP hole-punch ping for localID.
+func HolePunchPingPayload(localID string) []byte {
+	return append(append([]byte{}, holePunchMagic...), []byte("ping:"+localID)...)
+}
+
+// ParseHolePunchPing extracts the sender ID from a hole-punch ping packet.
+func ParseHolePunchPing(p []byte) (senderID string, ok bool) {
+	if len(p) < 4 || !bytes.Equal(p[:4], holePunchMagic) {
+		return "", false
+	}
+	payload := string(p[4:])
+	if !strings.HasPrefix(payload, "ping:") {
+		return "", false
+	}
+	return strings.TrimPrefix(payload, "ping:"), true
+}
+
 // HolePunchPacketConn wraps net.PacketConn to intercept hole punching pings
 type HolePunchPacketConn struct {
 	net.PacketConn
@@ -44,14 +63,10 @@ func (h *HolePunchPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err erro
 		}
 
 		// Intercept hole punch pings (prefix: 4 bytes of 0xff)
-		if n >= 4 && bytes.Equal(p[:4], []byte{0xff, 0xff, 0xff, 0xff}) {
-			payload := string(p[4:n])
-			if strings.HasPrefix(payload, "ping:") {
-				senderID := strings.TrimPrefix(payload, "ping:")
-				select {
-				case h.PingCh <- senderID:
-				default:
-				}
+		if senderID, ok := ParseHolePunchPing(p[:n]); ok {
+			select {
+			case h.PingCh <- senderID:
+			default:
 			}
 			continue // Intercepted, read next packet
 		}
@@ -311,7 +326,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		return nil, err
 	}
 
-	pingPayload := append([]byte{0xff, 0xff, 0xff, 0xff}, []byte("ping:"+qm.LocalID)...)
+	pingPayload := HolePunchPingPayload(qm.LocalID)
 
 	// Send pings and wait for a ping from them
 	timeout := time.After(8 * time.Second)

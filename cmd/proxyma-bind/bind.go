@@ -56,6 +56,73 @@ func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s
 	return dispatchUnixLocalOrOffline(action, args, localCall, nil)
 }
 
+// dispatchUnixStreamOrLocal runs a streaming action in-process or over unix NDJSON (L2).
+// onChunk receives each successful data payload; onError/onComplete follow stream lifecycle.
+func dispatchUnixStreamOrLocal(
+	action string,
+	args map[string]string,
+	localStream func(s *server.Server, onChunk func(map[string]any)) error,
+	onChunkJSON func(chunkJSON string),
+	onError func(errMsg string),
+	onComplete func(),
+) {
+	s := getSrv()
+	if s != nil {
+		go func() {
+			err := localStream(s, func(chunk map[string]any) {
+				if onChunkJSON != nil {
+					b, _ := json.Marshal(chunk)
+					onChunkJSON(string(b))
+				}
+			})
+			if err != nil {
+				if onError != nil {
+					onError(err.Error())
+				}
+				return
+			}
+			if onComplete != nil {
+				onComplete()
+			}
+		}()
+		return
+	}
+
+	go func() {
+		conn, err := DialUnix(appStorage)
+		if err != nil {
+			if onError != nil {
+				onError(err.Error())
+			}
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		if err := WriteUnixRequest(conn, action, args); err != nil {
+			if onError != nil {
+				onError(err.Error())
+			}
+			return
+		}
+
+		_ = ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
+			if !resp.Success {
+				if onError != nil {
+					onError(resp.Error)
+				}
+				return false
+			}
+			if onChunkJSON != nil && resp.Data != nil {
+				onChunkJSON(string(resp.Data))
+			}
+			return true
+		})
+		if onComplete != nil {
+			onComplete()
+		}
+	}()
+}
+
 // BindErrorJSON formats an error for bind/CLI consumers (SSOT).
 func BindErrorJSON(err error) string {
 	if err == nil {
@@ -223,13 +290,13 @@ func sendUnixSocketCommand(storagePath string, action string, args map[string]st
 }
 
 // StartNode launches the proxyma node.
-// Returns empty string on success, or the error message on failure.
+// Returns empty string on success, or BindErrorJSON on failure.
 func StartNode(storagePath string, debug bool) string {
 	srvMutex.Lock()
 	defer srvMutex.Unlock()
 
 	if srv != nil {
-		return "Node is already running"
+		return BindErrorJSON(fmt.Errorf("Node is already running"))
 	}
 
 	appStorage = storagePath
@@ -243,14 +310,14 @@ func StartNode(storagePath string, debug bool) string {
 			nid := utils.GenerateDefaultNodeID()
 			localAddr := "https://127.0.0.1:8080"
 			if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
-				return fmt.Sprintf("failed to setup initial node: %v", err)
+				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %v", err))
 			}
 			cfg, err = protocol.LoadConfig(appStorage)
 			if err != nil {
-				return fmt.Sprintf("failed to load initial config: %v", err)
+				return BindErrorJSON(fmt.Errorf("failed to load initial config: %v", err))
 			}
 		} else {
-			return fmt.Sprintf("failed to load config: %v", err)
+			return BindErrorJSON(fmt.Errorf("failed to load config: %v", err))
 		}
 	}
 	cfg.Logger = appLogger
@@ -260,7 +327,7 @@ func StartNode(storagePath string, debug bool) string {
 
 	stls, ctls, err := p2p.LoadNodeTLS(cfg.CAPath, nodeCertFile, nodeKeyFile)
 	if err != nil {
-		return fmt.Sprintf("failed to load mTLS certs: %v", err)
+		return BindErrorJSON(fmt.Errorf("failed to load mTLS certs: %v", err))
 	}
 
 	srvTLS = stls
@@ -382,7 +449,7 @@ func GetTotalReceived() int64 {
 func ChangeStorageLocation(newPath string) string {
 	s := getSrv()
 	if s == nil {
-		return "Node is not running"
+		return BindErrorJSON(fmt.Errorf("Node is not running"))
 	}
 
 	newStorage := filepath.Join(newPath, "proxyma_data")
@@ -394,7 +461,7 @@ func ChangeStorageLocation(newPath string) string {
 		if err != nil {
 			// Restart on old storage
 			_ = StartNode(appStorage, true)
-			return fmt.Sprintf("failed to copy data: %v", err)
+			return BindErrorJSON(fmt.Errorf("failed to copy data: %v", err))
 		}
 	}
 
@@ -403,10 +470,9 @@ func ChangeStorageLocation(newPath string) string {
 
 	startErr := StartNode(appStorage, true)
 	if startErr != "" {
-		// Revert to old storage
 		appStorage = oldStorage
 		_ = StartNode(appStorage, true)
-		return fmt.Sprintf("failed to start on new storage: %s", startErr)
+		return BindErrorJSON(fmt.Errorf("failed to start on new storage: %s", ParseBindError(startErr)))
 	}
 
 	return ""

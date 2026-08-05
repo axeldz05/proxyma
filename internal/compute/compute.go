@@ -12,7 +12,6 @@ import (
 	"proxyma/internal/protocol"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -272,14 +271,14 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 		// Auto-resolve any vfs:// parameters to local physical storage paths
 		if c.vfsBlobResolver != nil {
 			for k, v := range stepPayload {
-				if pathStr, ok := v.(string); ok && strings.HasPrefix(pathStr, "vfs://") {
-					rawHash := strings.TrimPrefix(pathStr, "vfs://")
-					hash := filepath.Base(rawHash)
-					resolvedPath, err := c.vfsBlobResolver(context.Background(), t.RequesterNodeID, hash)
-					if err == nil && resolvedPath != "" {
-						stepPayload[k] = resolvedPath
-					} else if err != nil {
-						c.logger.Error("Failed to resolve VFS blob for step", "step", currentStep.ID, "hash", hash, "error", err)
+				if pathStr, ok := v.(string); ok {
+					if hash, isVFS := protocol.ParseVFSURI(pathStr); isVFS {
+						resolvedPath, err := c.vfsBlobResolver(context.Background(), t.RequesterNodeID, hash)
+						if err == nil && resolvedPath != "" {
+							stepPayload[k] = resolvedPath
+						} else if err != nil {
+							c.logger.Error("Failed to resolve VFS blob for step", "step", currentStep.ID, "hash", hash, "error", err)
+						}
 					}
 				}
 			}
@@ -320,16 +319,20 @@ func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) {
 		return
 	}
 	for k, v := range outputs {
-		if pathStr, ok := v.(string); ok && pathStr != "" && !strings.HasPrefix(pathStr, "vfs://") {
-			if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-				hash, size, err := c.vfsBlobStager(pathStr)
-				if err == nil && hash != "" {
-					outputs["output_hash"] = hash
-					outputs["output_name"] = filepath.Base(pathStr)
-					outputs["output_size"] = float64(size)
-					outputs[k] = "vfs://" + hash
-				}
-			}
+		pathStr, ok := v.(string)
+		if !ok || pathStr == "" || protocol.IsVFSURI(pathStr) {
+			continue
+		}
+		fi, err := os.Stat(pathStr)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		hash, size, err := c.vfsBlobStager(pathStr)
+		if err == nil && hash != "" {
+			outputs["output_hash"] = hash
+			outputs["output_name"] = filepath.Base(pathStr)
+			outputs["output_size"] = float64(size)
+			outputs[k] = protocol.VFSURI(hash)
 		}
 	}
 }

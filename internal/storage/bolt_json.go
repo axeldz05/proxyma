@@ -19,6 +19,23 @@ func boltPutJSON(tx *bolt.Tx, bucket, key string, v any) error {
 	return b.Put([]byte(key), data)
 }
 
+func boltGetJSON[T any](tx *bolt.Tx, bucket, key string) (T, bool) {
+	var zero T
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return zero, false
+	}
+	data := b.Get([]byte(key))
+	if data == nil {
+		return zero, false
+	}
+	var item T
+	if err := json.Unmarshal(data, &item); err != nil {
+		return zero, false
+	}
+	return item, true
+}
+
 func boltDelete(tx *bolt.Tx, bucket, key string) error {
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {

@@ -33,10 +33,9 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 	require.NoError(t, err)
 	err = p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID)
 	require.NoError(t, err)
-	caCertFile := filepath.Join(caPath, "ca.crt")
+	caCertFile, _ := p2p.CACertPaths(caPath)
 	cfg.CAPath = caCertFile
-	nodeCertFile := filepath.Join(cfg.StoragePath, cfg.ID+".crt")
-	nodeKeyFile := filepath.Join(cfg.StoragePath, cfg.ID+".key")
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(cfg.StoragePath, cfg.ID)
 	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err)
 

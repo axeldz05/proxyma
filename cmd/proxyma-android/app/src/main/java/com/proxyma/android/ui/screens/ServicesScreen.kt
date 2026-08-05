@@ -36,10 +36,13 @@ import com.proxyma.android.models.FormParameter
 import com.proxyma.android.models.PipelineSchema
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.components.Icon
-import com.proxyma.android.ui.components.ParameterInput
 import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
+import com.proxyma.android.ui.components.RunTaskDialog
 import com.proxyma.android.ui.components.ScreenTitle
+import com.proxyma.android.ui.components.PipelineCardItem
+import com.proxyma.android.ui.components.ServiceCardItem
+import com.proxyma.android.ui.components.TaskLogCardItem
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 import kotlin.concurrent.thread
@@ -432,250 +435,19 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 runTargetSpecs = null
                 runTargetIsStreaming = false
 
-                val taskID = "task_${System.currentTimeMillis()}"
-                val newTask = FileTask(
-                    taskId = taskID,
-                    service = targetId,
-                    input = payloadJson,
-                    output = if (isStream) "stream" else "result",
-                    status = if (isStream) "streaming" else "running",
-                    isStreaming = isStream
-                )
-                fileTasks.add(0, newTask)
                 context.toast(if (isStream) "🌊 Streaming $targetId..." else "🚀 Running $targetId...")
-
-                if (isStream) {
-                    attachStreamToFileTask(
-                        fileTasks = fileTasks,
-                        taskId = taskID,
-                        serviceName = targetId,
-                        payloadJson = payloadJson,
-                        context = context
-                    )
-                } else {
-                    startUnaryFileTask(
-                        fileTasks = fileTasks,
-                        taskId = taskID,
-                        context = context,
-                        action = {
-                            if (isPipe) proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
-                            else proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
-                        }
-                    )
-                }
+                enqueueFileTask(
+                    fileTasks = fileTasks,
+                    name = targetId,
+                    payloadJson = payloadJson,
+                    streaming = isStream,
+                    context = context,
+                    unaryAction = {
+                        if (isPipe) proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
+                        else proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
+                    }
+                )
             }
         )
     }
 }
-
-@Composable
-fun RunTaskDialog(
-    targetName: String,
-    isPipeline: Boolean,
-    parameterSpecs: List<FormParameter>,
-    onDismiss: () -> Unit,
-    onExecute: (payloadMap: Map<String, Any>) -> Unit
-) {
-    val context = LocalContext.current
-    val paramValues = remember { mutableStateMapOf<String, Any>() }
-
-    LaunchedEffect(parameterSpecs) {
-        parameterSpecs.forEach { spec ->
-            if (!spec.defaultValue.isNullOrEmpty() && paramValues[spec.name] == null) {
-                paramValues[spec.name] = spec.defaultValue
-            }
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Run ${if (isPipeline) "Pipeline" else "Service"}: $targetName") },
-        text = {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (parameterSpecs.isEmpty()) {
-                    item {
-                        Text("No specific input parameters required.", color = Color.Gray, fontSize = 14.sp)
-                    }
-                } else {
-                    items(parameterSpecs) { spec ->
-                        ParameterInput(
-                            param = spec,
-                            value = paramValues[spec.name],
-                            onValueChange = { paramValues[spec.name] = it },
-                            localFilePath = true,
-                            enableCamera = true
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val missing = parameterSpecs.filter {
-                        it.required && (paramValues[it.name]?.toString()?.trim() ?: "").isEmpty()
-                    }
-                    if (missing.isNotEmpty()) {
-                        context.toast("Missing required field(s): ${missing.joinToString { it.name }}")
-                        return@Button
-                    }
-                    onExecute(paramValues.toMap())
-                }
-            ) {
-                Text("Execute")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-private fun parsePipelineSchema(json: String): PipelineSchema? {
-    return try {
-        Gson().fromJson(json, PipelineSchema::class.java)
-    } catch (e: Exception) {
-        null
-    }
-}
-
-@Composable
-fun TaskLogCardItem(
-    task: FileTask,
-    onClick: () -> Unit,
-    onOpenResult: (path: String, outputName: String) -> Unit
-) {
-    ProxymaCard(
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .width(260.dp)
-            .clickable(onClick = onClick)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = task.service.uppercase(),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = VioletSecondary
-                )
-                val statusColor = when (task.status) {
-                    "completed" -> MintGreen
-                    "failed" -> Color.Red
-                    else -> Color.Yellow
-                }
-                Text(
-                    text = task.status.uppercase(),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    color = statusColor
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text("Input: ${task.input}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
-            Text("Output: ${task.output}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
-            if (task.status == "completed" && task.resultPath != null) {
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { onOpenResult(task.resultPath, task.output) },
-                    colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(32.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("Open Result", fontSize = 12.sp, color = Color.White)
-                }
-            } else if (task.status == "failed" && task.error != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(task.error, fontSize = 11.sp, color = Color.Red, maxLines = 2)
-            }
-        }
-    }
-}
-
-@Composable
-fun PipelineCardItem(
-    pipeline: PipelineSchema,
-    onRun: () -> Unit,
-    onEdit: () -> Unit,
-    onClone: () -> Unit,
-    onDelete: () -> Unit
-) {
-    ProxymaCard(
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(pipeline.id, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
-                    Text("Version: ${pipeline.version} | Steps: ${pipeline.steps.size}", fontSize = 12.sp, color = Color.Gray)
-                }
-
-                Row {
-                    IconButton(onClick = onRun) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Run Pipeline", tint = MintGreen)
-                    }
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Pipeline", tint = VioletSecondary)
-                    }
-                    IconButton(onClick = onClone) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Clone & Localize Pipeline", tint = MintGreen)
-                    }
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Pipeline", tint = Color.Red)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ServiceCardItem(
-    svcName: String,
-    onClick: () -> Unit,
-    onRun: () -> Unit
-) {
-    ProxymaCard(
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.CloudQueue, contentDescription = "Compute", tint = VioletSecondary)
-                Spacer(Modifier.width(12.dp))
-                Text(svcName, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onRun) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Run Service", tint = MintGreen)
-                }
-                Icon(Icons.Default.ChevronRight, contentDescription = "Open Details", tint = Color.Gray)
-            }
-        }
-    }
-}
-

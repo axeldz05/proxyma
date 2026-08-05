@@ -92,7 +92,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	_ = os.RemoveAll(certsDir)
 	_ = os.MkdirAll(certsDir, 0755)
 
-	caPath := filepath.Join(certsDir, "ca.crt")
+	caPath, _ := p2p.CACertPaths(certsDir)
 	certPath, keyPath := p2p.NodeCertPaths(certsDir, nodeID)
 
 	_ = os.WriteFile(caPath, []byte(caCert), 0644)
@@ -122,7 +122,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	StopNode()
 	startErr := StartNode(appStorage, true)
 	if startErr != "" {
-		return bindErrorJSON(fmt.Errorf("start failed: %s", startErr))
+		return startErr
 	}
 
 	go func() {

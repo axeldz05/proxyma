@@ -32,9 +32,8 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	err := p2p.IssueNodeCertificate(caPath, sponsor.Config.StoragePath, "target-node")
 	require.NoError(t, err)
 
-	caCertFile := filepath.Join(caPath, "ca.crt")
-	nodeCertFile := filepath.Join(sponsor.Config.StoragePath, "target-node.crt")
-	nodeKeyFile := filepath.Join(sponsor.Config.StoragePath, "target-node.key")
+	caCertFile, _ := p2p.CACertPaths(caPath)
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(sponsor.Config.StoragePath, "target-node")
 	_, targetClientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err)
 

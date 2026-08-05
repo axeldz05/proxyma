@@ -96,39 +96,17 @@ fun ServiceDetailLayout(
                     submitButtonText = if (details.isStreaming == true) "Start Stream" else "Execute Task",
                     onSubmit = { inputs, onComplete ->
                         val payloadJson = Gson().toJson(inputs)
-                        val taskId = "task_ui_${System.currentTimeMillis()}"
                         val streaming = details.isStreaming == true
-                        fileTasks.add(
-                            0,
-                            FileTask(
-                                taskId = taskId,
-                                service = details.name,
-                                input = payloadJson,
-                                output = if (streaming) "stream" else "result",
-                                status = if (streaming) "streaming" else "running",
-                                isStreaming = streaming
-                            )
+                        enqueueFileTask(
+                            fileTasks = fileTasks,
+                            name = details.name,
+                            payloadJson = payloadJson,
+                            streaming = streaming,
+                            context = context,
+                            unaryAction = { proxyma_bind.Proxyma_bind.runService(details.name, payloadJson) },
+                            onDone = onComplete
                         )
                         onBack()
-
-                        if (streaming) {
-                            attachStreamToFileTask(
-                                fileTasks = fileTasks,
-                                taskId = taskId,
-                                serviceName = details.name,
-                                payloadJson = payloadJson,
-                                context = context,
-                                onDone = onComplete
-                            )
-                        } else {
-                            startUnaryFileTask(
-                                fileTasks = fileTasks,
-                                taskId = taskId,
-                                context = context,
-                                action = { proxyma_bind.Proxyma_bind.runService(details.name, payloadJson) },
-                                onDone = onComplete
-                            )
-                        }
                     }
                 )
             }

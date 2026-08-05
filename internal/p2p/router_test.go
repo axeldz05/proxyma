@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"testing"
@@ -113,9 +112,8 @@ func TestP2PRoundTripperPeerIdentityMismatch(t *testing.T) {
 	err = p2p.IssueNodeCertificate(caPath, caPath, "bob")
 	require.NoError(t, err)
 
-	caCertFile := filepath.Join(caPath, "ca.crt")
-	nodeCertFile := filepath.Join(caPath, "bob.crt")
-	nodeKeyFile := filepath.Join(caPath, "bob.key")
+	caCertFile, _ := p2p.CACertPaths(caPath)
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(caPath, "bob")
 
 	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err)

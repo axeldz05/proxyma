@@ -22,7 +22,7 @@ var runCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		errStr := proxyma_bind.StartNode(runStorage, runDebugMode)
 		if errStr != "" {
-			fmt.Printf("❌ Error starting node: %s\n", errStr)
+			fmt.Printf("❌ Error starting node: %s\n", proxyma_bind.ParseBindError(errStr))
 			os.Exit(1)
 		}
 

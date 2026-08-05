@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.proxyma.android.utils.parseBindError
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -57,8 +58,7 @@ class ProxymaService : Service() {
 
         thread(name = "ProxymaDaemonThread") {
             try {
-                // Call gomobile bind method
-                val err = proxyma_bind.Proxyma_bind.startNode(storagePath, true)
+                val err = parseBindError(proxyma_bind.Proxyma_bind.startNode(storagePath, true))
                 if (err.isNotEmpty()) {
                     updateNotification("Error: $err")
                     isRunning = false

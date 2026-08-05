@@ -113,8 +113,8 @@ func init() {
 				if proxyma_bind.IsBindError(resJSON) {
 					errMsg := proxyma_bind.ParseBindError(resJSON)
 					schemaFile := argsMap["schema-file"]
-					if schemaFile == "" && (strings.HasSuffix(argsMap["name"], ".json") || fileExists(argsMap["name"])) {
-						schemaFile = argsMap["name"]
+					if schemaFile == "" {
+						schemaFile = resolveExistingJSONPath(argsMap["name"])
 					}
 					if schemaFile != "" {
 						fmt.Printf("❌ Failed to add pipeline schema from file '%s': %s\n", schemaFile, errMsg)

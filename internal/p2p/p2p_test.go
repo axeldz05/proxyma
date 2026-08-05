@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
@@ -25,9 +24,8 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	require.NoError(t, err)
 	err = p2p.IssueNodeCertificate(caPath, caPath, "1")
 	require.NoError(t, err)
-	caCertFile := filepath.Join(caPath, "ca.crt")
-	nodeCertFile := filepath.Join(caPath, "1.crt")
-	nodeKeyFile := filepath.Join(caPath, "1.key")
+	caCertFile, _ := p2p.CACertPaths(caPath)
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(caPath, "1")
 	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 	require.NoError(t, err, "Should not fail while generating certs for the cluster")
 	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,9 +62,8 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 		require.NoError(t, err)
 		err = p2p.IssueNodeCertificate(hackerDir, hackerDir, "hacker-node")
 		require.NoError(t, err)
-		caCertFile := filepath.Join(hackerDir, "ca.crt")
-		nodeCertFile := filepath.Join(hackerDir, "hacker-node.crt")
-		nodeKeyFile := filepath.Join(hackerDir, "hacker-node.key")
+		caCertFile, _ := p2p.CACertPaths(hackerDir)
+		nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(hackerDir, "hacker-node")
 		_, hackerClientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
 		require.NoError(t, err)
 

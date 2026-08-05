@@ -79,6 +79,7 @@ func ParseInputsToJSON(inputsRaw string) string {
 }
 
 // sampleValue synthesizes a representative sample for a parameter (L1).
+// Uses Default, Options, Type, and UIHint only — no parameter-name sniffing.
 func sampleValue(paramName string, param protocol.ServiceParameter) any {
 	if param.Default != "" {
 		switch param.Type {
@@ -92,27 +93,21 @@ func sampleValue(paramName string, param protocol.ServiceParameter) any {
 			return param.Default
 		}
 	}
-	lowerKey := strings.ToLower(paramName)
+	if len(param.Options) > 0 {
+		return param.Options[0]
+	}
 	switch param.Type {
 	case "bool":
 		return true
 	case "int":
 		return 100
 	case "file":
+		hint := protocol.EffectiveUIHint(paramName, param)
+		if hint == "image_picker" {
+			return "/path/to/image.jpg"
+		}
 		return "/path/to/input_file"
 	default:
-		if strings.Contains(lowerKey, "path") || strings.Contains(lowerKey, "file") || strings.Contains(lowerKey, "doc") {
-			return "/path/to/input_file"
-		}
-		if strings.Contains(lowerKey, "lang") {
-			return "eng"
-		}
-		if strings.Contains(lowerKey, "user") || strings.Contains(lowerKey, "name") {
-			return "user_example"
-		}
-		if len(param.Options) > 0 {
-			return param.Options[0]
-		}
 		return "example_value"
 	}
 }

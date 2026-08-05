@@ -189,6 +189,27 @@ func EffectiveUIHint(paramName string, p ServiceParameter) string {
 	return InferUIHint(paramName, p.Type)
 }
 
+const VFSURIPrefix = "vfs://"
+
+// VFSURI builds a content-addressed VFS URI from a blob hash.
+func VFSURI(hash string) string {
+	return VFSURIPrefix + hash
+}
+
+// IsVFSURI reports whether s uses the vfs:// scheme.
+func IsVFSURI(s string) bool {
+	return strings.HasPrefix(s, VFSURIPrefix)
+}
+
+// ParseVFSURI extracts the blob hash from a vfs:// URI. ok is false if not a VFS URI.
+func ParseVFSURI(s string) (hash string, ok bool) {
+	if !IsVFSURI(s) {
+		return "", false
+	}
+	hash = filepath.Base(strings.TrimPrefix(s, VFSURIPrefix))
+	return hash, hash != "" && hash != "."
+}
+
 // LocalService is the on-disk services.json entry (SSOT).
 type LocalService struct {
 	Type   ServiceType   `json:"type"`

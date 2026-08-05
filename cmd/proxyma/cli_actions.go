@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/protocol"
@@ -292,9 +291,11 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 		case "edit_pipeline":
 			fileID := args["file"]
 			id := args["id"]
-			if fileID == "" && id != "" && (strings.HasSuffix(id, ".json") || fileExists(id)) {
-				fileID = id
-				id = ""
+			if fileID == "" && id != "" {
+				if resolved := resolveExistingJSONPath(id); resolved != "" {
+					fileID = resolved
+					id = ""
+				}
 			}
 			return launchEditor(id, fileID)
 
