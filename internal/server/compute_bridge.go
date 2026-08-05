@@ -19,6 +19,16 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	if schema, ok := s.Compute.GetService(query.Service); ok {
+		bids = append(bids, protocol.ServiceBid{
+			NodeID:          s.Config.ID,
+			NodeAddr:        s.Config.Address,
+			Schema:          schema,
+			CanAccept:       true,
+			EstimatedMillis: 10,
+		})
+	}
+
 	peers := s.GetPeersCopy()
 	for peerID := range peers {
 		wg.Add(1)

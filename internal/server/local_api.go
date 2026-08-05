@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"proxyma/internal/compute"
@@ -15,7 +18,7 @@ import (
 )
 
 type LocalService struct {
-	Type   string                 `json:"type"`
+	Type   protocol.ServiceType   `json:"type"`
 	Exec   string                 `json:"exec,omitempty"`
 	Schema protocol.ServiceSchema `json:"schema"`
 }
@@ -42,13 +45,23 @@ func (s *Server) LoadLocalServices() {
 	for name, svc := range services {
 		var handler compute.ServiceHandler
 		switch svc.Type {
-		case "script", "exec":
+		case protocol.ServiceTypeScript, protocol.ServiceTypeExec:
 			handler = compute.BuildScriptHandler(svc.Exec)
-		case "grpc":
+		case protocol.ServiceTypeGRPC:
 			handler = compute.BuildGRPCHandler(svc.Exec, 10*time.Second)
+		case protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeBidiGRPC, protocol.ServiceTypeBidi, protocol.ServiceTypeBidiStream:
+			if strings.HasPrefix(svc.Exec, "http://") || strings.HasPrefix(svc.Exec, "https://") {
+				handler = compute.BuildGRPCBidiHandler(svc.Exec, 30*time.Second)
+			} else {
+				handler = compute.BuildScriptHandler(svc.Exec)
+			}
 		default:
 			s.Config.Logger.Warn("Unknown service type", "type", svc.Type, "service", name)
 			continue
+		}
+
+		if svc.Schema.Type == "" {
+			svc.Schema.Type = svc.Type
 		}
 
 		if err := s.Compute.RegisterNewService(svc.Schema, handler); err != nil {
@@ -186,74 +199,117 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 			s.Storage.Upsert(outputMeta)
 			s.Storage.SetSubscription(outputName, true)
 
-			dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
-			if err == nil {
-				_ = s.Storage.StoreRemoteBlob(outputMeta, body)
-				_ = body.Close()
-				localPath := s.Storage.GetBlobPath(outputHash)
-				resp.Outputs["result_path"] = localPath
-				for k, v := range resp.Outputs {
-					if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
-						resp.Outputs[k] = localPath
+			if targetPeerID == "" || targetPeerID == s.Config.ID {
+				var rawLocalPath string
+				if p, ok := resp.Outputs["output_path"].(string); ok && !strings.HasPrefix(p, "vfs://") {
+					rawLocalPath = p
+				}
+				if rawLocalPath != "" {
+					if _, err := os.Stat(rawLocalPath); err == nil {
+						if f, err := os.Open(rawLocalPath); err == nil {
+							_ = s.Storage.SaveLocalFile(outputName, f)
+							_ = f.Close()
+						}
 					}
 				}
 			} else {
-				s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
+				dlCtx, dlCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				body, err := s.peerClient.DownloadBlob(dlCtx, targetPeerID, outputHash)
+				if err == nil {
+					_ = s.Storage.StoreRemoteBlob(outputMeta, body)
+					_ = body.Close()
+					localPath := s.Storage.GetBlobPath(outputHash)
+					resp.Outputs["result_path"] = localPath
+					for k, v := range resp.Outputs {
+						if pathStr, ok := v.(string); ok && (strings.HasPrefix(pathStr, "vfs://") || pathStr == outputHash) {
+							resp.Outputs[k] = localPath
+						}
+					}
+				} else {
+					s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
+				}
+				dlCancel()
 			}
-			dlCancel()
 		}
 	}
 
 	return resp, nil
 }
 
-func (s *Server) LocalServiceRunFile(serviceName, inputPath, outputName, paramStr string) (protocol.ServiceTaskResponse, error) {
-	var tempInputName string
-	var inputHash string
-	var inputSize int64
-
-	if outputName == "" {
-		outputName = "output_" + filepath.Base(inputPath)
+func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, chunkCallback func(chunk map[string]any)) error {
+	var payload map[string]any
+	if payloadStr != "" {
+		_ = json.Unmarshal([]byte(payloadStr), &payload)
+	}
+	if payload == nil {
+		payload = make(map[string]any)
 	}
 
-	if _, err := os.Stat(inputPath); err == nil {
-		f, err := os.Open(inputPath)
+	handler, exists := s.Compute.GetHandler(serviceName)
+	if !exists {
+		targetPeerID, _, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+		if err != nil || targetPeerID == "" {
+			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster: %v", serviceName, err)
+		}
+		if targetPeerID == s.Config.ID {
+			return fmt.Errorf("streaming service '%s' is not registered on this node", serviceName)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		streamBody, err := s.peerClient.StreamService(ctx, targetPeerID, serviceName, payload)
 		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to open local input file: %w", err)
+			s.Config.Logger.Error("StreamService from remote peer failed", "peerID", targetPeerID, "service", serviceName, "error", err)
+			return fmt.Errorf("failed to stream service from remote peer '%s': %w", targetPeerID, err)
 		}
-		defer func() { _ = f.Close() }()
+		defer func() { _ = streamBody.Close() }()
 
-		tempInputName = "temp_ocr_" + filepath.Base(inputPath)
-		hashVal, sizeVal, err := s.Storage.SaveLocalFileWithoutNotification(tempInputName, f)
-		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to save input file: %w", err)
+		scanner := bufio.NewScanner(streamBody)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			var chunk map[string]any
+			if err := json.Unmarshal([]byte(line), &chunk); err == nil && chunkCallback != nil {
+				chunkCallback(chunk)
+			}
 		}
-		inputHash = hashVal
-		inputSize = sizeVal
-	} else {
-		meta, ok := s.Storage.GetFileMeta(inputPath)
-		if !ok {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("input file not found on disk or VFS: %s", inputPath)
-		}
-		tempInputName = inputPath
-		inputHash = meta.Hash
-		inputSize = meta.Size
+		return scanner.Err()
 	}
 
-	payload := make(map[string]any)
-	if paramStr != "" {
-		_ = json.Unmarshal([]byte(paramStr), &payload)
-	}
-	payload["input_name"] = tempInputName
-	payload["input_hash"] = inputHash
-	payload["input_size"] = inputSize
-	payload["output_name"] = outputName
-	payload["requester_node_id"] = s.Config.ID
+	in := make(chan map[string]any, 1)
+	out := make(chan map[string]any, 10)
+	errChan := make(chan error, 1)
 
-	payloadBytes, _ := json.Marshal(payload)
-	return s.LocalServiceRun(serviceName, string(payloadBytes))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	go func() {
+		errChan <- handler.ExecuteStream(ctx, in, out)
+	}()
+
+	in <- payload
+	close(in)
+
+	for chunk := range out {
+		if chunkCallback != nil {
+			chunkCallback(chunk)
+		}
+	}
+
+	if err := <-errChan; err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
 }
+
+
 
 func (s *Server) LocalInviteGenerate(validForMinutes int) (string, error) {
 	if validForMinutes <= 0 {
@@ -341,13 +397,14 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 		if exec != "" {
 			localService.Exec = exec
 		}
-		if serviceType != "exec" && localService.Type == "" {
-			localService.Type = serviceType
+		if serviceType != string(protocol.ServiceTypeExec) && localService.Type == "" {
+			localService.Type = protocol.ServiceType(serviceType)
 		}
 	} else {
 		serviceName = name
 		schema := protocol.ServiceSchema{
 			Name:        serviceName,
+			Type:        protocol.ServiceType(serviceType),
 			Description: desc,
 			Parameters:  make(map[string]protocol.ServiceParameter),
 		}
@@ -385,7 +442,7 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 		}
 
 		localService = LocalService{
-			Type:   serviceType,
+			Type:   protocol.ServiceType(serviceType),
 			Exec:   exec,
 			Schema: schema,
 		}

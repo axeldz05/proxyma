@@ -51,7 +51,22 @@ type ServiceRegistry struct {
 	services map[string]registeredService
 }
 
-type ServiceHandler func(ctx context.Context, payload map[string]any) (map[string]any, error)
+type ServiceHandler func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error)
+
+func (h ServiceHandler) Execute(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	if h == nil {
+		return nil, fmt.Errorf("service handler is nil")
+	}
+	return h(ctx, nil, nil, payload)
+}
+
+func (h ServiceHandler) ExecuteStream(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any) error {
+	if h == nil {
+		return fmt.Errorf("service handler is nil")
+	}
+	_, err := h(ctx, in, out, nil)
+	return err
+}
 
 func NewComputeEngine(logger *slog.Logger, pc p2p.PeerClient, workerCount int, id string) *ComputeEngine {
 	engine := &ComputeEngine{
@@ -75,6 +90,10 @@ func (c *ComputeEngine) SetAddress(addr string) {
 
 func (c *ComputeEngine) GetService(serviceName string) (protocol.ServiceSchema, bool) {
 	return c.registry.Get(serviceName)
+}
+
+func (c *ComputeEngine) GetHandler(serviceName string) (ServiceHandler, bool) {
+	return c.registry.GetHandler(serviceName)
 }
 
 func (c *ComputeEngine) ListServices() []string {
@@ -274,7 +293,7 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		outputs, err := handler(ctx, stepPayload)
+		outputs, err := handler.Execute(ctx, stepPayload)
 		cancel()
 
 		if err != nil {

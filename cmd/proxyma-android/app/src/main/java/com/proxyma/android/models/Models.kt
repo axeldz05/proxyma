@@ -26,13 +26,23 @@ data class FormParameter(
     val options: List<String>? = null
 )
 
+data class ServiceUIConfig(
+    val type: String? = null,
+    val vfs_path: String? = null,
+    val local_path: String? = null,
+    val url: String? = null,
+    val widget_type: String? = null
+)
+
 data class ServiceDetail(
     val name: String,
     val description: String?,
+    val isStreaming: Boolean? = false,
     val providerAddress: String?,
     val requiredPermissions: List<String>?,
     val parameters: List<FormParameter>?,
     val outputs: Map<String, ServiceParameter>? = null,
+    val ui: ServiceUIConfig? = null,
     val error: String? = null
 )
 
@@ -41,9 +51,11 @@ data class FileTask(
     val service: String,
     val input: String,
     val output: String,
-    val status: String, // "running", "completed", "failed"
+    val status: String, // "running", "streaming", "completed", "failed"
     val resultPath: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val isStreaming: Boolean = false,
+    val streamOutput: String? = null
 )
 
 data class PipelineStep(

@@ -1,0 +1,18 @@
+{
+    "type": "script",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/ocr/main.py",
+    "schema": {
+        "name": "ocr",
+        "description": "OCR service to optimize PDF files",
+        "parameters": {
+            "input_path": {"type": "string", "required": true},
+            "lang": {"type": "string", "required": false},
+            "force_ocr": {"type": "bool", "required": false}
+        },
+        "outputs": {
+            "status": {"type": "string"},
+            "message": {"type": "string"},
+            "output_path": {"type": "string"}
+        }
+    }
+}

@@ -95,7 +95,7 @@ func GetLocalBlobPath(hash string) string {
 	s := getSrv()
 
 	if s == nil {
-		return filepath.Join(appStorage, "blobs", hash)
+		return filepath.Join(appStorage, hash)
 	}
 	return s.Storage.GetLocalBlobPath(hash)
 }

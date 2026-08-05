@@ -21,7 +21,7 @@ fi
 echo -e "${BOLD}✔ Dispositivo detectado correctamente (Serial: $DEVICE_SERIAL).${NC}"
 
 echo -e "${INFO}[3/5] Recompilando biblioteca Go-mobile (proxyma.aar)...${NC}"
-gomobile bind -o app/libs/proxyma.aar -target=android -androidapi=21 ../proxyma-bind
+gomobile bind -o app/libs/proxyma.aar -target=android -androidapi=21 proxyma/cmd/proxyma-bind
 
 if [ $? -ne 0 ]; then
     echo -e "${ERROR}❌ ERROR: Falló la compilación de la biblioteca Go-mobile.${NC}"

@@ -16,10 +16,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -119,7 +120,8 @@ fun MainLayout(service: ProxymaService?) {
             NavigationTab(1, "Pairing", Icons.Default.Link, "Pairing"),
             NavigationTab(2, "VFS", Icons.Default.FolderOpen, "VFS"),
             NavigationTab(3, "Services", Icons.Default.Terminal, "Services"),
-            NavigationTab(4, "Logs", Icons.Default.Notes, "Logs")
+            NavigationTab(4, "Collab", Icons.Default.Edit, "Collab Editor"),
+            NavigationTab(5, "Logs", Icons.AutoMirrored.Filled.Notes, "Logs")
         )
     }
 
@@ -148,7 +150,8 @@ fun MainLayout(service: ProxymaService?) {
                 1 -> PairingScreen(service, clusterDomain)
                 2 -> VFSScreen(storageDomain)
                 3 -> ServicesScreen(serviceDomain)
-                4 -> LogsScreen(telemetryDomain)
+                4 -> CollabEditorScreen()
+                5 -> LogsScreen(telemetryDomain)
             }
         }
     }

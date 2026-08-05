@@ -4,12 +4,15 @@ import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
@@ -27,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +76,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
 
     var runTargetName by remember { mutableStateOf<String?>(null) }
     var runTargetIsPipeline by remember { mutableStateOf(false) }
+    var runTargetIsStreaming by remember { mutableStateOf(false) }
     var runTargetSpecs by remember { mutableStateOf<List<ServiceParameterSpec>?>(null) }
 
     fun triggerManualDiscovery() {
@@ -331,9 +336,11 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                 } ?: listOf(
                                     ServiceParameterSpec("input_path", "string", required = true, isFileInput = true, isImageInput = true)
                                 )
+                                val isStream = parsedDetails?.isStreaming == true
                                 isRunningOnMainThread {
                                     runTargetName = svcName
                                     runTargetIsPipeline = false
+                                    runTargetIsStreaming = isStream
                                     runTargetSpecs = specs
                                 }
                             }
@@ -353,18 +360,29 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 try {
                     gson.fromJson(serviceDetailJson, ServiceDetail::class.java)
                 } catch (e: Exception) {
-                    ServiceDetail("", "Failed to parse info", "", emptyList(), emptyList(), null, e.message)
+                    ServiceDetail("", "Failed to parse info", false, "", emptyList(), emptyList(), null, null, e.message)
                 }
             }
 
-            ServiceDetailLayout(
-                details = details,
-                fileTasks = fileTasks,
-                onBack = {
-                    selectedService = null
-                    serviceDetailJson = ""
-                }
-            )
+            if (details.ui != null && details.ui.type == "web_app") {
+                ServiceWebContainerScreen(
+                    serviceName = details.name,
+                    uiConfig = details.ui,
+                    onBack = {
+                        selectedService = null
+                        serviceDetailJson = ""
+                    }
+                )
+            } else {
+                ServiceDetailLayout(
+                    details = details,
+                    fileTasks = fileTasks,
+                    onBack = {
+                        selectedService = null
+                        serviceDetailJson = ""
+                    }
+                )
+            }
         }
     }
 
@@ -385,10 +403,24 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                     Text("Status: ${task.status.uppercase()}", color = when (task.status) {
                         "completed" -> MintGreen
                         "failed" -> Color.Red
+                        "streaming" -> VioletSecondary
                         else -> Color.Yellow
                     }, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Input File:\n${task.input}", color = Color.White, fontSize = 14.sp)
-                    Text("Output VFS Name:\n${task.output}", color = Color.White, fontSize = 14.sp)
+                    Text("Input:\n${task.input}", color = Color.White, fontSize = 14.sp)
+                    Text("Output Target:\n${task.output}", color = Color.White, fontSize = 14.sp)
+                    if (task.streamOutput != null) {
+                        Text("Streaming Output Chunks:", color = MintGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .background(Color.Black, shape = RoundedCornerShape(6.dp))
+                                .padding(8.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(task.streamOutput, color = MintGreen, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
                     if (task.resultPath != null) {
                         Text("Result Path:\n${task.resultPath}", color = MintGreen, fontSize = 13.sp)
                     }
@@ -438,42 +470,103 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                 val payloadJson = Gson().toJson(payloadMap)
                 val targetId = runTargetName!!
                 val isPipe = runTargetIsPipeline
+                val isStream = runTargetIsStreaming
                 runTargetName = null
                 runTargetSpecs = null
+                runTargetIsStreaming = false
 
                 val taskID = "task_${System.currentTimeMillis()}"
                 val newTask = FileTask(
                     taskId = taskID,
                     service = targetId,
                     input = payloadJson,
-                    output = "result",
-                    status = "running"
+                    output = if (isStream) "stream" else "result",
+                    status = if (isStream) "streaming" else "running",
+                    isStreaming = isStream
                 )
                 fileTasks.add(0, newTask)
-                context.toast("🚀 Running $targetId...")
+                context.toast(if (isStream) "🌊 Streaming $targetId..." else "🚀 Running $targetId...")
 
-                thread {
-                    val res = if (isPipe) {
-                        proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
-                    } else {
-                        proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
-                    }
-                    val err = getActionError(res)
-                    isRunningOnMainThread {
-                        val index = fileTasks.indexOfFirst { it.taskId == taskID }
-                        if (err.isNotEmpty()) {
-                            context.toast("❌ Execution failed: $err", long = true)
-                            if (index != -1) {
-                                fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
+                if (isPipe) {
+                    thread {
+                        val res = proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
+                        val err = getActionError(res)
+                        isRunningOnMainThread {
+                            val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                            if (err.isNotEmpty()) {
+                                context.toast("❌ Execution failed: $err", long = true)
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
+                                }
+                            } else {
+                                context.toast("✅ Execution completed!")
+                                val resPath = getResultPath(res)
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(
+                                        status = "completed",
+                                        resultPath = if (resPath.isNotEmpty()) resPath else null
+                                    )
+                                }
                             }
-                        } else {
-                            context.toast("✅ Execution completed!")
-                            val resPath = getResultPath(res)
-                            if (index != -1) {
-                                fileTasks[index] = fileTasks[index].copy(
-                                    status = "completed",
-                                    resultPath = if (resPath.isNotEmpty()) resPath else null
-                                )
+                        }
+                    }
+                } else if (isStream) {
+                    proxyma_bind.Proxyma_bind.streamService(targetId, payloadJson, object : proxyma_bind.StreamEventListener {
+                        override fun onChunk(chunkJSON: String) {
+                            isRunningOnMainThread {
+                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                                if (index != -1) {
+                                    val current = fileTasks[index]
+                                    val updatedOutput = if (current.streamOutput.isNullOrEmpty()) {
+                                        chunkJSON
+                                    } else {
+                                        current.streamOutput + "\n" + chunkJSON
+                                    }
+                                    fileTasks[index] = current.copy(streamOutput = updatedOutput)
+                                }
+                            }
+                        }
+
+                        override fun onError(errMsg: String) {
+                            isRunningOnMainThread {
+                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = errMsg)
+                                }
+                                context.toast("❌ Stream error: $errMsg", long = true)
+                            }
+                        }
+
+                        override fun onComplete() {
+                            isRunningOnMainThread {
+                                val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(status = "completed")
+                                }
+                                context.toast("✅ Stream completed!")
+                            }
+                        }
+                    })
+                } else {
+                    thread {
+                        val res = proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)
+                        val err = getActionError(res)
+                        isRunningOnMainThread {
+                            val index = fileTasks.indexOfFirst { it.taskId == taskID }
+                            if (err.isNotEmpty()) {
+                                context.toast("❌ Execution failed: $err", long = true)
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(status = "failed", error = err)
+                                }
+                            } else {
+                                context.toast("✅ Execution completed!")
+                                val resPath = getResultPath(res)
+                                if (index != -1) {
+                                    fileTasks[index] = fileTasks[index].copy(
+                                        status = "completed",
+                                        resultPath = if (resPath.isNotEmpty()) resPath else null
+                                    )
+                                }
                             }
                         }
                     }

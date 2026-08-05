@@ -17,34 +17,38 @@ func startMockUnixSocket(t *testing.T, dir string, handler func(req protocol.Uni
 	require.NoError(t, err)
 
 	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-
-		var req protocol.UnixRequest
-		err = json.NewDecoder(conn).Decode(&req)
-		if err != nil {
-			respBytes, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: err.Error()})
-			_, _ = conn.Write(respBytes)
-			return
-		}
-
-		respData, err := handler(req)
-		var resp protocol.UnixResponse
-		if err != nil {
-			resp = protocol.UnixResponse{Success: false, Error: err.Error()}
-		} else {
-			var raw json.RawMessage
-			if respData != nil {
-				raw, _ = json.Marshal(respData)
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
 			}
-			resp = protocol.UnixResponse{Success: true, Data: raw}
-		}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
 
-		respBytes, _ := json.Marshal(resp)
-		_, _ = conn.Write(respBytes)
+				var req protocol.UnixRequest
+				err = json.NewDecoder(c).Decode(&req)
+				if err != nil {
+					respBytes, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: err.Error()})
+					_, _ = c.Write(respBytes)
+					return
+				}
+
+				respData, err := handler(req)
+				var resp protocol.UnixResponse
+				if err != nil {
+					resp = protocol.UnixResponse{Success: false, Error: err.Error()}
+				} else {
+					var raw json.RawMessage
+					if respData != nil {
+						raw, _ = json.Marshal(respData)
+					}
+					resp = protocol.UnixResponse{Success: true, Data: raw}
+				}
+
+				respBytes, _ := json.Marshal(resp)
+				_, _ = c.Write(respBytes)
+			}(conn)
+		}
 	}()
 
 	return l

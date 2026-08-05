@@ -1,8 +1,10 @@
 package proxyma_bind
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,14 +25,16 @@ type ParameterDetail struct {
 type ServiceDetail struct {
 	Name                string                               `json:"name"`
 	Description         string                               `json:"description"`
+	IsStreaming         bool                                 `json:"isStreaming,omitempty"`
 	ProviderAddress     string                               `json:"providerAddress,omitempty"`
 	RequiredPermissions []string                             `json:"requiredPermissions,omitempty"`
 	Parameters          []ParameterDetail                    `json:"parameters"`
 	Outputs             map[string]protocol.ServiceParameter `json:"outputs,omitempty"`
+	UI                  *protocol.ServiceUIConfig            `json:"ui,omitempty"`
 }
 
 type LocalService struct {
-	Type   string                 `json:"type"`
+	Type   protocol.ServiceType   `json:"type"`
 	Exec   string                 `json:"exec,omitempty"`
 	Schema protocol.ServiceSchema `json:"schema"`
 }
@@ -115,14 +119,53 @@ func GetServiceDetails(name string) string {
 	detail := ServiceDetail{
 		Name:                schema.Name,
 		Description:         schema.Description,
+		IsStreaming:         schema.IsStreaming(),
 		ProviderAddress:     addr,
 		RequiredPermissions: reqPermissions,
 		Parameters:          params,
 		Outputs:             schema.Outputs,
+		UI:                  schema.UI,
 	}
 
 	b, _ := json.Marshal(detail)
 	return string(b)
+}
+
+// GetServiceUIContent retrieves HTML/JS content for a service's delegated UI if available.
+func GetServiceUIContent(name string) string {
+	s := getSrv()
+	var schema protocol.ServiceSchema
+
+	if s != nil {
+		var exists bool
+		schema, exists = s.Compute.GetService(name)
+		if !exists {
+			return ""
+		}
+	} else {
+		data, err := sendUnixSocketCommand(appStorage, "service_detail", map[string]string{
+			"name": name,
+		})
+		if err != nil {
+			return ""
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return ""
+		}
+	}
+
+	if schema.UI == nil {
+		return ""
+	}
+
+	if schema.UI.LocalPath != "" {
+		content, err := os.ReadFile(schema.UI.LocalPath)
+		if err == nil {
+			return string(content)
+		}
+	}
+
+	return ""
 }
 
 // AddService registers a new service configuration locally.
@@ -195,13 +238,14 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 		if exec != "" {
 			localService.Exec = exec
 		}
-		if serviceType != "exec" && localService.Type == "" {
-			localService.Type = serviceType
+		if serviceType != string(protocol.ServiceTypeExec) && localService.Type == "" {
+			localService.Type = protocol.ServiceType(serviceType)
 		}
 	} else {
 		serviceName = name
 		schema := protocol.ServiceSchema{
 			Name:        serviceName,
+			Type:        protocol.ServiceType(serviceType),
 			Description: desc,
 			Parameters:  make(map[string]protocol.ServiceParameter),
 		}
@@ -239,7 +283,7 @@ func AddService(name, serviceType, exec, desc, param, noRequired, schemaFile str
 		}
 
 		localService = LocalService{
-			Type:   serviceType,
+			Type:   protocol.ServiceType(serviceType),
 			Exec:   exec,
 			Schema: schema,
 		}
@@ -305,6 +349,92 @@ func RunService(name string, payloadJson string) string {
 	})
 }
 
+type StreamEventListener interface {
+	OnChunk(chunkJSON string)
+	OnError(errMsg string)
+	OnComplete()
+}
+
+// StreamService runs a streaming task notifying listener of chunks in real time.
+func StreamService(name string, payloadJson string, listener StreamEventListener) string {
+	s := getSrv()
+	if s == nil {
+		go func() {
+			cfg, err := protocol.LoadConfig(appStorage)
+			if err != nil {
+				if listener != nil {
+					listener.OnError(err.Error())
+				}
+				return
+			}
+			sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
+			conn, err := net.Dial("unix", sockPath)
+			if err != nil {
+				if listener != nil {
+					listener.OnError(fmt.Sprintf("daemon is unreachable: %v", err))
+				}
+				return
+			}
+			defer func() { _ = conn.Close() }()
+
+			req := protocol.UnixRequest{
+				Action: "service_stream",
+				Args: map[string]string{
+					"service": name,
+					"payload": payloadJson,
+				},
+			}
+			reqBytes, _ := json.Marshal(req)
+			_, _ = conn.Write(reqBytes)
+
+			scanner := bufio.NewScanner(conn)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "" {
+					continue
+				}
+				var resp protocol.UnixResponse
+				if err := json.Unmarshal([]byte(line), &resp); err == nil {
+					if !resp.Success {
+						if listener != nil {
+							listener.OnError(resp.Error)
+						}
+						return
+					}
+					if listener != nil && resp.Data != nil {
+						listener.OnChunk(string(resp.Data))
+					}
+				}
+			}
+			if listener != nil {
+				listener.OnComplete()
+			}
+		}()
+
+		return `{"status": "streaming_started"}`
+	}
+
+	go func() {
+		err := s.LocalServiceStreamRun(name, payloadJson, func(chunk map[string]any) {
+			if listener != nil {
+				b, _ := json.Marshal(chunk)
+				listener.OnChunk(string(b))
+			}
+		})
+		if err != nil {
+			if listener != nil {
+				listener.OnError(err.Error())
+			}
+		} else {
+			if listener != nil {
+				listener.OnComplete()
+			}
+		}
+	}()
+
+	return `{"status": "streaming_started"}`
+}
+
 // GetTaskStatus queries the status of a specific task.
 func GetTaskStatus(taskID string) string {
 	return dispatchUnixOrLocal("service_status", map[string]string{
@@ -318,17 +448,6 @@ func GetTaskStatus(taskID string) string {
 	})
 }
 
-// RunFileService uploads the local input file if necessary, runs the generic file service, and returns the result.
-func RunFileService(serviceName string, inputPath string, outputName string, paramJson string) string {
-	return dispatchUnixOrLocal("service_run_file", map[string]string{
-		"service": serviceName,
-		"input":   inputPath,
-		"output":  outputName,
-		"param":   paramJson,
-	}, func(s *server.Server) (any, error) {
-		return s.LocalServiceRunFile(serviceName, inputPath, outputName, paramJson)
-	})
-}
 
 // AddPipeline registers a new service pipeline schema.
 func AddPipeline(id string, schemaFile string) string {

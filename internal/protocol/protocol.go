@@ -116,11 +116,45 @@ type UnixResponse struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+type ServiceType string
+
+const (
+	ServiceTypeExec       ServiceType = "exec"
+	ServiceTypeScript     ServiceType = "script"
+	ServiceTypeGRPC       ServiceType = "grpc"
+	ServiceTypeGRPCBidi   ServiceType = "grpc_bidi"
+	ServiceTypeBidiGRPC   ServiceType = "bidi_grpc"
+	ServiceTypeBidi       ServiceType = "bidi"
+	ServiceTypeBidiStream ServiceType = "bidi_stream"
+)
+
+func (t ServiceType) IsStreaming() bool {
+	return t == ServiceTypeGRPCBidi || t == ServiceTypeBidiGRPC || t == ServiceTypeBidi || t == ServiceTypeBidiStream || string(t) == "bidi_stream"
+}
+
+func (t ServiceType) String() string {
+	return string(t)
+}
+
+type ServiceUIConfig struct {
+	Type       string `json:"type,omitempty"`        // "declarative", "web_app", "custom_layout"
+	VFSPath    string `json:"vfs_path,omitempty"`    // VFS path to HTML assets
+	LocalPath  string `json:"local_path,omitempty"`  // Local path to asset folder or file
+	URL        string `json:"url,omitempty"`         // HTTP server URL if self-hosted by service
+	WidgetType string `json:"widget_type,omitempty"` // "rich_text", "graph_editor", "stream_player"
+}
+
 type ServiceSchema struct {
 	Name        string                      `json:"name"`
+	Type        ServiceType                 `json:"type,omitempty"`
 	Description string                      `json:"description"`
 	Parameters  map[string]ServiceParameter `json:"parameters"`
 	Outputs     map[string]ServiceParameter `json:"outputs,omitempty"`
+	UI          *ServiceUIConfig            `json:"ui,omitempty"`
+}
+
+func (s ServiceSchema) IsStreaming() bool {
+	return s.Type.IsStreaming()
 }
 
 type ServiceParameter struct {

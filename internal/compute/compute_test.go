@@ -18,7 +18,7 @@ func TestCannotRegisterDuplicateServices(t *testing.T) {
 
 	schema := protocol.ServiceSchema{Name: "ocr"}
 
-	var mockHandler compute.ServiceHandler = func(context.Context, map[string]any) (map[string]any, error) {
+	var mockHandler compute.ServiceHandler = func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	err1 := registry.Register(schema, mockHandler)
@@ -273,9 +273,9 @@ func TestPipelineStepInputValidation(t *testing.T) {
 		},
 	}
 
-	handler := func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	handler := compute.ServiceHandler(func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "ok"}, nil
-	}
+	})
 	err := engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 

@@ -8,7 +8,7 @@ type ParameterDetail struct {
 	Type         string   `json:"type"` // "string", "int", "bool", "file"
 	Required     bool     `json:"required"`
 	Description  string   `json:"description"`
-	UIHint       string   `json:"uiHint,omitempty"` // "file_picker", "image_picker", "text", "password", "dropdown"
+	UIHint       string   `json:"uiHint,omitempty"` // "file_picker", "image_picker", "audio_picker", "audio_stream", "live_stream", "text", "password", "dropdown"
 	DefaultValue string   `json:"defaultValue,omitempty"`
 	Options      []string `json:"options,omitempty"`
 }
@@ -27,7 +27,7 @@ type ActionDetail struct {
 	Title       string            `json:"title"`
 	Description string            `json:"description"`
 	Parameters  []ParameterDetail `json:"parameters"`
-	OutputType  string            `json:"outputType"` // "table", "text", "json"
+	OutputType  string            `json:"outputType"` // "table", "text", "json", "stream"
 	Columns     []TableColumn     `json:"columns,omitempty"`
 }
 
@@ -234,23 +234,12 @@ var Registry = []DomainDetail{
 			{
 				Name:        "run",
 				Title:       "Run Service",
-				Description: "Dispatch a task execution across the cluster and wait for results",
+				Description: "Execute a compute service (unary, streaming, or file transformation)",
 				OutputType:  "json",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to run"},
-					{Name: "payload", Type: "string", Required: false, Description: "Arguments payload JSON"},
-				},
-			},
-			{
-				Name:        "run_file",
-				Title:       "Run File Service",
-				Description: "Run a compute service that takes an input file and produces an output file",
-				OutputType:  "json",
-				Parameters: []ParameterDetail{
-					{Name: "service", Type: "string", Required: true, Description: "Service name to execute"},
-					{Name: "input", Type: "string", Required: true, Description: "Input file name in VFS or local path to upload", UIHint: "file_picker"},
-					{Name: "output", Type: "string", Required: true, Description: "Output VFS file name for results"},
-					{Name: "param", Type: "string", Required: false, Description: "Additional optional payload parameters in JSON format"},
+					{Name: "inputs", Type: "string", Required: false, Description: "Service inputs in 'key1=val1,key2=val2' format or JSON object"},
+					{Name: "payload", Type: "string", Required: false, Description: "Legacy alias for service inputs in JSON format"},
 				},
 			},
 			{

@@ -147,3 +147,7 @@ func (m *MockPeerClient) NotifyPipelineSchema(ctx context.Context, addr string, 
 	return nil
 }
 
+func (m *MockPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
+	return nil, nil
+}
+

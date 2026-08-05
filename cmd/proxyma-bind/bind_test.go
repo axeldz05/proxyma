@@ -1,6 +1,9 @@
 package proxyma_bind
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -45,4 +48,55 @@ func TestNodeLifecycle(t *testing.T) {
 
 	// Cleanup remaining mock structures if any
 	_ = os.RemoveAll(tempDir)
+}
+
+type mockStreamListener struct {
+	chunks []string
+	done   chan struct{}
+	err    string
+}
+
+func (m *mockStreamListener) OnChunk(chunkJSON string) {
+	m.chunks = append(m.chunks, chunkJSON)
+}
+
+func (m *mockStreamListener) OnError(errMsg string) {
+	m.err = errMsg
+	close(m.done)
+}
+
+func (m *mockStreamListener) OnComplete() {
+	close(m.done)
+}
+
+func TestStreamService_GomobileBinding(t *testing.T) {
+	tempDir := t.TempDir()
+	StartNode(tempDir, true)
+	defer StopNode()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(w)
+		_ = encoder.Encode(map[string]any{"chunk": 1})
+		_ = encoder.Encode(map[string]any{"chunk": 2})
+	}))
+	defer ts.Close()
+
+	AddService("bidi_test", "grpc_bidi", ts.URL, "bidi service test", "", "", "")
+
+	if s := getSrv(); s != nil {
+		s.LoadLocalServices()
+	}
+
+	listener := &mockStreamListener{done: make(chan struct{})}
+	res := StreamService("bidi_test", `{"input":"go"}`, listener)
+	assert.Contains(t, res, "streaming_started")
+
+	select {
+	case <-listener.done:
+		assert.Empty(t, listener.err)
+		assert.Len(t, listener.chunks, 2)
+	case <-time.After(3 * time.Second):
+		t.Fatal("StreamService listener timed out")
+	}
 }

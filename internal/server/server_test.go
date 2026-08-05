@@ -206,9 +206,9 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		Description: "Standard Optical Character Recognition",
 		Parameters:  savedParameters,
 	}
-	var mockHandler compute.ServiceHandler = func(context.Context, map[string]any) (map[string]any, error) {
+	mockHandler := compute.BuildUnaryHandler(func(context.Context, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}
+	})
 	err := svWithService.Compute.RegisterNewService(schema1, mockHandler)
 	require.NoError(t, err)
 
@@ -262,9 +262,9 @@ func TestFileParameterTypePropagatesThroughDiscovery(t *testing.T) {
 			"quality": {Type: "int", Required: false},
 		},
 	}
-	handler := func(context.Context, map[string]any) (map[string]any, error) {
+	handler := compute.BuildUnaryHandler(func(context.Context, map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "ok"}, nil
-	}
+	})
 	require.NoError(t, provider.Compute.RegisterNewService(schema, handler))
 
 	consumer.AddPeer(provider.Config.ID, protocol.AddressRecord{Addresses: []string{provider.Config.Address}})
@@ -292,9 +292,9 @@ func TestFileParameterTypeValidatesAsString(t *testing.T) {
 			"input": {Type: "file", Required: true},
 		},
 	}
-	handler := func(_ context.Context, payload map[string]any) (map[string]any, error) {
+	handler := compute.BuildUnaryHandler(func(_ context.Context, payload map[string]any) (map[string]any, error) {
 		return map[string]any{"received": payload["input"]}, nil
-	}
+	})
 	require.NoError(t, provider.Compute.RegisterNewService(schema, handler))
 
 	// Valid: string path should pass validation (DispatchTask returns nil)
@@ -1480,7 +1480,7 @@ func TestDistributedPipelineExecution(t *testing.T) {
 		Parameters: map[string]protocol.ServiceParameter{
 			"val": {Type: "int", Required: true},
 		},
-	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 		val, ok := payload["val"].(float64)
 		if !ok {
 			if vInt, ok := payload["val"].(int); ok {
@@ -1488,7 +1488,7 @@ func TestDistributedPipelineExecution(t *testing.T) {
 			}
 		}
 		return map[string]any{"result": val * 2}, nil
-	})
+	}))
 	require.NoError(t, err)
 
 	// Step 2: "test/add" (runs on Node C, adds 10)
@@ -1497,7 +1497,7 @@ func TestDistributedPipelineExecution(t *testing.T) {
 		Parameters: map[string]protocol.ServiceParameter{
 			"val": {Type: "int", Required: true},
 		},
-	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 		val, ok := payload["val"].(float64)
 		if !ok {
 			if vInt, ok := payload["val"].(int); ok {
@@ -1505,7 +1505,7 @@ func TestDistributedPipelineExecution(t *testing.T) {
 			}
 		}
 		return map[string]any{"result": val + 10}, nil
-	})
+	}))
 	require.NoError(t, err)
 
 	// 4. Define and register the pipeline schema on Node A
@@ -1604,9 +1604,9 @@ func TestPipelineSchemaValidation(t *testing.T) {
 			"out_str": {Type: "string"},
 			"out_int": {Type: "int"},
 		},
-	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 		return nil, nil
-	})
+	}))
 	require.NoError(t, err)
 
 	err = srv.Compute.RegisterNewService(protocol.ServiceSchema{
@@ -1615,9 +1615,9 @@ func TestPipelineSchemaValidation(t *testing.T) {
 			"in_str": {Type: "string", Required: true},
 			"in_int": {Type: "int", Required: true},
 		},
-	}, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
 		return nil, nil
-	})
+	}))
 	require.NoError(t, err)
 
 	t.Run("Empty ID fails", func(t *testing.T) {
@@ -1742,5 +1742,50 @@ func TestPipelineSchemaValidation(t *testing.T) {
 		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
 		require.NoError(t, err)
 	})
+}
+
+func TestLoadLocalServices_GRPCBidi(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		decoder := json.NewDecoder(r.Body)
+		encoder := json.NewEncoder(w)
+
+		var msg map[string]any
+		if err := decoder.Decode(&msg); err == nil {
+			msg["bidi_processed"] = true
+			_ = encoder.Encode(msg)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	srv := NewServer(t, testutil.DefaultConfig(t, "node-bidi"), nil)
+
+	servicesJSON := fmt.Sprintf(`{
+		"bidi_service": {
+			"type": "grpc_bidi",
+			"exec": "%s",
+			"schema": {
+				"name": "bidi_service",
+				"description": "bidi test service"
+			}
+		}
+	}`, ts.URL)
+
+	servicesFile := filepath.Join(srv.Config.StoragePath, "services.json")
+	require.NoError(t, os.WriteFile(servicesFile, []byte(servicesJSON), 0644))
+
+	srv.LoadLocalServices()
+
+	schema, exists := srv.Compute.GetService("bidi_service")
+	require.True(t, exists)
+	require.Equal(t, "bidi_service", schema.Name)
+
+	resp, err := srv.LocalServiceRun("bidi_service", `{"input":"hello_bidi"}`)
+	require.NoError(t, err)
+	require.Equal(t, "completed", resp.Status)
+	require.Equal(t, "hello_bidi", resp.Outputs["input"])
+	require.Equal(t, true, resp.Outputs["bidi_processed"])
 }
 

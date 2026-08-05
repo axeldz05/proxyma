@@ -1,0 +1,50 @@
+{
+	"id": "ocr-obsidian-pipeline",
+	"version": 1,
+	"steps": [
+		{
+			"id": "step_ocr",
+			"service": "ocr"
+		},
+		{
+			"id": "step_extract",
+			"service": "text/extract"
+		},
+		{
+			"id": "step_save_a",
+			"service": "obsidian/save"
+		}
+	],
+	"connections": [
+		{
+			"from_step": "$initial",
+			"from_port": "input_path",
+			"to_step": "step_ocr",
+			"to_port": "input_path"
+		},
+		{
+			"from_step": "step_ocr",
+			"from_port": "output_path",
+			"to_step": "step_extract",
+			"to_port": "input_path"
+		},
+		{
+			"from_step": "step_extract",
+			"from_port": "text",
+			"to_step": "step_save_a",
+			"to_port": "text"
+		},
+		{
+			"from_step": "$initial",
+			"from_port": "vault_path",
+			"to_step": "step_save_a",
+			"to_port": "vault_path"
+		},
+		{
+			"from_step": "$initial",
+			"from_port": "note_name",
+			"to_step": "step_save_a",
+			"to_port": "note_name"
+		}
+	]
+}

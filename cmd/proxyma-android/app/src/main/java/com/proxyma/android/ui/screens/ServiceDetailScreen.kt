@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,7 +46,7 @@ fun ServiceDetailLayout(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(details.name, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -165,9 +165,9 @@ fun ServiceDetailLayout(
                             onBack()
 
                             thread {
-                                android.util.Log.d("ProxymaUI", "Starting runFileService for: " + details.name)
-                                val resultJson = proxyma_bind.Proxyma_bind.runFileService(details.name, input, output, paramJson)
-                                android.util.Log.d("ProxymaUI", "runFileService returned: " + resultJson)
+                                android.util.Log.d("ProxymaUI", "Starting runService for: " + details.name)
+                                val resultJson = proxyma_bind.Proxyma_bind.runService(details.name, paramJson)
+                                android.util.Log.d("ProxymaUI", "runService returned: " + resultJson)
                                 isRunningOnMainThread {
                                     val map = parseJSONMap(resultJson)
                                     val idx = fileTasks.indexOfFirst { it.taskId == taskId }
@@ -200,9 +200,60 @@ fun ServiceDetailLayout(
                             }
                         } else {
                             val payloadJson = Gson().toJson(inputs)
-                            executeGoSubmit(onComplete, {
-                                proxyma_bind.Proxyma_bind.runService(details.name, payloadJson)
-                            })
+                            if (details.isStreaming == true) {
+                                val taskId = "task_stream_${System.currentTimeMillis()}"
+                                val newTask = FileTask(
+                                    taskId = taskId,
+                                    service = details.name,
+                                    input = payloadJson,
+                                    output = "stream",
+                                    status = "streaming",
+                                    isStreaming = true
+                                )
+                                fileTasks.add(0, newTask)
+                                onBack()
+
+                                proxyma_bind.Proxyma_bind.streamService(details.name, payloadJson, object : proxyma_bind.StreamEventListener {
+                                    override fun onChunk(chunkJSON: String) {
+                                        isRunningOnMainThread {
+                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
+                                            if (idx != -1) {
+                                                val curr = fileTasks[idx]
+                                                val updatedOutput = if (curr.streamOutput.isNullOrEmpty()) {
+                                                    chunkJSON
+                                                } else {
+                                                    curr.streamOutput + "\n" + chunkJSON
+                                                }
+                                                fileTasks[idx] = curr.copy(streamOutput = updatedOutput)
+                                            }
+                                        }
+                                    }
+
+                                    override fun onError(errMsg: String) {
+                                        isRunningOnMainThread {
+                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
+                                            if (idx != -1) {
+                                                fileTasks[idx] = fileTasks[idx].copy(status = "failed", error = errMsg)
+                                            }
+                                            onComplete(Result.failure(Exception(errMsg)))
+                                        }
+                                    }
+
+                                    override fun onComplete() {
+                                        isRunningOnMainThread {
+                                            val idx = fileTasks.indexOfFirst { it.taskId == taskId }
+                                            if (idx != -1) {
+                                                fileTasks[idx] = fileTasks[idx].copy(status = "completed")
+                                            }
+                                            onComplete(Result.success("Streaming completed"))
+                                        }
+                                    }
+                                })
+                            } else {
+                                executeGoSubmit(onComplete, {
+                                    proxyma_bind.Proxyma_bind.runService(details.name, payloadJson)
+                                })
+                            }
                         }
                     }
                 )

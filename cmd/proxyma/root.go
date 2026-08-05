@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -88,6 +90,30 @@ func init() {
 				}
 			}
 
+			if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
+				origHelpFunc := actionCmd.HelpFunc()
+				actionCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+					svcName, _ := c.Flags().GetString("name")
+					if svcName == "" {
+						svcName, _ = c.Flags().GetString("service")
+					}
+					if svcName != "" {
+						payloadVal, _ := c.Flags().GetString("inputs")
+						if payloadVal == "" {
+							payloadVal, _ = c.Flags().GetString("payload")
+						}
+						if payloadVal == "" {
+							payloadVal, _ = c.Flags().GetString("param")
+						}
+						handled, _ := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadVal, actionCopy.Name, true)
+						if handled {
+							return
+						}
+					}
+					origHelpFunc(c, args)
+				})
+			}
+
 			actionCmd.RunE = func(cmd *cobra.Command, args []string) error {
 				_ = loadConfigOrDie(cliStorage)
 				proxyma_bind.SetStoragePath(cliStorage)
@@ -104,6 +130,25 @@ func init() {
 					default:
 						val, _ := cmd.Flags().GetString(param.Name)
 						argsMap[param.Name] = val
+					}
+				}
+
+				if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
+					svcName := argsMap["name"]
+					if svcName == "" {
+						svcName = argsMap["service"]
+					}
+					payloadRaw := argsMap["inputs"]
+					if payloadRaw == "" {
+						payloadRaw = argsMap["payload"]
+					}
+					if payloadRaw == "" {
+						payloadRaw = argsMap["param"]
+					}
+
+					handled, err := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadRaw, actionCopy.Name, false)
+					if handled && err != nil {
+						return err
 					}
 				}
 
@@ -314,8 +359,11 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 				return retErr(fmt.Sprintf("file '%s' not found in VFS topology", name))
 			}
 			localPath := proxyma_bind.GetLocalBlobPath(hash)
-			_ = exec.Command("xdg-open", localPath).Start()
-			return retMsg(fmt.Sprintf("File '%s' fetched on-demand into cache and opened at: %s", name, localPath))
+			openedPath, err := openFileWithSystemDefault(cliStorage, name, localPath)
+			if err != nil {
+				return retErr(fmt.Sprintf("File '%s' fetched into cache at %s, but failed to launch default app: %v", name, localPath, err))
+			}
+			return retMsg(fmt.Sprintf("File '%s' fetched on-demand into cache and opened with system app at: %s", name, openedPath))
 		case "sync":
 			return runAction(proxyma_bind.SyncVFS, "Synchronization triggered successfully.")
 		default:
@@ -427,15 +475,54 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 
 		case "run":
 			serviceName := args["name"]
-			payload := args["payload"]
-			return proxyma_bind.RunService(serviceName, payload)
+			if serviceName == "" {
+				serviceName = args["service"]
+			}
+			inputsRaw := args["inputs"]
+			if inputsRaw == "" {
+				inputsRaw = args["payload"]
+			}
+			if inputsRaw == "" {
+				inputsRaw = args["param"]
+			}
+			if inputsRaw == "" && args["input"] != "" {
+				inputsRaw = "input_path=" + args["input"]
+			}
 
-		case "run_file":
-			serviceName := args["service"]
-			input := args["input"]
-			output := args["output"]
-			param := args["param"]
-			return proxyma_bind.RunFileService(serviceName, input, output, param)
+			payloadJSON := ParseInputsToJSON(inputsRaw)
+
+			schema, _ := GetServiceSchemaLocal(cliStorage, serviceName)
+			if schema != nil && schema.UI != nil && schema.UI.Type == "web_app" {
+				if schema.UI.LocalPath != "" {
+					if _, err := os.Stat(schema.UI.LocalPath); err == nil {
+						if openedPath, err := openFileWithSystemDefault(cliStorage, serviceName+"_web_ui.html", schema.UI.LocalPath); err == nil {
+							fmt.Printf("🌐 Delegated Web UI opened in system default browser: %s\n\n", openedPath)
+						}
+					}
+				}
+			}
+
+			if schema != nil && schema.IsStreaming() {
+				done := make(chan struct{})
+				listener := &cliStreamListener{
+					onChunkFunc: func(chunk string) {
+						fmt.Println(chunk)
+					},
+					onDoneFunc: func() {
+						close(done)
+					},
+				}
+
+				res := proxyma_bind.StreamService(serviceName, payloadJSON, listener)
+				if strings.Contains(res, `"error":`) {
+					return res
+				}
+
+				<-done
+				return retMsg("Streaming completed.")
+			}
+
+			return proxyma_bind.RunService(serviceName, payloadJSON)
 
 		case "status":
 			taskID := args["task_id"]
@@ -531,6 +618,70 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+type cliStreamListener struct {
+	onChunkFunc func(chunk string)
+	onDoneFunc  func()
+}
+
+func (l *cliStreamListener) OnChunk(chunkJSON string) {
+	if l.onChunkFunc != nil {
+		l.onChunkFunc(chunkJSON)
+	}
+}
+
+func (l *cliStreamListener) OnError(errMsg string) {
+	fmt.Fprintf(os.Stderr, "Stream Error: %s\n", errMsg)
+	if l.onDoneFunc != nil {
+		l.onDoneFunc()
+	}
+}
+
+func (l *cliStreamListener) OnComplete() {
+	if l.onDoneFunc != nil {
+		l.onDoneFunc()
+	}
+}
+
+func openFileWithSystemDefault(storageDir string, name string, localBlobPath string) (string, error) {
+	if _, err := os.Stat(localBlobPath); err != nil {
+		return "", fmt.Errorf("local cache file not found: %w", err)
+	}
+
+	previewDir := filepath.Join(storageDir, "preview")
+	_ = os.MkdirAll(previewDir, 0755)
+
+	targetPath := filepath.Join(previewDir, filepath.Base(name))
+	_ = os.Remove(targetPath)
+
+	// Symlink to preserve file extension
+	if err := os.Symlink(localBlobPath, targetPath); err != nil {
+		src, err := os.Open(localBlobPath)
+		if err == nil {
+			dst, err := os.Create(targetPath)
+			if err == nil {
+				_, _ = io.Copy(dst, src)
+				_ = dst.Close()
+			}
+			_ = src.Close()
+		}
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", targetPath)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", targetPath)
+	default:
+		cmd = exec.Command("xdg-open", targetPath)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return targetPath, fmt.Errorf("failed to launch system viewer (%s): %w", cmd.Path, err)
+	}
+	return targetPath, nil
 }
 
 func Execute() {

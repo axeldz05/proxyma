@@ -157,6 +157,11 @@ func TestServiceDaemonCmds(t *testing.T) {
 
 	t.Run("service run", func(t *testing.T) {
 		l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
+			if req.Action == "service_detail" {
+				return protocol.ServiceSchema{
+					Name: "hello-service",
+				}, nil
+			}
 			require.Equal(t, "service_run", req.Action)
 			require.Equal(t, "hello-service", req.Args["service"])
 			require.Equal(t, `{"x":1}`, req.Args["payload"])

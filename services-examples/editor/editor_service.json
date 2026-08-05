@@ -1,0 +1,19 @@
+{
+    "type": "exec",
+    "exec": "/home/drusila/Projects/proxyma/services-examples/editor/proxyma-editor",
+    "schema": {
+        "name": "pipeline/editor",
+        "description": "Interactive TUI Pipeline Schema Editor",
+        "parameters": {
+            "storage": {
+                "type": "string",
+                "required": false
+            }
+        },
+        "outputs": {
+            "status": {
+                "type": "string"
+            }
+        }
+    }
+}

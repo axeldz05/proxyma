@@ -1,0 +1,29 @@
+{
+    "type": "bidi_stream",
+    "exec": "/home/drusila/Projects/proxyma/services-examples/collab_editor/proxyma-collab",
+    "schema": {
+        "name": "collab_editor",
+        "type": "bidi_stream",
+        "description": "Real-Time Collaborative Document Editor Service",
+        "parameters": {
+            "doc_id": {
+                "type": "string",
+                "required": false
+            },
+            "user_name": {
+                "type": "string",
+                "required": false
+            }
+        },
+        "outputs": {
+            "status": {
+                "type": "string"
+            }
+        },
+        "ui": {
+            "type": "web_app",
+            "local_path": "/home/drusila/Projects/proxyma/services-examples/collab_editor/web/index.html",
+            "widget_type": "rich_text"
+        }
+    }
+}

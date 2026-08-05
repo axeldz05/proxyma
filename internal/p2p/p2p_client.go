@@ -31,6 +31,7 @@ type PeerClient interface {
 	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 	RotateTLS(ctx context.Context, peerID string, payload map[string]string) error
+	StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error)
 }
 
 type HTTPPeerClient struct {
@@ -171,5 +172,21 @@ func (c *HTTPPeerClient) RequestProbe(ctx context.Context, targetAddr string, re
 
 func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload map[string]string) error {
 	return doVoid(ctx, c, "POST", peerID, "cluster/rotate", payload, http.StatusOK)
+}
+
+func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
+	bodyReader, contentType, err := prepareBody(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sendRequest(ctx, "POST", peerID, "services/stream?service="+serviceName, bodyReader, contentType)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("unexpected status code from remote stream: %d", resp.StatusCode)
+	}
+	return resp.Body, nil
 }
 

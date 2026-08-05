@@ -153,11 +153,23 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		case "service_remove":
 			respData, actionErr = s.LocalServiceRemove(req.Args["name"])
 
+		case "service_stream":
+			svcName := req.Args["service"]
+			payloadStr := req.Args["payload"]
+			err := s.LocalServiceStreamRun(svcName, payloadStr, func(chunk map[string]any) {
+				chunkBytes, _ := json.Marshal(chunk)
+				chunkResp := protocol.UnixResponse{Success: true, Data: chunkBytes}
+				respB, _ := json.Marshal(chunkResp)
+				_, _ = c.Write(append(respB, '\n'))
+			})
+			if err != nil {
+				errResp, _ := json.Marshal(protocol.UnixResponse{Success: false, Error: err.Error()})
+				_, _ = c.Write(append(errResp, '\n'))
+			}
+			return
+
 		case "service_run":
 			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"])
-
-		case "service_run_file":
-			respData, actionErr = s.LocalServiceRunFile(req.Args["service"], req.Args["input"], req.Args["output"], req.Args["param"])
 
 		case "service_status":
 			taskID := req.Args["task_id"]

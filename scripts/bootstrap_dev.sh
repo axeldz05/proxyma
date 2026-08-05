@@ -14,9 +14,21 @@ sleep 1
 echo "Building proxyma binary..."
 go build -o "$STORAGE_DIR/proxyma" ./cmd/proxyma
 
+SERVICES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/services-examples"
+
+# Sync Python dependencies with uv if available
+if command -v uv >/dev/null 2>&1; then
+    echo "Syncing Python environment in services-examples using uv..."
+    uv sync --project "$SERVICES_DIR" || true
+fi
+
 # Compile editor binary
 echo "Building editor binary..."
-go -C /home/drusila/Projects/proxyma-services/editor build -o proxyma-editor .
+go -C "$SERVICES_DIR/editor" build -o proxyma-editor .
+
+# Compile collab_editor binary
+echo "Building collab_editor binary..."
+go -C "$SERVICES_DIR/collab_editor" build -o proxyma-collab .
 
 # Start the daemon
 echo "Starting Proxyma daemon on port 8080..."
@@ -26,8 +38,9 @@ disown -h $DAEMON_PID 2>/dev/null || true
 
 # Wait for socket
 echo "Waiting for Unix socket at $STORAGE_DIR/proxyma.sock..."
-for i in {1..20}; do
+for i in {1..40}; do
     if [ -S "$STORAGE_DIR/proxyma.sock" ]; then
+        sleep 2
         break
     fi
     sleep 0.5
@@ -38,99 +51,13 @@ if [ ! -S "$STORAGE_DIR/proxyma.sock" ]; then
     exit 1
 fi
 
-# Create dynamic service JSON definitions
-cat << 'EOF' > "$STORAGE_DIR/scripts/ocr_service.json"
-{
-    "type": "script",
-    "exec": "/home/drusila/Projects/proxyma-services/.venv/bin/python /home/drusila/Projects/proxyma-services/ocr_service.py",
-    "schema": {
-        "name": "ocr",
-        "description": "OCR service to optimize PDF files",
-        "parameters": {
-            "input_path": {"type": "string", "required": true},
-            "lang": {"type": "string", "required": false},
-            "force_ocr": {"type": "bool", "required": false}
-        },
-        "outputs": {
-            "status": {"type": "string"},
-            "message": {"type": "string"},
-            "output_path": {"type": "string"}
-        }
-    }
-}
-EOF
-
-cat << 'EOF' > "$STORAGE_DIR/scripts/extract_service.json"
-{
-    "type": "script",
-    "exec": "/home/drusila/Projects/proxyma-services/.venv/bin/python /home/drusila/Projects/proxyma-services/extract_service.py",
-    "schema": {
-        "name": "text/extract",
-        "description": "Extract text from PDF or Image",
-        "parameters": {
-            "input_path": {"type": "string", "required": true}
-        },
-        "outputs": {
-            "status": {"type": "string"},
-            "message": {"type": "string"},
-            "text": {"type": "string"}
-        }
-    }
-}
-EOF
-
-cat << 'EOF' > "$STORAGE_DIR/scripts/obsidian_service.json"
-{
-    "type": "script",
-    "exec": "/home/drusila/Projects/proxyma-services/.venv/bin/python /home/drusila/Projects/proxyma-services/obsidian_service.py",
-    "schema": {
-        "name": "obsidian/save",
-        "description": "Save text to Obsidian note",
-        "parameters": {
-            "text": {"type": "string", "required": true},
-            "vault_path": {
-                "type": "string",
-                "required": false,
-                "default": "/home/drusila/ObsidianVaultCollection/Knowledge",
-                "options": [
-                    "/home/drusila/ObsidianVaultCollection/Knowledge",
-                    "/home/drusila/ObsidianVaultCollection/TORUniverse"
-                ]
-            },
-            "note_name": {"type": "string", "required": false}
-        },
-        "outputs": {
-            "status": {"type": "string"},
-            "message": {"type": "string"},
-            "note_path": {"type": "string"}
-        }
-    }
-}
-EOF
-
-cat << 'EOF' > "$STORAGE_DIR/scripts/editor_service.json"
-{
-    "type": "exec",
-    "exec": "/home/drusila/Projects/proxyma-services/editor/proxyma-editor",
-    "schema": {
-        "name": "pipeline/editor",
-        "description": "Interactive TUI Pipeline Schema Editor",
-        "parameters": {
-            "storage": {"type": "string", "required": false}
-        },
-        "outputs": {
-            "status": {"type": "string"}
-        }
-    }
-}
-EOF
-
-# Register services
+# Register services from services-examples
 echo "Registering services..."
-"$STORAGE_DIR/proxyma" service add --name "$STORAGE_DIR/scripts/ocr_service.json" --storage "$STORAGE_DIR"
-"$STORAGE_DIR/proxyma" service add --name "$STORAGE_DIR/scripts/extract_service.json" --storage "$STORAGE_DIR"
-"$STORAGE_DIR/proxyma" service add --name "$STORAGE_DIR/scripts/obsidian_service.json" --storage "$STORAGE_DIR"
-"$STORAGE_DIR/proxyma" service add --name "$STORAGE_DIR/scripts/editor_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/ocr/ocr_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/extract/extract_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/obsidian/obsidian_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/editor/editor_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/collab_editor/collab_editor_service.json" --storage "$STORAGE_DIR"
 
 # Pre-populate random files
 echo "Pre-populating VFS with sample files..."

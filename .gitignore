@@ -17,3 +17,4 @@ gradle-app.setting
 .classpathbuild/*
 *.aar
 cmd/proxyma-android/data/
+services-examples/uv.lock

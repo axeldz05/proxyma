@@ -1,0 +1,26 @@
+{
+    "type": "script",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/obsidian/main.py",
+    "schema": {
+        "name": "obsidian/save",
+        "description": "Save text to Obsidian note",
+        "parameters": {
+            "text": {"type": "string", "required": true},
+            "vault_path": {
+                "type": "string",
+                "required": false,
+                "default": "/home/drusila/ObsidianVaultCollection/Knowledge",
+                "options": [
+                    "/home/drusila/ObsidianVaultCollection/Knowledge",
+                    "/home/drusila/ObsidianVaultCollection/TORUniverse"
+                ]
+            },
+            "note_name": {"type": "string", "required": false}
+        },
+        "outputs": {
+            "status": {"type": "string"},
+            "message": {"type": "string"},
+            "note_path": {"type": "string"}
+        }
+    }
+}

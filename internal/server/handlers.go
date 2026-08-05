@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,6 +57,7 @@ func (s *Server) MountHandlers() http.Handler {
 
 	mux.HandleFunc("POST /services/bid", s.Compute.HandleServiceBid)
 	mux.HandleFunc("POST /services/submit", s.Compute.HandleServiceSubmit)
+	mux.HandleFunc("POST /services/stream", s.HandleServicesStream)
 	mux.HandleFunc("POST /services/callback", s.Compute.HandleServiceCallback)
 	mux.HandleFunc("POST /services/notify", s.HandleServiceNotify)
 	mux.HandleFunc("GET /services", s.HandleGetServices)
@@ -482,4 +484,35 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
+	serviceName := r.URL.Query().Get("service")
+	if serviceName == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Missing service query parameter")
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		utils.RespondError(w, http.StatusInternalServerError, "Streaming unsupported on connection")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	_ = s.LocalServiceStreamRun(serviceName, string(bodyBytes), func(chunk map[string]any) {
+		chunkBytes, _ := json.Marshal(chunk)
+		_, _ = w.Write(append(chunkBytes, '\n'))
+		flusher.Flush()
+	})
+}
+
 

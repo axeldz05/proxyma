@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proxyma Collab Editor</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0d0f17;
+      --card-bg: #161926;
+      --border-color: #272c40;
+      --text-main: #f0f2f8;
+      --text-muted: #8c93b0;
+      --violet-primary: #7c4dff;
+      --violet-glow: rgba(124, 77, 255, 0.25);
+      --mint-accent: #00e676;
+      --mint-glow: rgba(0, 230, 118, 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      gap: 12px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .title-group h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 20px;
+      background: var(--mint-glow);
+      color: var(--mint-accent);
+      border: 1px solid var(--mint-accent);
+      text-transform: uppercase;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #ff5252;
+      box-shadow: 0 0 8px #ff5252;
+      transition: background-color 0.3s, box-shadow 0.3s;
+    }
+
+    .status-dot.online {
+      background-color: var(--mint-accent);
+      box-shadow: 0 0 8px var(--mint-accent);
+    }
+
+    .controls-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: #090a10;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--violet-primary);
+      box-shadow: 0 0 0 3px var(--violet-glow);
+    }
+
+    button {
+      background: linear-gradient(135deg, #7c4dff 0%, #651fff 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    .users-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      overflow-x: auto;
+    }
+
+    .user-pill {
+      background: rgba(124, 77, 255, 0.15);
+      border: 1px solid var(--violet-primary);
+      color: #d1c4e9;
+      padding: 3px 10px;
+      border-radius: 14px;
+      white-space: nowrap;
+    }
+
+    .editor-container {
+      flex: 1;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: hidden;
+    }
+
+    .editor-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    textarea {
+      flex: 1;
+      width: 100%;
+      background: #090a10;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 14px;
+      color: var(--mint-accent);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--violet-primary);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="title-group">
+      <h1>⚡ Proxyma Collab Editor</h1>
+      <span class="badge">Delegated UI</span>
+    </div>
+    <div class="status-indicator">
+      <div id="statusDot" class="status-dot"></div>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </header>
+
+  <div class="controls-card">
+    <div class="input-row">
+      <input type="text" id="docIdInput" value="shared-doc-1" placeholder="Document ID">
+      <input type="text" id="userNameInput" value="" placeholder="Your Name">
+      <button id="joinBtn" onclick="joinSession()">Join Session</button>
+    </div>
+    <div class="users-bar" id="usersBar">
+      <span>Collaborators:</span>
+      <span style="font-style: italic; color: #5c6280;">Join session to connect</span>
+    </div>
+  </div>
+
+  <div class="editor-container">
+    <div class="editor-label">Shared Document Content (Real-Time Mesh)</div>
+    <textarea id="editorText" placeholder="Join session to start typing collaboratively..." oninput="handleTextInput(this.value)"></textarea>
+  </div>
+
+  <script>
+    let isConnected = false;
+    let docId = "shared-doc-1";
+    let userId = "user_" + Math.floor(Math.random() * 10000);
+    let userName = "User_" + Math.floor(Math.random() * 899 + 100);
+
+    document.getElementById("userNameInput").value = userName;
+
+    function setStatus(connected, msg) {
+      isConnected = connected;
+      const dot = document.getElementById("statusDot");
+      const txt = document.getElementById("statusText");
+      if (connected) {
+        dot.classList.add("online");
+        txt.textContent = msg || "Connected";
+        document.getElementById("joinBtn").textContent = "Connected";
+      } else {
+        dot.classList.remove("online");
+        txt.textContent = msg || "Disconnected";
+        document.getElementById("joinBtn").textContent = "Join Session";
+      }
+    }
+
+    window.onCollabChunk = function(chunkStr) {
+      try {
+        const msg = JSON.parse(chunkStr);
+        if (msg.type === "snapshot" || msg.type === "op") {
+          setStatus(true, "Live Session");
+          if (msg.content !== undefined && msg.content !== null) {
+            document.getElementById("editorText").value = msg.content;
+          }
+          if (msg.users) renderUsers(msg.users);
+        } else if (msg.type === "user_joined" || msg.type === "user_left") {
+          if (msg.users) renderUsers(msg.users);
+        }
+      } catch (e) {
+        console.error("Chunk parse error:", e);
+      }
+    };
+
+    window.onCollabChunk_error = function(err) {
+      setStatus(false, "Error: " + err);
+    };
+
+    window.onCollabChunk_complete = function() {
+      setStatus(false, "Session Ended");
+    };
+
+    function renderUsers(usersMap) {
+      const bar = document.getElementById("usersBar");
+      bar.innerHTML = "<span>Collaborators:</span>";
+      Object.values(usersMap).forEach(u => {
+        const pill = document.createElement("span");
+        pill.className = "user-pill";
+        pill.textContent = "👤 " + (u.user_name || u.user_id);
+        bar.appendChild(pill);
+      });
+    }
+
+    function joinSession() {
+      docId = document.getElementById("docIdInput").value || "shared-doc-1";
+      userName = document.getElementById("userNameInput").value || "User";
+
+      const payload = {
+        type: "join",
+        doc_id: docId,
+        user_id: userId,
+        user_name: userName
+      };
+
+      if (window.ProxymaBridge && typeof window.ProxymaBridge.streamService === "function") {
+        window.ProxymaBridge.streamService("collab_editor", JSON.stringify(payload), "onCollabChunk");
+      } else {
+        // Fallback simulation for standalone browser previews
+        setStatus(true, "Local Sandbox");
+        renderUsers({ [userId]: { user_id: userId, user_name: userName } });
+      }
+    }
+
+    function handleTextInput(newVal) {
+      if (!isConnected) return;
+      const payload = {
+        type: "insert",
+        doc_id: docId,
+        user_name: userName,
+        pos: newVal.length,
+        text: newVal
+      };
+      if (window.ProxymaBridge && typeof window.ProxymaBridge.streamService === "function") {
+        window.ProxymaBridge.streamService("collab_editor", JSON.stringify(payload), "onCollabChunk");
+      }
+    }
+  </script>
+</body>
+</html>
