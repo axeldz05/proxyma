@@ -10,11 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type LocalService struct {
-	Type   string                 `json:"type"`
-	Exec   string                 `json:"exec,omitempty"`
-	Schema protocol.ServiceSchema `json:"schema"`
-}
+type LocalService = protocol.LocalService
 
 func TestServiceAddCmd(t *testing.T) {
 	tempDir := t.TempDir()
@@ -53,7 +49,7 @@ func TestServiceAddCmd(t *testing.T) {
 
 		svc, exists := services["my-script"]
 		require.True(t, exists)
-		require.Equal(t, "script", svc.Type)
+		require.Equal(t, protocol.ServiceTypeScript, svc.Type)
 		require.Equal(t, "python3 main.py", svc.Exec)
 		require.Equal(t, "My test script", svc.Schema.Description)
 
@@ -102,7 +98,7 @@ func TestServiceAddCmd(t *testing.T) {
 
 		svc, exists := services["my-grpc"]
 		require.True(t, exists)
-		require.Equal(t, "grpc", svc.Type)
+		require.Equal(t, protocol.ServiceTypeGRPC, svc.Type)
 
 		tokenParam, ok := svc.Schema.Parameters["token"]
 		require.True(t, ok)

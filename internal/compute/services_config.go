@@ -9,20 +9,17 @@ import (
 	"time"
 
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 )
 
 // LoadServicesMap reads services.json (L1). Missing file yields an empty map.
 func LoadServicesMap(storagePath string) (map[string]protocol.LocalService, error) {
-	servicesFile := ServicesFilePath(storagePath)
 	services := make(map[string]protocol.LocalService)
-	data, err := os.ReadFile(servicesFile)
+	err := utils.ReadJSONFile(ServicesFilePath(storagePath), &services)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return services, nil
 		}
-		return nil, err
-	}
-	if err := json.Unmarshal(data, &services); err != nil {
 		return nil, err
 	}
 	return services, nil
@@ -30,12 +27,7 @@ func LoadServicesMap(storagePath string) (map[string]protocol.LocalService, erro
 
 // SaveServicesMap writes services.json (L1).
 func SaveServicesMap(storagePath string, services map[string]protocol.LocalService) error {
-	servicesFile := ServicesFilePath(storagePath)
-	newData, err := json.MarshalIndent(services, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(servicesFile, newData, 0644)
+	return utils.WriteJSONFile(ServicesFilePath(storagePath), services)
 }
 
 // ServicesFilePath returns the path to services.json under storagePath.

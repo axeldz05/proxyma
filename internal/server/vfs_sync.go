@@ -179,7 +179,7 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		File:   fileInfo,
 		Source: s.Config.Address,
 	}
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault}, func(ctx context.Context, peerID string) error {
+	s.gossipAll(func(ctx context.Context, peerID string) error {
 		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)

@@ -83,14 +83,7 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                     }
                 } else if (actionName == "join") {
                     val formParams = (parameters ?: emptyList()).map { param ->
-                        FormParameter(
-                            name = (param["name"] as? String) ?: "",
-                            type = (param["type"] as? String) ?: "string",
-                            required = (param["required"] as? Boolean) ?: false,
-                            description = (param["description"] as? String) ?: "",
-                            uiHint = param["uiHint"] as? String,
-                            defaultValue = param["defaultValue"] as? String
-                        )
+                        formParameterFrom(param)
                     }
                     DynamicActionCard(
                         actionName = actionName,

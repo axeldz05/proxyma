@@ -25,8 +25,8 @@ import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.executeGoCall
 import com.proxyma.android.utils.isBindError
+import com.proxyma.android.utils.loadServiceDetailsMap
 import com.proxyma.android.utils.parseBindError
-import com.proxyma.android.utils.parseServiceDetail
 import com.proxyma.android.utils.runBindOnBg
 import com.proxyma.android.utils.toast
 
@@ -49,34 +49,17 @@ fun PipelineEditorDialog(
 
     LaunchedEffect(steps.map { it.service }) {
         val uniqueServices = (services + steps.map { it.service }).distinct()
+        loadServiceDetailsMap(uniqueServices) { map ->
+            serviceDetails = map
+        }
         runBindOnBg({
-            val map = mutableMapOf<String, ServiceDetail>()
-            for (svc in uniqueServices) {
-                if (svc.isNotEmpty()) {
-                    val raw = proxyma_bind.Proxyma_bind.getServiceDetails(svc)
-                    val detail = parseServiceDetail(raw)
-                    if (detail != null) {
-                        map[svc] = detail
-                    }
-                }
-            }
             val node = proxyma_bind.Proxyma_bind.getNodeID()
             val rawPeers = proxyma_bind.Proxyma_bind.getPeersJson()
-            Gson().toJson(
-                mapOf(
-                    "details" to map,
-                    "node" to node,
-                    "peers" to rawPeers
-                )
-            )
+            Gson().toJson(mapOf("node" to node, "peers" to rawPeers))
         }) { result ->
             result.onSuccess { json ->
                 try {
                     val root = Gson().fromJson<Map<String, Any>>(json, object : TypeToken<Map<String, Any>>() {}.type)
-                    val detailsJson = Gson().toJson(root["details"])
-                    val detailsType = object : TypeToken<Map<String, ServiceDetail>>() {}.type
-                    val map: Map<String, ServiceDetail> = Gson().fromJson(detailsJson, detailsType) ?: emptyMap()
-                    serviceDetails = map
                     val node = root["node"] as? String ?: ""
                     if (node.isNotEmpty()) {
                         localNodeId = node
@@ -516,9 +499,9 @@ fun AddConnectionDialog(
 
     val availableSrcOutputs: List<Pair<String, String>> = remember(currentFromStepId, fromServiceDetail, connections.toList()) {
         if (currentFromStepId == "\$initial") {
-            val initDefaults = listOf("input_name", "input_hash", "input_size", "input_path", "vault_path_a", "note_name")
-            val usedInitConns = connections.filter { it.from_step == "\$initial" }.map { it.from_port }
-            (initDefaults + usedInitConns).distinct().map { Pair(it, "initial input") }
+            // Ports come only from existing $initial connections — never invent service-specific names.
+            connections.filter { it.from_step == "\$initial" }.map { it.from_port }.distinct()
+                .map { Pair(it, "initial input") }
         } else {
             val outs = fromServiceDetail?.outputs
             if (outs != null) {

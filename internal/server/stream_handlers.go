@@ -11,26 +11,24 @@ import (
 )
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.ServiceNotification](w, r)
-	if !ok {
-		return
-	}
-
-	s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
-
-	w.WriteHeader(http.StatusOK)
+	decodeNotifyOK(w, r, func(req protocol.ServiceNotification) {
+		s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
+	})
 }
 
 func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.PipelineNotification](w, r)
+	decodeNotifyOK(w, r, func(req protocol.PipelineNotification) {
+		s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
+		_ = s.applyPipelineAction(req.Schema, req.Action)
+	})
+}
+
+func decodeNotifyOK[T any](w http.ResponseWriter, r *http.Request, fn func(T)) {
+	req, ok := utils.DecodeJSONOrError[T](w, r)
 	if !ok {
 		return
 	}
-
-	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
-
-	_ = s.applyPipelineAction(req.Schema, req.Action)
-
+	fn(req)
 	w.WriteHeader(http.StatusOK)
 }
 

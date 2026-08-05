@@ -377,9 +377,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 				return
 			case sender := <-qm.PacketConn.PingCh:
 				if sender == peerID {
-					for range 3 {
-						_, _ = qm.PacketConn.WriteTo(pingPayload, rUDPAddr)
-					}
+					BurstPings(qm.PacketConn, rUDPAddr, qm.LocalID, 3, 0)
 					successCh <- true
 					return
 				}

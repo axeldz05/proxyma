@@ -122,3 +122,15 @@ func firstPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Conte
 	}
 	return zero, false
 }
+
+// gossipToPeer runs fn against one peer with PeerRPCDefault timeout (L2).
+func (s *Server) gossipToPeer(peerID string, fn func(ctx context.Context, peerID string) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	defer cancel()
+	_ = s.callPeer(ctx, peerID, fn)
+}
+
+// gossipAll fans out fn to all peers in parallel with PeerRPCDefault (L2).
+func (s *Server) gossipAll(fn func(ctx context.Context, peerID string) error) {
+	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true}, fn)
+}

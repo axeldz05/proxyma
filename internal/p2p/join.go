@@ -49,7 +49,6 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 		ID:      nodeID,
 		Address: localAddr,
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
 
 	var resp *http.Response
 	var errs []string
@@ -59,15 +58,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	for _, addr := range payload.Addresses {
 		urlStr := fmt.Sprintf("%s/cluster/join", addr)
 		logFn(fmt.Sprintf("Attempting connection to address: %s", urlStr), nil)
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bytes.NewReader(bodyBytes))
-		if reqErr != nil {
-			logFn(fmt.Sprintf("Request creation failed for %s", addr), reqErr)
-			errs = append(errs, fmt.Sprintf("- [%s]: Request creation failed: %v", addr, reqErr))
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		r, doErr := client.Do(req)
+		r, doErr := PostJSONAbsolute(ctx, client, urlStr, reqBody)
 		if doErr != nil {
 			logFn(fmt.Sprintf("Connection/TLS error to %s", addr), doErr)
 			errs = append(errs, fmt.Sprintf("- [%s]: Connection/TLS error: %v", addr, doErr))
@@ -89,8 +80,9 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	if resp == nil && payload.RelayAddr != "" && payload.SponsorID != "" {
 		logFn(fmt.Sprintf("Direct connections failed. Attempting Relay-assisted join via %s to target sponsor %s...", payload.RelayAddr, payload.SponsorID), nil)
 
+		bodyBytes, _ := json.Marshal(reqBody)
 		relayReq := protocol.RelayRequest{
-			ReqID:  fmt.Sprintf("join-%d", time.Now().UnixNano()),
+			ReqID:  generateSecureReqID(),
 			Target: payload.SponsorID,
 			Method: http.MethodPost,
 			Path:   "/cluster/join",

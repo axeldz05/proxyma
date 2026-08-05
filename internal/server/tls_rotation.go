@@ -67,7 +67,7 @@ func (s *Server) RotateCAAndResignPeers() {
 	}
 
 	// 3. Loop over all other registered peers and re-sign their certificates
-	caCertPEM, err := os.ReadFile(s.Config.CAPath)
+	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
 	if err != nil {
 		s.Config.Logger.Error("Failed to read new CA cert", "error", err)
 		return

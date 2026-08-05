@@ -257,50 +257,44 @@ func (se *StorageEngine) CleanupTempFiles() {
 // deleteBlobIfOrphan removes the physical blob when no VFS refs remain.
 // If subscribedOnly, only subscribed name refs count.
 func (se *StorageEngine) deleteBlobIfOrphan(hash string, subscribedOnly bool) error {
-	var refs int
-	if subscribedOnly {
-		refs = se.countSubscribedHashReferences(hash)
-	} else {
-		refs = se.countHashReferences(hash)
-	}
-	if refs > 0 {
+	if se.countHashRefs(hash, subscribedOnly) > 0 {
 		return nil
 	}
 	return se.physical.DeleteBlob(hash)
 }
 
-func (se *StorageEngine) countHashReferences(hash string) int {
+func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) int {
 	refCount := 0
-	snapshot := se.vfs.Snapshot()
-	for _, entry := range snapshot {
-		if !entry.Deleted && entry.Hash == hash {
-			refCount++
+	for name, entry := range se.vfs.Snapshot() {
+		if entry.Deleted || entry.Hash != hash {
+			continue
 		}
+		if subscribedOnly && !se.IsSubscribed(name) {
+			continue
+		}
+		refCount++
 	}
 	return refCount
 }
 
-func (se *StorageEngine) countSubscribedHashReferences(hash string) int {
-	refCount := 0
-	snapshot := se.vfs.Snapshot()
-	for name, entry := range snapshot {
-		if !entry.Deleted && entry.Hash == hash && se.IsSubscribed(name) {
-			refCount++
-		}
-	}
-	return refCount
+func (se *StorageEngine) boltPutKeyed(bucket, key string, v any) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		return boltPutJSON(tx, bucket, key, v)
+	})
+}
+
+func (se *StorageEngine) boltDeleteKeyed(bucket, key string) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		return boltDelete(tx, bucket, key)
+	})
 }
 
 func (se *StorageEngine) SavePeer(peerID string, record protocol.AddressRecord) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		return boltPutJSON(tx, "peers", peerID, record)
-	})
+	return se.boltPutKeyed("peers", peerID, record)
 }
 
 func (se *StorageEngine) DeletePeer(peerID string) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		return boltDelete(tx, "peers", peerID)
-	})
+	return se.boltDeleteKeyed("peers", peerID)
 }
 
 func (se *StorageEngine) LoadPeers() (map[string]protocol.AddressRecord, error) {
@@ -315,19 +309,13 @@ func (se *StorageEngine) Close() error {
 }
 
 func (se *StorageEngine) SavePipelineSchema(schema protocol.PipelineSchema) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		return boltPutJSON(tx, "pipeline_schemas", schema.ID, schema)
-	})
+	return se.boltPutKeyed("pipeline_schemas", schema.ID, schema)
 }
 
 func (se *StorageEngine) DeletePipelineSchema(id string) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		return boltDelete(tx, "pipeline_schemas", id)
-	})
+	return se.boltDeleteKeyed("pipeline_schemas", id)
 }
 
 func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
 	return boltLoadMapJSON[protocol.PipelineSchema](se.subscriptions, "pipeline_schemas")
 }
-
-

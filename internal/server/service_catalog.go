@@ -142,15 +142,13 @@ func (s *Server) notifyService(ctx context.Context, peerID string, schema protoc
 }
 
 func (s *Server) NotifyServiceToPeer(peerID string, schema protocol.ServiceSchema, action string) {
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
-	defer cancel()
-	_ = s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+	s.gossipToPeer(peerID, func(ctx context.Context, peerID string) error {
 		return s.notifyService(ctx, peerID, schema, action)
 	})
 }
 
 func (s *Server) NotifyService(schema protocol.ServiceSchema, action string) {
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true}, func(ctx context.Context, peerID string) error {
+	s.gossipAll(func(ctx context.Context, peerID string) error {
 		return s.notifyService(ctx, peerID, schema, action)
 	})
 }

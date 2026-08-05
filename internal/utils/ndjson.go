@@ -63,18 +63,35 @@ func PumpJSONDecode(ctx context.Context, r io.Reader, out chan<- map[string]any)
 
 // ForEachNDJSON scans r line-by-line, unmarshals each non-empty line, and calls fn (L1).
 func ForEachNDJSON(r io.Reader, fn func(chunk map[string]any) error) error {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
+	var fnErr error
+	err := ScanNDJSON(r, func(line []byte) bool {
 		var chunk map[string]any
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			continue
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			return true
 		}
 		if err := fn(chunk); err != nil {
-			return err
+			fnErr = err
+			return false
+		}
+		return true
+	})
+	if fnErr != nil {
+		return fnErr
+	}
+	return err
+}
+
+// ScanNDJSON scans non-empty NDJSON lines; onLine returns false to stop (L1).
+func ScanNDJSON(r io.Reader, onLine func(line []byte) bool) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		cp := append([]byte(nil), line...)
+		if !onLine(cp) {
+			return nil
 		}
 	}
 	return scanner.Err()

@@ -224,11 +224,9 @@ func (p ServiceParameter) CoerceDefault(paramName string) any {
 	if p.Default != "" {
 		switch p.Type {
 		case ParamTypeBool:
-			return p.Default == "true" || p.Default == "1"
+			return ParseDefaultBool(p.Default)
 		case ParamTypeInt:
-			var val int
-			_, _ = fmt.Sscanf(p.Default, "%d", &val)
-			return val
+			return ParseDefaultInt(p.Default)
 		case ParamTypeFloat:
 			var val float64
 			_, _ = fmt.Sscanf(p.Default, "%f", &val)
@@ -339,6 +337,15 @@ func VFSURI(hash string) string {
 // IsVFSURI reports whether s uses the vfs:// scheme.
 func IsVFSURI(s string) bool {
 	return strings.HasPrefix(s, VFSURIPrefix)
+}
+
+// IsStageableLocalPath reports whether v is a non-empty local filesystem path (not vfs://).
+func IsStageableLocalPath(v any) (path string, ok bool) {
+	pathStr, ok := v.(string)
+	if !ok || pathStr == "" || IsVFSURI(pathStr) {
+		return "", false
+	}
+	return pathStr, true
 }
 
 // ParseVFSURI extracts the blob hash from a vfs:// URI. ok is false if not a VFS URI.

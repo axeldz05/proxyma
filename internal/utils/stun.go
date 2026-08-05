@@ -14,37 +14,12 @@ func IsPrivateOrCGNATIP(ipStr string) bool {
 	if ip == nil {
 		return false
 	}
+	if ip.IsPrivate() || ip.IsLoopback() {
+		return true
+	}
+	// RFC 6598 CGNAT 100.64.0.0/10 — not covered by net.IP.IsPrivate.
 	ipv4 := ip.To4()
-	if ipv4 == nil {
-		// For the scope of this project, we prioritize IPv4. If it's IPv6, return false (or check IPv6 local/private if needed).
-		return false
-	}
-
-	// Loopback: 127.0.0.0/8
-	if ipv4[0] == 127 {
-		return true
-	}
-
-	// RFC 1918 Private Ranges:
-	// 10.0.0.0/8
-	if ipv4[0] == 10 {
-		return true
-	}
-	// 172.16.0.0/12 (172.16.0.0 to 172.31.255.255)
-	if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
-		return true
-	}
-	// 192.168.0.0/16
-	if ipv4[0] == 192 && ipv4[1] == 168 {
-		return true
-	}
-
-	// RFC 6598 CGNAT Range: 100.64.0.0/10 (100.64.0.0 to 100.127.255.255)
-	if ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127 {
-		return true
-	}
-
-	return false
+	return ipv4 != nil && ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127
 }
 
 // parseSTUNResponse validates a STUN response and extracts the mapped IP/port.
@@ -127,6 +102,25 @@ func buildSTUNRequest() ([]byte, []byte, error) {
 	return req, txID, nil
 }
 
+func stunExchange(setDeadline func(time.Time) error, write func([]byte) error, read func([]byte) (int, error), timeout time.Duration) (string, int, error) {
+	if timeout > 0 {
+		_ = setDeadline(time.Now().Add(timeout))
+	}
+	req, txID, err := buildSTUNRequest()
+	if err != nil {
+		return "", 0, err
+	}
+	if err := write(req); err != nil {
+		return "", 0, fmt.Errorf("failed to write STUN request: %w", err)
+	}
+	resp := make([]byte, 1024)
+	n, err := read(resp)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to read STUN response: %w", err)
+	}
+	return parseSTUNResponse(resp, n, txID)
+}
+
 // GetExternalIPPort queries the STUN server to discover the external/public IP and port.
 func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, error) {
 	addr, err := net.ResolveUDPAddr("udp", stunServer)
@@ -140,26 +134,11 @@ func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, e
 	}
 	defer func() { _ = conn.Close() }()
 
-	if timeout > 0 {
-		_ = conn.SetDeadline(time.Now().Add(timeout))
-	}
-
-	req, txID, err := buildSTUNRequest()
-	if err != nil {
-		return "", 0, err
-	}
-
-	if _, err := conn.Write(req); err != nil {
-		return "", 0, fmt.Errorf("failed to write STUN request: %w", err)
-	}
-
-	resp := make([]byte, 1024)
-	n, err := conn.Read(resp)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to read STUN response: %w", err)
-	}
-
-	return parseSTUNResponse(resp, n, txID)
+	return stunExchange(conn.SetDeadline,
+		func(b []byte) error { _, err := conn.Write(b); return err },
+		func(b []byte) (int, error) { return conn.Read(b) },
+		timeout,
+	)
 }
 
 // GetExternalUDPListener binds a local UDP socket, queries the STUN server,
@@ -184,32 +163,20 @@ func GetExternalUDPListener(stunServer string, timeout time.Duration) (string, i
 		}
 	}()
 
-	if timeout > 0 {
-		_ = conn.SetDeadline(time.Now().Add(timeout))
-	}
-
-	req, txID, err := buildSTUNRequest()
+	ip, port, err := stunExchange(conn.SetDeadline,
+		func(b []byte) error { _, err := conn.WriteTo(b, addr); return err },
+		func(b []byte) (int, error) {
+			n, _, err := conn.ReadFrom(b)
+			return n, err
+		},
+		timeout,
+	)
 	if err != nil {
 		return "", 0, nil, err
-	}
-
-	if _, err := conn.WriteTo(req, addr); err != nil {
-		return "", 0, nil, fmt.Errorf("failed to write STUN request: %w", err)
-	}
-
-	resp := make([]byte, 1024)
-	n, _, err := conn.ReadFrom(resp)
-	if err != nil {
-		return "", 0, nil, fmt.Errorf("failed to read STUN response: %w", err)
 	}
 
 	// Clear deadline so the socket can be reused
 	_ = conn.SetDeadline(time.Time{})
-
-	ip, port, err := parseSTUNResponse(resp, n, txID)
-	if err != nil {
-		return "", 0, nil, err
-	}
 
 	success = true
 	return ip, port, conn, nil

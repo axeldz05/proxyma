@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.proxyma.android.models.FormParameter
 import java.io.File
 import java.io.FileOutputStream
 import java.text.DecimalFormat
@@ -134,24 +135,8 @@ fun isBindError(res: String): Boolean = parseBindError(res).isNotEmpty()
 
 fun getActionMessage(res: String): String = parseJSONField(res, "message")
 
-fun getResultPath(res: String): String {
-    val map = parseJSONMap(res)
-    val outputs = map["outputs"] as? Map<String, Any>
-    if (outputs != null) {
-        // Prefer canonical result_path; fall back to output_path then output_hash→local blob.
-        val resultPath = outputs["result_path"] as? String
-            ?: outputs["output_path"] as? String
-        if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
-            return resultPath
-        }
-        val hash = outputs["output_hash"] as? String
-        if (!hash.isNullOrEmpty()) {
-            val local = proxyma_bind.Proxyma_bind.getLocalBlobPath(hash)
-            if (local.isNotEmpty()) return local
-        }
-    }
-    return ""
-}
+fun getResultPath(res: String): String =
+    proxyma_bind.Proxyma_bind.resolveTaskResultPath(res)
 
 fun updateFileTask(
     fileTasks: MutableList<com.proxyma.android.models.FileTask>,
@@ -328,25 +313,58 @@ fun executeGoCall(
     action: () -> String,
     onSuccess: ((String) -> Unit)? = null
 ) {
-    onStart?.invoke()
-    runBindOnBg(action) { result ->
-        onComplete?.invoke()
-        result.fold(
-            onSuccess = { res -> onSuccess?.invoke(res) },
-            onFailure = { err -> context.toast(err.message ?: "Error", long = true) }
-        )
-    }
+    executeGoSubmit(
+        onComplete = { result ->
+            onComplete?.invoke()
+            result.onFailure { err -> context.toast(err.message ?: "Error", long = true) }
+        },
+        action = action,
+        onSuccess = onSuccess,
+        onStart = onStart
+    )
 }
 
 fun executeGoSubmit(
     onComplete: (Result<String>) -> Unit,
     action: () -> String,
-    onSuccess: ((String) -> Unit)? = null
+    onSuccess: ((String) -> Unit)? = null,
+    onStart: (() -> Unit)? = null
 ) {
+    onStart?.invoke()
     runBindOnBg(action) { result ->
         result.onSuccess { res -> onSuccess?.invoke(res) }
         onComplete(result)
     }
+}
+
+/** Map a uischema/bind parameter map into FormParameter (L2). */
+fun formParameterFrom(param: Map<String, Any?>, nameOverride: String? = null): FormParameter {
+    return FormParameter(
+        name = nameOverride ?: (param["name"] as? String) ?: "",
+        type = (param["type"] as? String) ?: "string",
+        required = (param["required"] as? Boolean) ?: false,
+        description = (param["description"] as? String) ?: "",
+        uiHint = param["uiHint"] as? String,
+        defaultValue = param["defaultValue"] as? String,
+        options = param["options"] as? List<String>
+    )
+}
+
+/** Build FormParameter from an existing FormParameter / ServiceDetail param (L2). */
+fun formParameterFrom(
+    src: FormParameter?,
+    name: String,
+    fallbackType: String = "string"
+): FormParameter {
+    return FormParameter(
+        name = name,
+        type = src?.type ?: fallbackType,
+        required = src?.required ?: false,
+        description = src?.description ?: "",
+        uiHint = src?.uiHint,
+        defaultValue = src?.defaultValue,
+        options = src?.options
+    )
 }
 
 fun enqueueFileTask(
@@ -394,10 +412,33 @@ fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
     }
 }
 
+/** L1: sync ServiceDetail fetch via bind (call from bg thread). */
+fun fetchServiceDetail(name: String): com.proxyma.android.models.ServiceDetail? {
+    val raw = proxyma_bind.Proxyma_bind.getServiceDetails(name)
+    if (isBindError(raw)) return null
+    return parseServiceDetail(raw)
+}
+
 /** Background load of ServiceDetail via bind (L3). */
 fun loadServiceDetail(name: String, onResult: (com.proxyma.android.models.ServiceDetail?) -> Unit) {
     runBindOnBg({ proxyma_bind.Proxyma_bind.getServiceDetails(name) }) { result ->
         onResult(result.getOrNull()?.let { parseServiceDetail(it) })
+    }
+}
+
+/** Background batch load of ServiceDetail map (L3). */
+fun loadServiceDetailsMap(
+    names: List<String>,
+    onResult: (Map<String, com.proxyma.android.models.ServiceDetail>) -> Unit
+) {
+    thread {
+        val map = mutableMapOf<String, com.proxyma.android.models.ServiceDetail>()
+        for (svc in names.distinct()) {
+            if (svc.isNotEmpty()) {
+                fetchServiceDetail(svc)?.let { map[svc] = it }
+            }
+        }
+        isRunningOnMainThread { onResult(map) }
     }
 }
 

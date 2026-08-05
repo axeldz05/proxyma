@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"time"
 )
 
@@ -53,20 +53,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 }
 
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
-	if req.Payload != nil {
-		for k, v := range req.Payload {
-			pathStr, ok := v.(string)
-			if !ok || pathStr == "" || protocol.IsVFSURI(pathStr) {
-				continue
-			}
-			if fi, err := os.Stat(pathStr); err == nil && !fi.IsDir() {
-				hash, _, err := s.Storage.StageLocalFile(pathStr)
-				if err == nil {
-					req.Payload[k] = protocol.VFSURI(hash)
-				}
-			}
-		}
-	}
+	utils.RewriteLocalFilePaths(req.Payload, s.Storage.StageLocalFile, false)
 
 	s.Compute.RegisterOutgoingTask(req)
 

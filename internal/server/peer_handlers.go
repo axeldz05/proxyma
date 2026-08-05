@@ -90,25 +90,27 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
 }
 
-func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePeerIDAction(w http.ResponseWriter, r *http.Request, logMsg, respMsg string, after func(id string)) {
 	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
 	if !ok {
 		return
 	}
-	s.RemovePeer(req.ID)
-	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
-	go s.RotateCAAndResignPeers()
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
+	after(req.ID)
+	s.Config.Logger.Info(logMsg, "peer_id", req.ID)
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": respMsg})
+}
+
+func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
+	s.handlePeerIDAction(w, r, "Peer left cluster", "Peer successfully removed", func(id string) {
+		s.RemovePeer(id)
+		go s.RotateCAAndResignPeers()
+	})
 }
 
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
-	if !ok {
-		return
-	}
-	s.SetPeerOffline(req.ID, nil)
-	s.Config.Logger.Info("Peer went offline", "peer_id", req.ID)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer marked as offline"})
+	s.handlePeerIDAction(w, r, "Peer went offline", "Peer marked as offline", func(id string) {
+		s.SetPeerOffline(id, nil)
+	})
 }
 func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
 	req, ok := utils.DecodeJSONOrError[protocol.ProbeRequest](w, r)

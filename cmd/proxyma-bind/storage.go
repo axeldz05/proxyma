@@ -83,12 +83,35 @@ func DeleteFile(name string) string {
 
 // GetLocalBlobPath returns absolute local file path for open operations.
 func GetLocalBlobPath(hash string) string {
-	s := getSrv()
-
-	if s == nil {
-		return filepath.Join(appStorage, hash)
+	if s := getSrv(); s != nil {
+		return s.Storage.GetBlobPath(hash)
 	}
-	return s.Storage.GetBlobPath(hash)
+	// Offline: same CAS layout as physical.Storage (storagePath/hash).
+	return filepath.Join(appStorage, hash)
+}
+
+// ResolveTaskResultPath extracts a local filesystem path from a run/stream JSON response (L2).
+// Uses protocol.ResultLocalPath, then output_hash → GetLocalBlobPath.
+func ResolveTaskResultPath(runJSON string) string {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(runJSON), &envelope); err != nil {
+		return ""
+	}
+	outputs, _ := envelope["outputs"].(map[string]any)
+	if outputs == nil {
+		// Flat response with outputs at top level, or nested under data.
+		if nested, ok := envelope["data"].(map[string]any); ok {
+			outputs, _ = nested["outputs"].(map[string]any)
+		}
+	}
+	if path := protocol.ResultLocalPath(outputs); path != "" {
+		return path
+	}
+	hash, _, _ := protocol.OutputHashFromOutputs(outputs)
+	if hash == "" {
+		return ""
+	}
+	return GetLocalBlobPath(hash)
 }
 
 // ResolveLocalBlob fetches a VFS file on demand and returns its local blob path (L2).

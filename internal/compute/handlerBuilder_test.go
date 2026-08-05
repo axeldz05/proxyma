@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildGRPCBidiStreamHandler_Success(t *testing.T) {
+func TestBuildGRPCBidiHandler_Success(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "application/x-ndjson", r.Header.Get("Content-Type"))
@@ -40,7 +40,7 @@ func TestBuildGRPCBidiStreamHandler_Success(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiStreamHandler(ts.URL, 5*time.Second)
+	handler := BuildGRPCBidiHandler(ts.URL, 5*time.Second)
 
 	in := make(chan map[string]any, 2)
 	out := make(chan map[string]any, 2)
@@ -112,7 +112,7 @@ func TestBuildGRPCBidiHandler_UnaryAdaptation(t *testing.T) {
 	require.Equal(t, "ok", resp["status"])
 }
 
-func TestBuildGRPCBidiStreamHandler_ContextCancellation(t *testing.T) {
+func TestBuildGRPCBidiHandler_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func TestBuildGRPCBidiStreamHandler_ContextCancellation(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiStreamHandler(ts.URL, 0)
+	handler := BuildGRPCBidiHandler(ts.URL, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -146,7 +146,7 @@ func TestBuildGRPCBidiStreamHandler_ContextCancellation(t *testing.T) {
 	}
 }
 
-func TestBuildGRPCBidiStreamHandler_ServerError(t *testing.T) {
+func TestBuildGRPCBidiHandler_ServerError(t *testing.T) {
 	t.Parallel()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +154,7 @@ func TestBuildGRPCBidiStreamHandler_ServerError(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiStreamHandler(ts.URL, 5*time.Second)
+	handler := BuildGRPCBidiHandler(ts.URL, 5*time.Second)
 
 	in := make(chan map[string]any, 1)
 	out := make(chan map[string]any, 1)

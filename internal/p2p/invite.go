@@ -3,7 +3,6 @@ package p2p
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -25,20 +24,19 @@ type InvitePayload struct {
 	RelayAddr string   `json:"relay_addr,omitempty"`
 }
 
-func getLocalIPs() ([]net.IP, error) {
-	return utils.GetRoutableLocalIPs()
-}
-
 func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {
 	caBytes, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return "", "", fmt.Errorf("could not read CA cert: %w", err)
 	}
-	caDER, err := PEMCertDER(caBytes)
+	hashHex, err := CAHashFromPEM(caBytes)
 	if err != nil {
 		return "", "", err
 	}
-	hash := sha256.Sum256(caDER)
+	hash, err := hex.DecodeString(hashHex)
+	if err != nil || len(hash) != 32 {
+		return "", "", fmt.Errorf("invalid CA hash from PEM")
+	}
 
 	// Generate a 32-byte random secret
 	secretBytes := make([]byte, 32)
@@ -69,7 +67,7 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	}
 
 	// 2. Discover local interface IPs
-	localIPs, _ := getLocalIPs()
+	localIPs, _ := utils.GetRoutableLocalIPs()
 	for _, lip := range localIPs {
 		dup := false
 		for _, ip := range ips {
@@ -103,7 +101,7 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	//   If Relay Info: 1 byte SponsorID len + N bytes SponsorID + 1 byte RelayAddr len + M bytes RelayAddr
 	var buf bytes.Buffer
 	buf.WriteByte(2) // Version 2
-	buf.Write(hash[:])
+	buf.Write(hash)
 	buf.Write(secretBytes)
 
 	portBytes := make([]byte, 2)

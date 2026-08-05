@@ -36,20 +36,19 @@ func resolvePayloadRaw(args map[string]string) string {
 }
 
 func resolveServiceNameFromFlags(c *cobra.Command) string {
-	name, _ := c.Flags().GetString("name")
-	if name == "" {
-		name, _ = c.Flags().GetString("service")
-	}
-	return name
+	return resolveServiceName(flagArgsMap(c, "name", "service"))
 }
 
 func resolvePayloadFromFlags(c *cobra.Command) string {
-	for _, key := range []string{"inputs", "payload", "param"} {
-		if v, _ := c.Flags().GetString(key); v != "" {
-			return v
-		}
+	return resolvePayloadRaw(flagArgsMap(c, "inputs", "payload", "param"))
+}
+
+func flagArgsMap(c *cobra.Command, keys ...string) map[string]string {
+	m := make(map[string]string, len(keys))
+	for _, key := range keys {
+		m[key], _ = c.Flags().GetString(key)
 	}
-	return ""
+	return m
 }
 
 func executeActionLocal(domain string, action string, args map[string]string) string {
@@ -204,7 +203,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			inputsRaw := resolvePayloadRaw(args)
 			payloadJSON := ParseInputsToJSON(inputsRaw)
 
-			schema, _ := GetServiceSchemaLocal(cliStorage, serviceName)
+			schema, _ := lookupServiceSchema(cliStorage, serviceName)
 			if schema != nil && schema.UI != nil && schema.UI.Type == "web_app" {
 				if schema.UI.LocalPath != "" {
 					if _, err := os.Stat(schema.UI.LocalPath); err == nil {

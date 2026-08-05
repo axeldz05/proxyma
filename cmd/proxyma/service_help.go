@@ -14,8 +14,8 @@ import (
 	"proxyma/internal/protocol"
 )
 
-// GetServiceSchemaLocal fetches the ServiceSchema for a target service from the daemon or local registry.
-func GetServiceSchemaLocal(storagePath string, serviceName string) (*protocol.ServiceSchema, error) {
+// lookupServiceSchema sets storage and returns a ServiceSchema pointer.
+func lookupServiceSchema(storagePath string, serviceName string) (*protocol.ServiceSchema, error) {
 	proxyma_bind.SetStoragePath(storagePath)
 	schema, err := proxyma_bind.LookupServiceSchema(serviceName)
 	if err != nil {
@@ -132,7 +132,7 @@ func ValidateAndPrintServiceHelp(storagePath string, serviceName string, payload
 		return false, nil
 	}
 
-	schema, err := GetServiceSchemaLocal(storagePath, serviceName)
+	schema, err := lookupServiceSchema(storagePath, serviceName)
 	if err != nil || schema == nil {
 		return false, nil
 	}

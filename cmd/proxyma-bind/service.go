@@ -83,15 +83,11 @@ func resolveServiceSchema(name string) (schema protocol.ServiceSchema, addr stri
 	return schema, "", nil
 }
 
-// LookupServiceSchema returns a typed ServiceSchema via GetServiceSchema (unix + offline) (L2).
+// LookupServiceSchema returns a typed ServiceSchema (unix + offline / in-process) (L2).
 func LookupServiceSchema(name string) (protocol.ServiceSchema, error) {
-	raw := GetServiceSchema(name)
-	if IsBindError(raw) {
-		return protocol.ServiceSchema{}, fmt.Errorf("%s", ParseBindError(raw))
-	}
-	var schema protocol.ServiceSchema
-	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
-		return protocol.ServiceSchema{}, fmt.Errorf("invalid service schema: %w", err)
+	schema, _, err := resolveServiceSchema(name)
+	if err != nil {
+		return protocol.ServiceSchema{}, err
 	}
 	return protocol.NormalizeServiceSchema(name, schema, ""), nil
 }
@@ -296,7 +292,7 @@ func registerPipelineJSON(id, schemaJSON string) string {
 		if err := s.LocalPipelineAdd(string(normalizedJSON)); err != nil {
 			return nil, err
 		}
-		return map[string]string{"message": "Pipeline added successfully"}, nil
+		return bindMessageJSON("Pipeline added successfully"), nil
 	})
 }
 
@@ -313,7 +309,7 @@ func ValidatePipelineRaw(schemaJSON string) string {
 		if err := s.LocalPipelineValidate(schemaJSON); err != nil {
 			return nil, err
 		}
-		return map[string]string{"message": "Pipeline schema is valid"}, nil
+		return bindMessageJSON("Pipeline schema is valid"), nil
 	})
 }
 
@@ -325,7 +321,7 @@ func RemovePipeline(id string) string {
 		if err := s.LocalPipelineRemove(id); err != nil {
 			return nil, err
 		}
-		return map[string]string{"message": "Pipeline removed successfully"}, nil
+		return bindMessageJSON("Pipeline removed successfully"), nil
 	})
 }
 

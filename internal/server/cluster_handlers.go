@@ -3,12 +3,9 @@ package server
 import (
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"time"
 )
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
@@ -17,15 +14,8 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiration, exists := s.Invites.CheckAndConsume(req.Secret)
-
-	if !exists {
+	if _, exists := s.Invites.CheckAndConsume(req.Secret); !exists {
 		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
-		return
-	}
-
-	if time.Now().After(expiration) {
-		utils.RespondError(w, http.StatusUnauthorized, "Token has expired")
 		return
 	}
 
@@ -50,7 +40,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caCertPEM, err := os.ReadFile(s.Config.CAPath)
+	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error reading CA")
 		return
@@ -112,18 +102,8 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	certsDir := filepath.Dir(s.Config.CAPath)
 	caPath := s.Config.CAPath
-	certPath, keyPath := p2p.NodeCertPaths(certsDir, s.Config.ID)
-
-	// Fallback to storage path if key is not in certsDir (common in test fixture layouts)
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		testCert, testKey := p2p.NodeCertPaths(s.Config.StoragePath, s.Config.ID)
-		if _, err := os.Stat(testKey); err == nil {
-			keyPath = testKey
-			certPath = testCert
-		}
-	}
+	certPath, keyPath := p2p.ResolveNodeCertPaths(caPath, s.Config.StoragePath, s.Config.ID)
 
 	if err := p2p.WriteNodePEMs(caPath, certPath, "", []byte(caCert), []byte(nodeCert), nil); err != nil {
 		s.Config.Logger.Error("Failed to save rotated certs", "error", err)

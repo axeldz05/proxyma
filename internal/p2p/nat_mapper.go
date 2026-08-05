@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,35 +88,26 @@ func (nm *NATMapper) refreshMappings() {
 	}
 
 	if tcpPort > 0 {
-		extPort, err := dev.AddPortMapping("tcp", tcpPort, "proxyma-tcp", 30*time.Minute)
-		if err != nil {
-			if nm.logger != nil {
-				nm.logger.Warn("Failed to map TCP port", "internalPort", tcpPort, "error", err)
-			}
-		} else {
-			nm.mu.Lock()
-			nm.tcpMappedPort = extPort
-			nm.mu.Unlock()
-			if nm.logger != nil {
-				nm.logger.Info("TCP port mapped successfully", "internal", tcpPort, "external", extPort)
-			}
-		}
+		nm.mapPort(dev, "tcp", tcpPort, "proxyma-tcp", func(ext int) { nm.tcpMappedPort = ext })
 	}
-
 	if udpPort > 0 {
-		extPort, err := dev.AddPortMapping("udp", udpPort, "proxyma-udp", 30*time.Minute)
-		if err != nil {
-			if nm.logger != nil {
-				nm.logger.Warn("Failed to map UDP port", "internalPort", udpPort, "error", err)
-			}
-		} else {
-			nm.mu.Lock()
-			nm.udpMappedPort = extPort
-			nm.mu.Unlock()
-			if nm.logger != nil {
-				nm.logger.Info("UDP port mapped successfully", "internal", udpPort, "external", extPort)
-			}
+		nm.mapPort(dev, "udp", udpPort, "proxyma-udp", func(ext int) { nm.udpMappedPort = ext })
+	}
+}
+
+func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, setMapped func(int)) {
+	extPort, err := dev.AddPortMapping(proto, port, desc, 30*time.Minute)
+	if err != nil {
+		if nm.logger != nil {
+			nm.logger.Warn("Failed to map "+strings.ToUpper(proto)+" port", "internalPort", port, "error", err)
 		}
+		return
+	}
+	nm.mu.Lock()
+	setMapped(extPort)
+	nm.mu.Unlock()
+	if nm.logger != nil {
+		nm.logger.Info(strings.ToUpper(proto)+" port mapped successfully", "internal", port, "external", extPort)
 	}
 }
 
@@ -135,18 +127,18 @@ func (nm *NATMapper) Stop() {
 	}
 
 	if tcpMapped > 0 {
-		if nm.logger != nil {
-			nm.logger.Info("Removing TCP port mapping", "port", tcpPort)
-		}
-		_ = dev.DeletePortMapping("tcp", tcpPort)
+		nm.unmapPort(dev, "tcp", tcpPort)
 	}
-
 	if udpMapped > 0 {
-		if nm.logger != nil {
-			nm.logger.Info("Removing UDP port mapping", "port", udpPort)
-		}
-		_ = dev.DeletePortMapping("udp", udpPort)
+		nm.unmapPort(dev, "udp", udpPort)
 	}
+}
+
+func (nm *NATMapper) unmapPort(dev nat.NAT, proto string, port int) {
+	if nm.logger != nil {
+		nm.logger.Info("Removing "+strings.ToUpper(proto)+" port mapping", "port", port)
+	}
+	_ = dev.DeletePortMapping(proto, port)
 }
 
 func (nm *NATMapper) GetMappedPorts() (int, int) {

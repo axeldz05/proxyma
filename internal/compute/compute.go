@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"os"
-	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"runtime"
 	"sort"
 	"sync"
@@ -18,17 +17,17 @@ import (
 )
 
 type ComputeEngine struct {
-	taskQueue      chan protocol.TaskRequest
-	registry       *ServiceRegistry
-	taskStatuses   *sync.Map
-	logger         *slog.Logger
-	peerClient     p2p.PeerClient
-	nodeID         string
-	nodeAddr       string
-	activeWorkers  atomic.Int32
-	wg             sync.WaitGroup
-	pipelines      map[string]protocol.PipelineSchema
-	pipelinesMu    sync.RWMutex
+	taskQueue       chan protocol.TaskRequest
+	registry        *ServiceRegistry
+	taskStatuses    *sync.Map
+	logger          *slog.Logger
+	peerClient      p2p.PeerClient
+	nodeID          string
+	nodeAddr        string
+	activeWorkers   atomic.Int32
+	wg              sync.WaitGroup
+	pipelines       map[string]protocol.PipelineSchema
+	pipelinesMu     sync.RWMutex
 	serviceFinder   ServiceFinder
 	taskDispatcher  TaskDispatcher
 	vfsBlobResolver VFSBlobResolver
@@ -311,26 +310,10 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 }
 
 func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) {
-	if c.vfsBlobStager == nil || outputs == nil {
+	if c.vfsBlobStager == nil {
 		return
 	}
-	for k, v := range outputs {
-		pathStr, ok := v.(string)
-		if !ok || pathStr == "" || protocol.IsVFSURI(pathStr) {
-			continue
-		}
-		fi, err := os.Stat(pathStr)
-		if err != nil || fi.IsDir() {
-			continue
-		}
-		hash, size, err := c.vfsBlobStager(pathStr)
-		if err == nil && hash != "" {
-			outputs["output_hash"] = hash
-			outputs["output_name"] = filepath.Base(pathStr)
-			outputs["output_size"] = float64(size)
-			outputs[k] = protocol.VFSURI(hash)
-		}
-	}
+	utils.RewriteLocalFilePaths(outputs, c.vfsBlobStager, true)
 }
 
 func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.PipelineStep, schema protocol.PipelineSchema) {

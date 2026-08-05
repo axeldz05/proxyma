@@ -76,17 +76,42 @@ func (c *HTTPPeerClient) sendRequest(ctx context.Context, method, target, path s
 	return c.client.Do(req)
 }
 
-func doJSON[Resp any](ctx context.Context, c *HTTPPeerClient, method, target, path string, reqBody any) (Resp, error) {
-	var respVal Resp
+// PostJSONAbsolute POSTs JSON to an absolute URL (L1). Caller must close the response body.
+func PostJSONAbsolute(ctx context.Context, client *http.Client, urlStr string, body any) (*http.Response, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	bodyReader, contentType, err := prepareBody(body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType == "" && body != nil {
+		contentType = "application/json"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return client.Do(req)
+}
+
+func doRequest(ctx context.Context, c *HTTPPeerClient, method, target, path string, reqBody any) (*http.Response, error) {
 	bodyReader, contentType, err := prepareBody(reqBody)
 	if err != nil {
-		return respVal, err
+		return nil, err
 	}
 	if contentType == "" && reqBody != nil {
 		contentType = "application/json"
 	}
+	return c.sendRequest(ctx, method, target, path, bodyReader, contentType)
+}
 
-	resp, err := c.sendRequest(ctx, method, target, path, bodyReader, contentType)
+func doJSON[Resp any](ctx context.Context, c *HTTPPeerClient, method, target, path string, reqBody any) (Resp, error) {
+	var respVal Resp
+	resp, err := doRequest(ctx, c, method, target, path, reqBody)
 	if err != nil {
 		return respVal, err
 	}
@@ -110,15 +135,7 @@ func doJSON[Resp any](ctx context.Context, c *HTTPPeerClient, method, target, pa
 }
 
 func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string, reqBody any, expectedStatus int) error {
-	bodyReader, contentType, err := prepareBody(reqBody)
-	if err != nil {
-		return err
-	}
-	if contentType == "" && reqBody != nil {
-		contentType = "application/json"
-	}
-
-	resp, err := c.sendRequest(ctx, method, target, path, bodyReader, contentType)
+	resp, err := doRequest(ctx, c, method, target, path, reqBody)
 	if err != nil {
 		return err
 	}
@@ -130,10 +147,8 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 		if resp.StatusCode != expectedStatus {
 			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
-	} else {
-		if !utils.HTTPSuccess(resp.StatusCode) {
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-		}
+	} else if !utils.HTTPSuccess(resp.StatusCode) {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	return nil
@@ -142,19 +157,8 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 // ForwardRelay POSTs a RelayRequest to sponsorAddr/relay/forward and decodes the response (L2).
 func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string, relayReq protocol.RelayRequest) (protocol.RelayResponse, error) {
 	var zero protocol.RelayResponse
-	if rt == nil {
-		rt = http.DefaultTransport
-	}
-	fwdBytes, err := json.Marshal(relayReq)
-	if err != nil {
-		return zero, err
-	}
-	fwdReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sponsorAddr+"/relay/forward", bytes.NewBuffer(fwdBytes))
-	if err != nil {
-		return zero, err
-	}
-	fwdReq.Header.Set("Content-Type", "application/json")
-	fwdResp, err := rt.RoundTrip(fwdReq)
+	client := NewHTTPClient(rt, 0)
+	fwdResp, err := PostJSONAbsolute(ctx, client, sponsorAddr+"/relay/forward", relayReq)
 	if err != nil {
 		return zero, err
 	}
@@ -259,7 +263,11 @@ func (b *BandwidthRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 }
 
 func (b *BandwidthRoundTripper) CloseIdleConnections() {
-	if idler, ok := b.Base.(interface{ CloseIdleConnections() }); ok {
+	closeIdle(b.Base)
+}
+
+func closeIdle(rt http.RoundTripper) {
+	if idler, ok := rt.(interface{ CloseIdleConnections() }); ok {
 		idler.CloseIdleConnections()
 	}
 }

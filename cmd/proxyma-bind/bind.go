@@ -1,7 +1,6 @@
 package proxyma_bind
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -251,21 +250,13 @@ func ReadUnixResponse(conn net.Conn) (protocol.UnixResponse, error) {
 
 // ScanUnixNDJSON scans line-delimited UnixResponse messages (L1).
 func ScanUnixNDJSON(conn net.Conn, onLine func(protocol.UnixResponse) bool) error {
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
+	return utils.ScanNDJSON(conn, func(line []byte) bool {
 		var resp protocol.UnixResponse
-		if err := json.Unmarshal([]byte(line), &resp); err != nil {
-			continue
+		if err := json.Unmarshal(line, &resp); err != nil {
+			return true
 		}
-		if !onLine(resp) {
-			return nil
-		}
-	}
-	return scanner.Err()
+		return onLine(resp)
+	})
 }
 
 func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {
@@ -533,17 +524,12 @@ func copyDir(src string, dst string) error {
 	return nil
 }
 
-// GetUISchemaJson exports the full single-source-of-truth UI Schema registry as JSON.
-func GetUISchemaJson() string {
+// GetUISchemaJSON exports the full single-source-of-truth UI Schema registry as JSON.
+func GetUISchemaJSON() string {
 	return uischema.GetRegistryJSON()
 }
 
 // GetDomainSchemaJson exports metadata for a specific domain as JSON.
 func GetDomainSchemaJson(domainName string) string {
 	return uischema.GetDomainJSON(domainName)
-}
-
-// GetUISchemaJSON is an alias of GetUISchemaJson (SSOT via uischema.GetRegistryJSON).
-func GetUISchemaJSON() string {
-	return GetUISchemaJson()
 }

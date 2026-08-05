@@ -173,29 +173,12 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 		return nil, fmt.Errorf("invalid CSR signature: %w", err)
 	}
 
-	caCert, caPrivKey, err := loadCAPair(caCertPath, caKeyPath)
+	caCert, caPrivKey, err := loadCertAndKey(caCertPath, caKeyPath)
 	if err != nil {
 		return nil, err
 	}
 
-	certTemplate := newNodeCertTemplate(csr.Subject, []string{csr.Subject.CommonName, "localhost"})
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, csr.PublicKey, caPrivKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign certificate: %w", err)
-	}
-
-	certPEM = encodeCertPEM(certBytes)
-
-	return certPEM, nil
-}
-
-func loadCAPair(certPath, keyPath string) (*x509.Certificate, any, error) {
-	cert, key, err := loadCertAndKey(certPath, keyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cert, key, nil
+	return signLeaf(csr.PublicKey, csr.Subject, []string{csr.Subject.CommonName, "localhost"}, caCert, caPrivKey)
 }
 
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -351,21 +334,23 @@ func RotateCA(caFolderPath string) error {
 }
 
 func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath string) (certPEM []byte, err error) {
-	caCert, caPrivKey, err := loadCAPair(caCertPath, caKeyPath)
+	caCert, caPrivKey, err := loadCertAndKey(caCertPath, caKeyPath)
 	if err != nil {
 		return nil, err
 	}
 
-	certTemplate := newNodeCertTemplate(pkix.Name{
+	return signLeaf(peerPubKey, pkix.Name{
 		CommonName:   peerID,
 		Organization: []string{leafOrgName},
-	}, []string{peerID, "localhost"})
+	}, []string{peerID, "localhost"}, caCert, caPrivKey)
+}
 
-	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, peerPubKey, caPrivKey)
+func signLeaf(pub any, subject pkix.Name, dnsNames []string, caCert *x509.Certificate, caPrivKey any) ([]byte, error) {
+	certTemplate := newNodeCertTemplate(subject, dnsNames)
+	certBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, caCert, pub, caPrivKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign certificate: %w", err)
 	}
-
 	return encodeCertPEM(certBytes), nil
 }
 
@@ -391,6 +376,23 @@ func CACertPaths(dir string) (certPath, keyPath string) {
 // NodeCertPaths returns the node certificate and key paths under dir.
 func NodeCertPaths(dir, nodeID string) (certPath, keyPath string) {
 	return filepath.Join(dir, fmt.Sprintf("%s.crt", nodeID)), filepath.Join(dir, fmt.Sprintf("%s.key", nodeID))
+}
+
+// ReadCAPEM reads CA certificate PEM bytes from disk (L1).
+func ReadCAPEM(caPath string) ([]byte, error) {
+	return os.ReadFile(caPath)
+}
+
+// ResolveNodeCertPaths returns node cert/key paths next to the CA, with storagePath fallback for test layouts (L2).
+func ResolveNodeCertPaths(caPath, storagePath, nodeID string) (certPath, keyPath string) {
+	certPath, keyPath = NodeCertPaths(filepath.Dir(caPath), nodeID)
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) && storagePath != "" {
+		altCert, altKey := NodeCertPaths(storagePath, nodeID)
+		if _, err := os.Stat(altKey); err == nil {
+			return altCert, altKey
+		}
+	}
+	return certPath, keyPath
 }
 
 // PEMCertDER extracts certificate DER bytes from PEM (L1).

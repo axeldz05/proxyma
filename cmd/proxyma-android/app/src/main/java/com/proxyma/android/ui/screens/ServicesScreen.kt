@@ -45,6 +45,7 @@ import com.proxyma.android.ui.components.ServiceCardItem
 import com.proxyma.android.ui.components.TaskLogCardItem
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
+import kotlin.concurrent.thread
 
 private val fileTasks = mutableStateListOf<FileTask>()
 
@@ -178,41 +179,24 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                 runTargetIsPipeline = true
                                 runTargetSpecs = DEFAULT_RUN_PARAMS
                             } else {
-                                runBindOnBg({
+                                thread {
                                     val specs = initialConns.map { conn ->
                                         val fromPortName = conn.from_port
                                         val tgtStep = pipeline.steps.find { it.id == conn.to_step }
                                         val tgtSvc = tgtStep?.service ?: ""
-                                        var paramDef: FormParameter? = null
-                                        if (tgtSvc.isNotEmpty()) {
-                                            val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
-                                            paramDef = parseServiceDetail(rawDetails)?.parameters?.find { it.name == conn.to_port }
-                                        }
-                                        FormParameter(
-                                            name = fromPortName,
-                                            type = paramDef?.type ?: "string",
-                                            required = paramDef?.required ?: false,
-                                            description = paramDef?.description ?: "",
-                                            uiHint = paramDef?.uiHint,
-                                            defaultValue = paramDef?.defaultValue,
-                                            options = paramDef?.options
+                                        val paramDef = if (tgtSvc.isNotEmpty()) {
+                                            fetchServiceDetail(tgtSvc)?.parameters?.find { it.name == conn.to_port }
+                                        } else null
+                                        formParameterFrom(
+                                            src = paramDef,
+                                            name = fromPortName
                                         )
                                     }.distinctBy { it.name }
-                                    Gson().toJson(specs)
-                                }) { result ->
-                                    val specs = result.getOrNull()?.let { json ->
-                                        try {
-                                            Gson().fromJson<List<FormParameter>>(
-                                                json,
-                                                object : TypeToken<List<FormParameter>>() {}.type
-                                            )
-                                        } catch (_: Exception) {
-                                            null
-                                        }
-                                    } ?: DEFAULT_RUN_PARAMS
-                                    runTargetName = pipeline.id
-                                    runTargetIsPipeline = true
-                                    runTargetSpecs = specs
+                                    isRunningOnMainThread {
+                                        runTargetName = pipeline.id
+                                        runTargetIsPipeline = true
+                                        runTargetSpecs = specs.ifEmpty { DEFAULT_RUN_PARAMS }
+                                    }
                                 }
                             }
                         },
@@ -221,15 +205,21 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                             showEditor = true
                         },
                         onClone = {
-                            val clonedJson = proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
-                            if (isBindError(clonedJson)) {
-                                context.toast("Error cloning pipeline: ${parseBindError(clonedJson).ifEmpty { clonedJson }}")
-                            } else {
-                                val cloned = parsePipelineSchema(clonedJson)
-                                if (cloned != null) {
-                                    editingPipeline = cloned
-                                    showEditor = true
-                                }
+                            runBindOnBg({
+                                proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
+                            }) { result ->
+                                result.fold(
+                                    onSuccess = { clonedJson ->
+                                        val cloned = parsePipelineSchema(clonedJson)
+                                        if (cloned != null) {
+                                            editingPipeline = cloned
+                                            showEditor = true
+                                        }
+                                    },
+                                    onFailure = { err ->
+                                        context.toast("Error cloning pipeline: ${err.message}")
+                                    }
+                                )
                             }
                         },
                         onDelete = {
@@ -292,13 +282,10 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         svcName = svcName,
                         onClick = {
                             selectedService = svcName
-                            executeGoCall(
-                                context = context,
-                                onStart = { isLoading = true },
-                                onComplete = { isLoading = false },
-                                action = { proxyma_bind.Proxyma_bind.getServiceDetails(svcName) }
-                            ) { details ->
-                                serviceDetailJson = details
+                            isLoading = true
+                            loadServiceDetail(svcName) { detail ->
+                                isLoading = false
+                                serviceDetailJson = detail?.let { Gson().toJson(it) } ?: ""
                             }
                         },
                         onRun = {

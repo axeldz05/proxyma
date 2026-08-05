@@ -158,18 +158,8 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
 	mux := s.wrapWithBandwidthCounting(s.handler)
-	rawAddr := utils.StripURLScheme(s.Config.Address)
-	_, port, err := net.SplitHostPort(rawAddr)
-	var addr string
-	if err == nil {
-		addr = "0.0.0.0:" + port
-	} else {
-		extractedPort := utils.ExtractPort(s.Config.Address)
-		if extractedPort == "" {
-			extractedPort = protocol.DefaultTCPPort
-		}
-		addr = "0.0.0.0:" + extractedPort
-	}
+	portStr, _ := s.configTCPPort()
+	addr := "0.0.0.0:" + portStr
 
 	hs := &http.Server{
 		Addr:      addr,

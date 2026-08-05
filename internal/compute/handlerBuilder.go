@@ -15,18 +15,7 @@ import (
 
 // doJSONPost POSTs JSON to endpointURL and decodes a JSON object response (L2).
 func doJSONPost(ctx context.Context, client *http.Client, endpointURL string, payload map[string]any) (map[string]any, error) {
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal webhook payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
+	resp, err := p2p.PostJSONAbsolute(ctx, client, endpointURL, payload)
 	if err != nil {
 		return nil, fmt.Errorf("webhook request failed: %w", err)
 	}
@@ -126,11 +115,6 @@ func notImplementedHandler(name string) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("%s not yet implemented", name)
 	}
-}
-
-// BuildGRPCBidiStreamHandler creates a ServiceHandler for Bidirectional Streaming.
-func BuildGRPCBidiStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return BuildGRPCBidiHandler(endpointURL, timeout)
 }
 
 // BuildGRPCBidiHandler creates a ServiceHandler for Bidirectional Streaming.

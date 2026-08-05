@@ -37,10 +37,10 @@ Antes de refactorizar o mover código, inspecciona los archivos principales de c
 * [service_catalog.go](file:///home/drusila/Projects/proxyma/internal/server/service_catalog.go): **`LocalServiceDetail`**, Load/Add/Remove, **`applyServiceAction`**, **`NotifyService*`**, Discover.
 * [service_exec.go](file:///home/drusila/Projects/proxyma/internal/server/service_exec.go): Run/Stream + ingest outputs.
 * [vfs_sync.go](file:///home/drusila/Projects/proxyma/internal/server/vfs_sync.go): Sync, `fetchBlobFromPeer`, `LocalVFSUpload` / `LocalVFSSubscribe` / `LocalLogs`.
-* [peer_rpc.go](file:///home/drusila/Projects/proxyma/internal/server/peer_rpc.go): **`callPeer` / `forEachPeer` / `mapEachPeer`** + timeouts `PeerRPC*`.
-* [nat.go](file:///home/drusila/Projects/proxyma/internal/server/nat.go): NAT + **`advertisedTCPPort`**.
+* [peer_rpc.go](file:///home/drusila/Projects/proxyma/internal/server/peer_rpc.go): **`callPeer` / `forEachPeer` / `mapEachPeer` / `gossipToPeer` / `gossipAll`** + timeouts `PeerRPC*`.
+* [nat.go](file:///home/drusila/Projects/proxyma/internal/server/nat.go): NAT + **`advertisedTCPPort`** / `configTCPPort`.
 * [handlers.go](file:///home/drusila/Projects/proxyma/internal/server/handlers.go): Solo `MountHandlers` (wire-up).
-* [mtls.go](file:///home/drusila/Projects/proxyma/internal/server/mtls.go), [peer_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/peer_handlers.go), [cluster_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/cluster_handlers.go), [stream_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/stream_handlers.go): HTTP por dominio.
+* [mtls.go](file:///home/drusila/Projects/proxyma/internal/server/mtls.go), [peer_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/peer_handlers.go), [cluster_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/cluster_handlers.go), [stream_handlers.go](file:///home/drusila/Projects/proxyma/internal/server/stream_handlers.go): HTTP por dominio (`handlePeerIDAction`, `decodeNotifyOK`).
 * [compute_bridge.go](file:///home/drusila/Projects/proxyma/internal/server/compute_bridge.go): Bidding (`mapEachPeer`) y despacho (`DispatchTask` owns register/fail remoto).
 * [relay.go](file:///home/drusila/Projects/proxyma/internal/server/relay.go), [bandwidth.go](file:///home/drusila/Projects/proxyma/internal/server/bandwidth.go): Relay, telemetría.
 
@@ -172,26 +172,29 @@ Para detectar y mover código duplicado a paquetes comunes sin romper contratos 
 
 Al revisar el código, busca los siguientes patrones recurrentes:
 * **Fan-out de peers**: No reinventar loops + timeouts + liveness — usar `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer`.
+* **Gossip**: `gossipToPeer` / `gossipAll` (L2); L1 payload = `notifyService` / `notifyPipeline` / `notifyPeers`. Catalog join → `syncCatalogToPeer`.
 * **Pipeline persist**: Un solo camino — `applyPipelineAction` (Local* + gossip).
 * **Service persist**: Un solo camino — `applyServiceAction` (espejo pipelines) + `NotifyService*`.
 * **Schema fill**: `protocol.NormalizeServiceSchema`; actions `ActionAdd`/`ActionRemove`.
 * **Param UI/defaults**: `DescribeParameter` / `CoerceDefault` / `ValidateValue` — no switches de tipo en CLI/bind.
-* **Result path**: `ResultLocalPath` / `OutputHashFromOutputs` — Android no snifar keys inventadas.
+* **Result path**: `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` — Android no snifar keys.
+* **Staging paths**: `protocol.IsStageableLocalPath` + `utils.RewriteLocalFilePaths` (compute outputs + `DispatchTask`).
 * **Task register/fail remoto**: Solo `DispatchTask`.
 * **UIHint / pickers**: `InferUIHint` / `EffectiveUIHint` (DTO bind siempre emite effective).
-* **Schema detail**: `LocalServiceDetail` / `LookupServiceSchema` / `GetServiceSchema`.
+* **Schema detail**: `LocalServiceDetail` / `LookupServiceSchema`→`resolveServiceSchema` / `GetServiceSchema`.
 * **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError`; VFS open vía `ResolveLocalBlob`.
 * **Respuestas JSON HTTP**: `utils.RespondJSON` / `DecodeJSONOrError` / `HTTPSuccess`.
-* **TLS / cert**: `LoadNodeTLS`, `WriteNodePEMs`, `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash`, paths helpers, `PeerCNFromTLS` / `VerifyTLSPeerCN`.
-* **HTTP client**: `p2p.NewHTTPClient` (streams: timeout 0 + ctx).
+* **TLS / cert**: `LoadNodeTLS`, `WriteNodePEMs`, `signLeaf`, `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`.
+* **HTTP client**: `p2p.NewHTTPClient` / `PostJSONAbsolute` (streams: timeout 0 + ctx).
 * **QUIC addr**: `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`.
 * **Hole-punch**: `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`.
 * **IPC Unix**: `dispatchUnix*`; VFS `LocalVFS*` / `ResolveLocalBlob`.
 * **Bolt**: `boltGetJSON` / `boltPutJSON` / `boltLoadMapJSON` / `boltPutFlag` / `boltHasKey`.
 * **CAS upsert**: `UpsertAndSubscribe` / `deleteBlobIfOrphan`.
-* **VFS URI**: `protocol.VFSURI` / `ParseVFSURI` / `IsVFSURI`.
+* **VFS URI**: `protocol.VFSURI` / `ParseVFSURI` / `IsVFSURI` / `IsStageableLocalPath`.
 * **Puerto TCP**: `protocol.DefaultTCPPort` + `configTCPPort` / `advertisedTCPPort`.
-* **NDJSON**: `utils.WriteNDJSON` / `PumpJSONEncode` / `PumpJSONDecode` / `ForEachNDJSON`.
+* **NDJSON**: `utils.WriteNDJSON` / `PumpJSONEncode` / `PumpJSONDecode` / `ForEachNDJSON` / `ScanNDJSON`.
+* **JSON files**: `utils.ReadJSONFile` / `WriteJSONFile`.
 * **Net utils**: `StripURLScheme` / `ClientHost` / `FileExists` / `GetRoutableLocalIPs`.
 * **Boilerplate CLI**: PersistentFlag `cliStorage` only; no dial propio.
 

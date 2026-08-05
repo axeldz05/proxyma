@@ -154,26 +154,12 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		host := parsedAddr.Hostname()
-		port := parsedAddr.Port()
-		if port == "" {
-			if parsedAddr.Scheme == "https" {
-				port = "443"
-			} else {
-				port = "80"
-			}
-		}
+		port := defaultPortForURL(parsedAddr)
 
 		if r.OwnAddress != "" {
 			ownParsed, errOwn := url.Parse(r.OwnAddress)
 			if errOwn == nil {
-				ownPort := ownParsed.Port()
-				if ownPort == "" {
-					if ownParsed.Scheme == "https" {
-						ownPort = "443"
-					} else {
-						ownPort = "80"
-					}
-				}
+				ownPort := defaultPortForURL(ownParsed)
 
 				isLoopbackTarget := utils.IsLoopbackHost(host)
 
@@ -389,14 +375,21 @@ func generateSecureReqID() string {
 	return hex.EncodeToString(bytes)
 }
 
+func defaultPortForURL(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
 // CancelReadCloser wraps an io.ReadCloser to call a cancel function when closed.
 type CancelReadCloser struct {
 	io.ReadCloser
 	Cancel context.CancelFunc
 }
-
-// Close closes the underlying ReadCloser and calls the Cancel function.
-type CancelReadCloser_Close struct{} // dummy to help replace compile
 
 func (c *CancelReadCloser) Close() error {
 	err := c.ReadCloser.Close()
@@ -413,7 +406,5 @@ func NewCancelReadCloser(body io.ReadCloser, cancel context.CancelFunc) io.ReadC
 }
 
 func (r *P2PRoundTripper) CloseIdleConnections() {
-	if idler, ok := r.Base.(interface{ CloseIdleConnections() }); ok {
-		idler.CloseIdleConnections()
-	}
+	closeIdle(r.Base)
 }
