@@ -3,6 +3,7 @@ package utils
 import (
 	"net"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -19,6 +20,54 @@ func GetLocalIPs() ([]net.IP, error) {
 		}
 	}
 	return ips, nil
+}
+
+// GetRoutableLocalIPs returns non-loopback, non-link-local IPs (L2).
+func GetRoutableLocalIPs() ([]net.IP, error) {
+	ips, err := GetLocalIPs()
+	if err != nil {
+		return nil, err
+	}
+	var filtered []net.IP
+	for _, ip := range ips {
+		if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		filtered = append(filtered, ip)
+	}
+	return filtered, nil
+}
+
+// StripURLScheme removes http:// or https:// prefix from addr (L1).
+func StripURLScheme(addr string) string {
+	addr = strings.TrimPrefix(addr, "https://")
+	return strings.TrimPrefix(addr, "http://")
+}
+
+// FileExists reports whether path exists and is not a directory.
+func FileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+// ClientHost extracts the host from a RemoteAddr (host:port or bare host) (L1).
+func ClientHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
+// HTTPSuccess reports whether status is 2xx.
+func HTTPSuccess(code int) bool {
+	return code >= 200 && code < 300
 }
 
 // ExtractPort parses the port from an address string (e.g. "https://127.0.0.1:8443" or "localhost:8080").

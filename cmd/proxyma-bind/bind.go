@@ -296,7 +296,7 @@ func StartNode(storagePath string, debug bool) string {
 	defer srvMutex.Unlock()
 
 	if srv != nil {
-		return BindErrorJSON(fmt.Errorf("Node is already running"))
+		return BindErrorJSON(fmt.Errorf("node is already running"))
 	}
 
 	appStorage = storagePath
@@ -306,9 +306,9 @@ func StartNode(storagePath string, debug bool) string {
 	cfg, err := protocol.LoadConfig(appStorage)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Auto initialize configuration with default port 8080 if not found
+			// Auto initialize configuration with default port if not found
 			nid := utils.GenerateDefaultNodeID()
-			localAddr := "https://127.0.0.1:8080"
+			localAddr := "https://127.0.0.1:" + protocol.DefaultTCPPort
 			if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
 				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %v", err))
 			}
@@ -449,7 +449,7 @@ func GetTotalReceived() int64 {
 func ChangeStorageLocation(newPath string) string {
 	s := getSrv()
 	if s == nil {
-		return BindErrorJSON(fmt.Errorf("Node is not running"))
+		return BindErrorJSON(fmt.Errorf("node is not running"))
 	}
 
 	newStorage := filepath.Join(newPath, "proxyma_data")

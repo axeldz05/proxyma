@@ -3,10 +3,6 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,18 +39,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	logFn("Node CSR generated successfully.", nil)
 
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-				for _, rawCert := range rawCerts {
-					hash := sha256.Sum256(rawCert)
-					if hex.EncodeToString(hash[:]) == payload.CAHash {
-						return nil
-					}
-				}
-				return errors.New("security alert: identity mismatch")
-			},
-		},
+		TLSClientConfig: TLSConfigTrustCAHash(payload.CAHash),
 	}
 	client := NewHTTPClient(tr, 3*time.Second)
 

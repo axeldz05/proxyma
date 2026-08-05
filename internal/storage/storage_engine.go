@@ -78,11 +78,10 @@ func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
 
 func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("subscriptions"))
 		if isSubscribed {
-			return b.Put([]byte(fileName), []byte("true"))
+			return boltPutFlag(tx, "subscriptions", fileName)
 		}
-		return b.Delete([]byte(fileName))
+		return boltDelete(tx, "subscriptions", fileName)
 	})
 	if err != nil {
 		se.logger.Error("Failed to update subscription in DB", "file", fileName, "error", err)
@@ -92,10 +91,7 @@ func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 func (se *StorageEngine) IsSubscribed(fileName string) bool {
 	var subscribed bool
 	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("subscriptions"))
-		if b != nil && b.Get([]byte(fileName)) != nil {
-			subscribed = true
-		}
+		subscribed = boltHasKey(tx, "subscriptions", fileName)
 		return nil
 	})
 	return subscribed
@@ -131,7 +127,7 @@ func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.Inde
 func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 	entry, exists := se.vfs.Get(fileName)
 	if !exists {
-		return fmt.Errorf("file %se not found", fileName)
+		return fmt.Errorf("file %s not found", fileName)
 	}
 	fileMeta := protocol.IndexEntry{
 		Name:    entry.Name,
@@ -141,10 +137,8 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 		Deleted: true,
 	}
 	if se.vfs.Upsert(fileMeta) {
-		if se.countHashReferences(entry.Hash) == 0 {
-			if err := se.physical.DeleteBlob(entry.Hash); err != nil {
-				return fmt.Errorf("file %se could not be deleted", fileMeta.Name)
-			}
+		if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
+			return fmt.Errorf("file %s could not be deleted: %w", fileMeta.Name, err)
 		}
 		go se.notifyFunc(fileMeta)
 	}
@@ -157,34 +151,36 @@ func (se *StorageEngine) DeleteLocalCache(fileName string) error {
 		return fmt.Errorf("file %s not found", fileName)
 	}
 	se.SetSubscription(fileName, false)
-	if se.countSubscribedHashReferences(entry.Hash) == 0 {
-		_ = se.physical.DeleteBlob(entry.Hash)
-	}
+	_ = se.deleteBlobIfOrphan(entry.Hash, true)
 	return nil
+}
+
+// UpsertAndSubscribe upserts VFS metadata with next version (if Version<=0), subscribes, optionally notifies (L2).
+func (se *StorageEngine) UpsertAndSubscribe(entry protocol.IndexEntry, notify bool) protocol.IndexEntry {
+	if entry.Version <= 0 {
+		entry.Version = 1
+		if existing, exists := se.vfs.Get(entry.Name); exists {
+			entry.Version = existing.Version + 1
+		}
+	}
+	se.vfs.Upsert(entry)
+	se.SetSubscription(entry.Name, true)
+	if notify {
+		go se.notifyFunc(entry)
+	}
+	return entry
 }
 
 func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error {
 	hash, fileSize, err := se.physical.SaveBlob(content)
 	if err != nil {
-		return fmt.Errorf("error saving the blob %se: %v", fileName, err.Error())
+		return fmt.Errorf("error saving the blob %s: %v", fileName, err.Error())
 	}
-
-	newVersion := 1
-	if existingMeta, exists := se.vfs.Get(fileName); exists {
-		newVersion = existingMeta.Version + 1
-	}
-	fileMeta := protocol.IndexEntry{
-		Name:    fileName,
-		Size:    fileSize,
-		Hash:    hash,
-		Version: newVersion,
-	}
-	se.vfs.Upsert(fileMeta)
-
-	se.SetSubscription(fileName, true)
-
-	go se.notifyFunc(fileMeta)
-
+	se.UpsertAndSubscribe(protocol.IndexEntry{
+		Name: fileName,
+		Size: fileSize,
+		Hash: hash,
+	}, true)
 	return nil
 }
 
@@ -193,10 +189,8 @@ func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 
 	if se.vfs.Upsert(fileInfo) {
 		if exists {
-			if se.countHashReferences(savedFileInfo.Hash) == 0 {
-				if err := se.physical.DeleteBlob(savedFileInfo.Hash); err != nil {
-					se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
-				}
+			if err := se.deleteBlobIfOrphan(savedFileInfo.Hash, false); err != nil {
+				se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
 			}
 		}
 		se.logger.Info("File remotely deleted", "file", fileInfo.Name)
@@ -210,9 +204,7 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	}
 
 	if savedHash != fileInfo.Hash {
-		if se.countHashReferences(savedHash) == 0 {
-			_ = se.physical.DeleteBlob(savedHash)
-		}
+		_ = se.deleteBlobIfOrphan(savedHash, false)
 		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
 		return fmt.Errorf("hash mismatch")
 	}
@@ -224,10 +216,8 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 	}
 
 	se.logger.Debug("Download discarded due to obsolescence or deletion while downloading", "file", fileInfo.Name)
-	if se.countHashReferences(fileInfo.Hash) == 0 {
-		if err := se.physical.DeleteBlob(fileInfo.Hash); err != nil {
-			se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
-		}
+	if err := se.deleteBlobIfOrphan(fileInfo.Hash, false); err != nil {
+		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
 	}
 
 	return nil
@@ -252,18 +242,31 @@ func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64
 		return "", 0, err
 	}
 	name := filepath.Base(pathStr)
-	se.Upsert(protocol.IndexEntry{
-		Name:    name,
-		Hash:    hash,
-		Size:    size,
-		Version: 1,
-	})
-	se.SetSubscription(name, true)
+	se.UpsertAndSubscribe(protocol.IndexEntry{
+		Name: name,
+		Hash: hash,
+		Size: size,
+	}, false)
 	return hash, size, nil
 }
 
 func (se *StorageEngine) CleanupTempFiles() {
 	se.physical.CleanupTempFiles()
+}
+
+// deleteBlobIfOrphan removes the physical blob when no VFS refs remain.
+// If subscribedOnly, only subscribed name refs count.
+func (se *StorageEngine) deleteBlobIfOrphan(hash string, subscribedOnly bool) error {
+	var refs int
+	if subscribedOnly {
+		refs = se.countSubscribedHashReferences(hash)
+	} else {
+		refs = se.countHashReferences(hash)
+	}
+	if refs > 0 {
+		return nil
+	}
+	return se.physical.DeleteBlob(hash)
 }
 
 func (se *StorageEngine) countHashReferences(hash string) int {

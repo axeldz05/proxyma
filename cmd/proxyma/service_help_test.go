@@ -38,7 +38,7 @@ func TestBuildSampleJSONPayload(t *testing.T) {
 func TestValidateAndPrintServiceHelp(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "proxyma_help_test_*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Pre-create services.json
 	svcFile := filepath.Join(tempDir, "services.json")

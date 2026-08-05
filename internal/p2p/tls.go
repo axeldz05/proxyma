@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"strings"
 	"time"
 )
@@ -24,7 +27,7 @@ const leafOrgName = "Proxyma Cluster"
 func InitCluster(caFolderPath string) error {
 	caPath, caKeyPath := CACertPaths(caFolderPath)
 
-	if fileExists(caPath) && fileExists(caKeyPath) {
+	if utils.FileExists(caPath) && utils.FileExists(caKeyPath) {
 		return nil
 	}
 
@@ -306,14 +309,6 @@ func loadCertAndKey(certPath, keyPath string) (*x509.Certificate, *ecdsa.Private
 	return cert, key, nil
 }
 
-func fileExists(filename string) bool {
-	info, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return !info.IsDir()
-}
-
 func generatePrivateKey() (*ecdsa.PrivateKey, error) {
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 }
@@ -396,6 +391,62 @@ func CACertPaths(dir string) (certPath, keyPath string) {
 // NodeCertPaths returns the node certificate and key paths under dir.
 func NodeCertPaths(dir, nodeID string) (certPath, keyPath string) {
 	return filepath.Join(dir, fmt.Sprintf("%s.crt", nodeID)), filepath.Join(dir, fmt.Sprintf("%s.key", nodeID))
+}
+
+// PEMCertDER extracts certificate DER bytes from PEM (L1).
+func PEMCertDER(pemData []byte) ([]byte, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode CA PEM")
+	}
+	return block.Bytes, nil
+}
+
+// HashCertDER returns the hex SHA-256 of a certificate DER (L1).
+func HashCertDER(der []byte) string {
+	hash := sha256.Sum256(der)
+	return hex.EncodeToString(hash[:])
+}
+
+// CAHashFromPEM decodes a PEM certificate and returns HashCertDER of its DER bytes (L1).
+func CAHashFromPEM(pemData []byte) (string, error) {
+	der, err := PEMCertDER(pemData)
+	if err != nil {
+		return "", err
+	}
+	return HashCertDER(der), nil
+}
+
+// TLSConfigTrustCAHash builds a TLS client config that accepts peers whose leaf DER hashes to caHash (L1).
+func TLSConfigTrustCAHash(caHash string) *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			for _, rawCert := range rawCerts {
+				if HashCertDER(rawCert) == caHash {
+					return nil
+				}
+			}
+			return errors.New("security alert: identity mismatch")
+		},
+	}
+}
+
+// WriteNodePEMs writes CA/node cert/key PEM bytes to disk (L2).
+// keyPEM may be empty (e.g. CA rotation that only updates certs).
+func WriteNodePEMs(caPath, certPath, keyPath string, caPEM, certPEM, keyPEM []byte) error {
+	if err := os.WriteFile(caPath, caPEM, 0644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		return err
+	}
+	if len(keyPEM) > 0 && keyPath != "" {
+		if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PeerCNFromTLS extracts the peer CommonName from a TLS connection state.

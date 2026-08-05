@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -73,14 +72,7 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 	if s.quicMgr != nil && msg.PublicUDP != "" {
 		rUDPAddr, err := net.ResolveUDPAddr("udp", msg.PublicUDP)
 		if err == nil {
-			go func() {
-				pingPayload := p2p.HolePunchPingPayload(s.Config.ID)
-				// Send 20 pings, 150ms apart
-				for i := 0; i < 20; i++ {
-					_, _ = s.quicMgr.PacketConn.WriteTo(pingPayload, rUDPAddr)
-					time.Sleep(150 * time.Millisecond)
-				}
-			}()
+			go p2p.BurstPings(s.quicMgr.PacketConn, rUDPAddr, s.Config.ID, 20, 150*time.Millisecond)
 		}
 	}
 }
@@ -108,8 +100,7 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	_ = s.LocalServiceStreamRun(serviceName, string(bodyBytes), func(chunk map[string]any) {
-		chunkBytes, _ := json.Marshal(chunk)
-		_, _ = w.Write(append(chunkBytes, '\n'))
+		_ = utils.WriteNDJSON(w, chunk)
 		flusher.Flush()
 	})
 }

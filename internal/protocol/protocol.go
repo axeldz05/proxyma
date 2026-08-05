@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -49,9 +50,18 @@ type PipelineSchema struct {
 	Connections []PipelineConnection `json:"connections,omitempty"`
 }
 
+const (
+	ActionAdd    = "add"
+	ActionRemove = "remove"
+	ActionModify = "modify"
+)
+
+// DefaultTCPPort is the SSOT fallback listen/advertise TCP port when Config.Address has none.
+const DefaultTCPPort = "8080"
+
 type PipelineNotification struct {
 	Schema PipelineSchema `json:"schema"`
-	Action string         `json:"action"` // "add", "remove"
+	Action string         `json:"action"` // ActionAdd / ActionRemove
 }
 
 type PipelineContext struct {
@@ -160,6 +170,18 @@ func (s ServiceSchema) IsStreaming() bool {
 	return s.Type.IsStreaming()
 }
 
+// NormalizeServiceSchema fills Name/Type from map key / local service type and normalizes Type (L1 SSOT).
+func NormalizeServiceSchema(name string, schema ServiceSchema, serviceType ServiceType) ServiceSchema {
+	if schema.Name == "" {
+		schema.Name = name
+	}
+	if schema.Type == "" {
+		schema.Type = serviceType
+	}
+	schema.Type = schema.Type.Normalize()
+	return schema
+}
+
 type ServiceParameter struct {
 	Type     string   `json:"type"`
 	Required bool     `json:"required"`
@@ -168,10 +190,18 @@ type ServiceParameter struct {
 	UIHint   string   `json:"ui_hint,omitempty"` // e.g. "image_picker", "file_picker"
 }
 
+const (
+	ParamTypeString = "string"
+	ParamTypeFile   = "file"
+	ParamTypeBool   = "bool"
+	ParamTypeInt    = "int"
+	ParamTypeFloat  = "float"
+)
+
 // InferUIHint returns a UI hint for a parameter from its name and type (L1 SSOT).
 // Empty string means no special picker. Prefer explicit UIHint on the schema when set.
 func InferUIHint(paramName, paramType string) string {
-	if paramType != "file" {
+	if paramType != ParamTypeFile {
 		return ""
 	}
 	lower := strings.ToLower(paramName)
@@ -187,6 +217,116 @@ func EffectiveUIHint(paramName string, p ServiceParameter) string {
 		return p.UIHint
 	}
 	return InferUIHint(paramName, p.Type)
+}
+
+// CoerceDefault parses p.Default into a typed value (L1). Falls back to type samples when empty.
+func (p ServiceParameter) CoerceDefault(paramName string) any {
+	if p.Default != "" {
+		switch p.Type {
+		case ParamTypeBool:
+			return p.Default == "true" || p.Default == "1"
+		case ParamTypeInt:
+			var val int
+			_, _ = fmt.Sscanf(p.Default, "%d", &val)
+			return val
+		case ParamTypeFloat:
+			var val float64
+			_, _ = fmt.Sscanf(p.Default, "%f", &val)
+			return val
+		default:
+			return p.Default
+		}
+	}
+	if len(p.Options) > 0 {
+		return p.Options[0]
+	}
+	switch p.Type {
+	case ParamTypeBool:
+		return true
+	case ParamTypeInt:
+		return 100
+	case ParamTypeFloat:
+		return 1.0
+	case ParamTypeFile:
+		if EffectiveUIHint(paramName, p) == "image_picker" {
+			return "/path/to/image.jpg"
+		}
+		return "/path/to/input_file"
+	default:
+		return "example_value"
+	}
+}
+
+// ParseDefaultBool returns a bool default for CLI flag registration.
+func ParseDefaultBool(defaultValue string) bool {
+	return defaultValue == "true" || defaultValue == "1"
+}
+
+// ParseDefaultInt returns an int default for CLI flag registration.
+func ParseDefaultInt(defaultValue string) int {
+	var val int
+	if defaultValue != "" {
+		_, _ = fmt.Sscanf(defaultValue, "%d", &val)
+	}
+	return val
+}
+
+// ValidateValue checks that value matches the expected schema type (L1).
+func (p ServiceParameter) ValidateValue(paramName string, value any) error {
+	switch p.Type {
+	case ParamTypeString, ParamTypeFile:
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("invalid type for parameter '%s': expected string", paramName)
+		}
+	case ParamTypeBool:
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("invalid type for parameter '%s': expected bool", paramName)
+		}
+	case ParamTypeInt:
+		switch v := value.(type) {
+		case int, int32, int64:
+			return nil
+		case float64:
+			if v != float64(int64(v)) {
+				return fmt.Errorf("invalid type for parameter '%s': expected int, got float", paramName)
+			}
+		default:
+			return fmt.Errorf("invalid type for parameter '%s': expected int", paramName)
+		}
+	case ParamTypeFloat:
+		switch value.(type) {
+		case float32, float64, int, int32, int64:
+			return nil
+		default:
+			return fmt.Errorf("invalid type for parameter '%s': expected float", paramName)
+		}
+	default:
+		return fmt.Errorf("unknown schema type '%s' for parameter '%s'", p.Type, paramName)
+	}
+	return nil
+}
+
+// DescribeParameter returns human description + effective UI hint (L2 SSOT for CLI/bind).
+func DescribeParameter(paramName string, p ServiceParameter) (desc string, uiHint string) {
+	uiHint = EffectiveUIHint(paramName, p)
+	if len(p.Options) > 0 {
+		return fmt.Sprintf("Options: [%s]", strings.Join(p.Options, ", ")), uiHint
+	}
+	switch p.Type {
+	case ParamTypeBool:
+		desc = fmt.Sprintf("Toggle to enable or disable the %s option.", paramName)
+	case ParamTypeInt, ParamTypeFloat:
+		desc = fmt.Sprintf("Enter a numerical value for %s.", paramName)
+	case ParamTypeFile:
+		if uiHint == "image_picker" {
+			desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", paramName)
+		} else {
+			desc = fmt.Sprintf("Provide a file path or select a file for %s.", paramName)
+		}
+	default:
+		desc = fmt.Sprintf("Provide a text value for %s.", paramName)
+	}
+	return desc, uiHint
 }
 
 const VFSURIPrefix = "vfs://"
@@ -208,6 +348,47 @@ func ParseVFSURI(s string) (hash string, ok bool) {
 	}
 	hash = filepath.Base(strings.TrimPrefix(s, VFSURIPrefix))
 	return hash, hash != "" && hash != "."
+}
+
+// OutputHashFromOutputs extracts a CAS blob hash from task outputs (L1).
+// Prefers explicit output_hash, else first vfs:// value.
+func OutputHashFromOutputs(outputs map[string]any) (hash string, name string, size int64) {
+	if outputs == nil {
+		return "", "", 0
+	}
+	if h, ok := outputs["output_hash"].(string); ok && h != "" {
+		hash = h
+		name, _ = outputs["output_name"].(string)
+		if sz, ok := outputs["output_size"].(float64); ok {
+			size = int64(sz)
+		}
+		return hash, name, size
+	}
+	for k, v := range outputs {
+		if pathStr, ok := v.(string); ok {
+			if h, isVFS := ParseVFSURI(pathStr); isVFS {
+				return h, k, 0
+			}
+		}
+	}
+	return "", "", 0
+}
+
+// ResultLocalPathKey is the canonical outputs key for a resolved local file path.
+const ResultLocalPathKey = "result_path"
+
+// ResultLocalPath returns a non-VFS local filesystem path from task outputs (L1 SSOT).
+// Prefer result_path, then output_path. Empty if only hashes / vfs URIs remain.
+func ResultLocalPath(outputs map[string]any) string {
+	if outputs == nil {
+		return ""
+	}
+	for _, key := range []string{ResultLocalPathKey, "output_path"} {
+		if p, ok := outputs[key].(string); ok && p != "" && !IsVFSURI(p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // LocalService is the on-disk services.json entry (SSOT).
@@ -252,7 +433,7 @@ type PeerNotification struct {
 }
 
 type ServiceNotification struct {
-	Action string        `json:"action"` // "add", "remove"
+	Action string        `json:"action"` // ActionAdd / ActionRemove
 	NodeID string        `json:"node_id"`
 	Schema ServiceSchema `json:"schema"`
 }

@@ -26,6 +26,8 @@ import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.executeGoCall
 import com.proxyma.android.utils.isBindError
 import com.proxyma.android.utils.parseBindError
+import com.proxyma.android.utils.parseServiceDetail
+import com.proxyma.android.utils.runBindOnBg
 import com.proxyma.android.utils.toast
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,30 +49,45 @@ fun PipelineEditorDialog(
 
     LaunchedEffect(steps.map { it.service }) {
         val uniqueServices = (services + steps.map { it.service }).distinct()
-        kotlin.concurrent.thread {
+        runBindOnBg({
             val map = mutableMapOf<String, ServiceDetail>()
             for (svc in uniqueServices) {
                 if (svc.isNotEmpty()) {
                     val raw = proxyma_bind.Proxyma_bind.getServiceDetails(svc)
-                    val detail = com.proxyma.android.utils.parseServiceDetail(raw)
+                    val detail = parseServiceDetail(raw)
                     if (detail != null) {
                         map[svc] = detail
                     }
                 }
             }
-            serviceDetails = map
-
             val node = proxyma_bind.Proxyma_bind.getNodeID()
             val rawPeers = proxyma_bind.Proxyma_bind.getPeersJson()
-            if (node.isNotEmpty()) {
-                localNodeId = node
-            }
-            if (!isBindError(rawPeers)) {
+            Gson().toJson(
+                mapOf(
+                    "details" to map,
+                    "node" to node,
+                    "peers" to rawPeers
+                )
+            )
+        }) { result ->
+            result.onSuccess { json ->
                 try {
-                    val listType = object : TypeToken<List<Peer>>() {}.type
-                    val peersList = Gson().fromJson<List<Peer>>(rawPeers, listType)
-                    if (peersList != null) {
-                        knownPeers = peersList
+                    val root = Gson().fromJson<Map<String, Any>>(json, object : TypeToken<Map<String, Any>>() {}.type)
+                    val detailsJson = Gson().toJson(root["details"])
+                    val detailsType = object : TypeToken<Map<String, ServiceDetail>>() {}.type
+                    val map: Map<String, ServiceDetail> = Gson().fromJson(detailsJson, detailsType) ?: emptyMap()
+                    serviceDetails = map
+                    val node = root["node"] as? String ?: ""
+                    if (node.isNotEmpty()) {
+                        localNodeId = node
+                    }
+                    val rawPeers = root["peers"] as? String ?: ""
+                    if (!isBindError(rawPeers)) {
+                        val listType = object : TypeToken<List<Peer>>() {}.type
+                        val peersList = Gson().fromJson<List<Peer>>(rawPeers, listType)
+                        if (peersList != null) {
+                            knownPeers = peersList
+                        }
                     }
                 } catch (_: Exception) {}
             }

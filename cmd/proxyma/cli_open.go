@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
+	"proxyma/internal/utils"
 )
 
 func launchEditor(pipelineID string, fileToOpen string) string {
 	binaryPath := "/home/drusila/Projects/proxyma-services/editor/proxyma-editor"
 	if _, err := os.Stat(binaryPath); err != nil {
-		return proxyma_bind.BindErrorJSON(fmt.Errorf("Editor binary not found. Please compile it first: %v", err))
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("editor binary not found. Please compile it first: %v", err))
 	}
 
 	cmdArgs := []string{"--storage", cliStorage}
@@ -33,7 +34,7 @@ func launchEditor(pipelineID string, fileToOpen string) string {
 
 	err := cmd.Run()
 	if err != nil {
-		return proxyma_bind.BindErrorJSON(fmt.Errorf("Failed to run editor: %v", err))
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("failed to run editor: %v", err))
 	}
 	return proxyma_bind.BindMessageJSON("Editor closed")
 }
@@ -47,14 +48,7 @@ func isTerminalInteractive() bool {
 }
 
 func fileExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return !info.IsDir()
+	return utils.FileExists(path)
 }
 
 // resolveExistingJSONPath returns candidate when it looks like an existing .json schema path.

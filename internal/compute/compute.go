@@ -211,11 +211,7 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 }
 
 func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema protocol.PipelineSchema) {
-	var pipelineCtx protocol.PipelineContext
-	if rawPipeline, ok := t.Payload["$pipeline"]; ok {
-		b, _ := json.Marshal(rawPipeline)
-		_ = json.Unmarshal(b, &pipelineCtx)
-	}
+	pipelineCtx := loadPipelineCtx(t.Payload)
 	if pipelineCtx.Outputs == nil {
 		pipelineCtx.Outputs = make(map[string]map[string]any)
 	}
@@ -378,11 +374,7 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 }
 
 func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.PipelineSchema) {
-	var pipelineCtx protocol.PipelineContext
-	if rawPipeline, ok := t.Payload["$pipeline"]; ok {
-		b, _ := json.Marshal(rawPipeline)
-		_ = json.Unmarshal(b, &pipelineCtx)
-	}
+	pipelineCtx := loadPipelineCtx(t.Payload)
 
 	if pipelineCtx.CurrentStep < len(schema.Steps) {
 		nextStep := schema.Steps[pipelineCtx.CurrentStep]
@@ -492,6 +484,15 @@ func (c *ComputeEngine) MarkTaskAsFailed(req protocol.TaskRequest, reason string
 		Status:  "failed",
 		Outputs: map[string]any{"error": reason},
 	})
+}
+
+func loadPipelineCtx(payload map[string]any) protocol.PipelineContext {
+	var pipelineCtx protocol.PipelineContext
+	if rawPipeline, ok := payload["$pipeline"]; ok {
+		b, _ := json.Marshal(rawPipeline)
+		_ = json.Unmarshal(b, &pipelineCtx)
+	}
+	return pipelineCtx
 }
 
 func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {

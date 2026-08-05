@@ -45,7 +45,6 @@ import com.proxyma.android.ui.components.ServiceCardItem
 import com.proxyma.android.ui.components.TaskLogCardItem
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import kotlin.concurrent.thread
 
 private val fileTasks = mutableStateListOf<FileTask>()
 
@@ -75,34 +74,32 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
     var runTargetSpecs by remember { mutableStateOf<List<FormParameter>?>(null) }
 
     fun triggerManualDiscovery() {
-        thread {
-            isManualDiscovering = true
+        isManualDiscovering = true
+        runBindOnBg({
             Log.i("ProxymaService", "[Android UI] User triggered manual service discovery...")
-            val raw = proxyma_bind.Proxyma_bind.discoverServices()
-            Log.i("ProxymaService", "[Android UI] Service discovery response: $raw")
-
-            val handler = android.os.Handler(android.os.Looper.getMainLooper())
-            if (isBindError(raw)) {
-                val errorMsg = parseBindError(raw).ifEmpty { raw }
-                Log.e("ProxymaService", "[Android UI] Service discovery error: $errorMsg")
-                handler.post {
-                    isManualDiscovering = false
-                    lastDiscoveryStatus = "❌ Error: $errorMsg"
-                    context.toast("❌ Discovery Error: $errorMsg")
-                }
-            } else {
-                val parsed = try {
-                    val type = object : TypeToken<List<String>>() {}.type
-                    Gson().fromJson<List<String>>(raw, type) ?: emptyList()
-                } catch (e: Exception) { emptyList() }
-                Log.i("ProxymaService", "[Android UI] Discovery scan finished. Found ${parsed.size} services: $parsed")
-                handler.post {
+            proxyma_bind.Proxyma_bind.discoverServices()
+        }) { result ->
+            result.fold(
+                onSuccess = { raw ->
+                    Log.i("ProxymaService", "[Android UI] Service discovery response: $raw")
+                    val parsed = try {
+                        val type = object : TypeToken<List<String>>() {}.type
+                        Gson().fromJson<List<String>>(raw, type) ?: emptyList()
+                    } catch (e: Exception) { emptyList() }
+                    Log.i("ProxymaService", "[Android UI] Discovery scan finished. Found ${parsed.size} services: $parsed")
                     isManualDiscovering = false
                     manualServicesList = parsed
                     lastDiscoveryStatus = if (parsed.isEmpty()) "ℹ️ No services found on cluster peers." else "✅ Found ${parsed.size} active service(s)."
                     context.toast(if (parsed.isEmpty()) "ℹ️ No services found on cluster peers." else "✅ Found ${parsed.size} service(s)")
+                },
+                onFailure = { err ->
+                    val errorMsg = err.message ?: "discovery failed"
+                    Log.e("ProxymaService", "[Android UI] Service discovery error: $errorMsg")
+                    isManualDiscovering = false
+                    lastDiscoveryStatus = "❌ Error: $errorMsg"
+                    context.toast("❌ Discovery Error: $errorMsg")
                 }
-            }
+            )
         }
     }
 
@@ -175,20 +172,22 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                     PipelineCardItem(
                         pipeline = pipeline,
                         onRun = {
-                            thread {
-                                val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
-                                val specs = if (initialConns.isNotEmpty()) {
-                                    initialConns.map { conn ->
+                            val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
+                            if (initialConns.isEmpty()) {
+                                runTargetName = pipeline.id
+                                runTargetIsPipeline = true
+                                runTargetSpecs = DEFAULT_RUN_PARAMS
+                            } else {
+                                runBindOnBg({
+                                    val specs = initialConns.map { conn ->
                                         val fromPortName = conn.from_port
                                         val tgtStep = pipeline.steps.find { it.id == conn.to_step }
                                         val tgtSvc = tgtStep?.service ?: ""
-
                                         var paramDef: FormParameter? = null
                                         if (tgtSvc.isNotEmpty()) {
                                             val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(tgtSvc)
                                             paramDef = parseServiceDetail(rawDetails)?.parameters?.find { it.name == conn.to_port }
                                         }
-
                                         FormParameter(
                                             name = fromPortName,
                                             type = paramDef?.type ?: "string",
@@ -199,11 +198,18 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                             options = paramDef?.options
                                         )
                                     }.distinctBy { it.name }
-                                } else {
-                                    DEFAULT_RUN_PARAMS
-                                }
-
-                                isRunningOnMainThread {
+                                    Gson().toJson(specs)
+                                }) { result ->
+                                    val specs = result.getOrNull()?.let { json ->
+                                        try {
+                                            Gson().fromJson<List<FormParameter>>(
+                                                json,
+                                                object : TypeToken<List<FormParameter>>() {}.type
+                                            )
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+                                    } ?: DEFAULT_RUN_PARAMS
                                     runTargetName = pipeline.id
                                     runTargetIsPipeline = true
                                     runTargetSpecs = specs
@@ -296,17 +302,11 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                             }
                         },
                         onRun = {
-                            thread {
-                                val rawDetails = proxyma_bind.Proxyma_bind.getServiceDetails(svcName)
-                                val parsedDetails = parseServiceDetail(rawDetails)
-                                val specs = parsedDetails?.parameters?.takeIf { it.isNotEmpty() } ?: DEFAULT_RUN_PARAMS
-                                val isStream = parsedDetails?.isStreaming == true
-                                isRunningOnMainThread {
-                                    runTargetName = svcName
-                                    runTargetIsPipeline = false
-                                    runTargetIsStreaming = isStream
-                                    runTargetSpecs = specs
-                                }
+                            loadRunSpecs(svcName) { specs, isStream ->
+                                runTargetName = svcName
+                                runTargetIsPipeline = false
+                                runTargetIsStreaming = isStream
+                                runTargetSpecs = specs
                             }
                         }
                     )
@@ -360,11 +360,8 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Task ID:\n${task.taskId}", color = Color.Gray, fontSize = 12.sp)
-                    Text("Status: ${task.status.uppercase()}", color = when (task.status) {
-                        "completed" -> MintGreen
-                        "failed" -> Color.Red
-                        "streaming" -> VioletSecondary
-                        else -> Color.Yellow
+                    Text("Status: ${task.status.uppercase()}", color = taskStatusColor(task.status).let {
+                        if (task.status == "streaming") VioletSecondary else it
                     }, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text("Input:\n${task.input}", color = Color.White, fontSize = 14.sp)
                     Text("Output Target:\n${task.output}", color = Color.White, fontSize = 14.sp)

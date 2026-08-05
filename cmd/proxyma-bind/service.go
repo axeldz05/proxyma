@@ -61,13 +61,7 @@ func GetServiceSchema(name string) string {
 			if !ok {
 				return nil, fmt.Errorf("service %q not found offline", name)
 			}
-			schema := svc.Schema
-			if schema.Name == "" {
-				schema.Name = name
-			}
-			if schema.Type == "" {
-				schema.Type = svc.Type
-			}
+			schema := protocol.NormalizeServiceSchema(name, svc.Schema, svc.Type)
 			return schema, nil
 		},
 	)
@@ -89,6 +83,19 @@ func resolveServiceSchema(name string) (schema protocol.ServiceSchema, addr stri
 	return schema, "", nil
 }
 
+// LookupServiceSchema returns a typed ServiceSchema via GetServiceSchema (unix + offline) (L2).
+func LookupServiceSchema(name string) (protocol.ServiceSchema, error) {
+	raw := GetServiceSchema(name)
+	if IsBindError(raw) {
+		return protocol.ServiceSchema{}, fmt.Errorf("%s", ParseBindError(raw))
+	}
+	var schema protocol.ServiceSchema
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return protocol.ServiceSchema{}, fmt.Errorf("invalid service schema: %w", err)
+	}
+	return protocol.NormalizeServiceSchema(name, schema, ""), nil
+}
+
 // GetServiceDetails gets Android-facing metadata for a given service (L3).
 func GetServiceDetails(name string) string {
 	schema, addr, err := resolveServiceSchema(name)
@@ -102,21 +109,11 @@ func GetServiceDetails(name string) string {
 
 	var params []ParameterDetail
 	for pName, rules := range schema.Parameters {
-		desc := fmt.Sprintf("Provide a text value for %s.", pName)
-		uiHint := rules.UIHint
-		switch rules.Type {
-		case "bool":
-			desc = fmt.Sprintf("Toggle to enable or disable the %s option.", pName)
-		case "int", "float":
-			desc = fmt.Sprintf("Enter a numerical value for %s.", pName)
-		case "file":
+		desc, uiHint := protocol.DescribeParameter(pName, rules)
+		if rules.Type == protocol.ParamTypeFile {
 			hasFileParam = true
-			uiHint = protocol.EffectiveUIHint(pName, rules)
 			if uiHint == "image_picker" {
 				hasImageParam = true
-				desc = fmt.Sprintf("Provide an image file path or capture a photo for %s.", pName)
-			} else {
-				desc = fmt.Sprintf("Provide a file path or select a file for %s.", pName)
 			}
 		}
 

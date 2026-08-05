@@ -158,9 +158,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
 	mux := s.wrapWithBandwidthCounting(s.handler)
-	rawAddr := s.Config.Address
-	rawAddr = strings.TrimPrefix(rawAddr, "https://")
-	rawAddr = strings.TrimPrefix(rawAddr, "http://")
+	rawAddr := utils.StripURLScheme(s.Config.Address)
 	_, port, err := net.SplitHostPort(rawAddr)
 	var addr string
 	if err == nil {
@@ -168,7 +166,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	} else {
 		extractedPort := utils.ExtractPort(s.Config.Address)
 		if extractedPort == "" {
-			extractedPort = "8080"
+			extractedPort = protocol.DefaultTCPPort
 		}
 		addr = "0.0.0.0:" + extractedPort
 	}

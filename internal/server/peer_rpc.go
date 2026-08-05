@@ -18,6 +18,8 @@ const (
 	PeerRPCQUICWait  = 8 * time.Second
 	PeerRPCRelayHold = 60 * time.Second // long-poll hold on relay
 	PeerRPCRelayTick = 15 * time.Second // client relay poll interval
+	PeerRPCProbe     = 2 * time.Second  // TCP dial for HandleProbe
+	PeerRPCSTUN      = 5 * time.Second  // STUN / NAT probe
 	TaskWaitTimeout  = 90 * time.Second
 	// DefaultInviteMinutes is the SSOT default invite TTL.
 	DefaultInviteMinutes = 15

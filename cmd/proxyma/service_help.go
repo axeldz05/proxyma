@@ -17,16 +17,9 @@ import (
 // GetServiceSchemaLocal fetches the ServiceSchema for a target service from the daemon or local registry.
 func GetServiceSchemaLocal(storagePath string, serviceName string) (*protocol.ServiceSchema, error) {
 	proxyma_bind.SetStoragePath(storagePath)
-	schemaJSON := proxyma_bind.GetServiceSchema(serviceName)
-	if proxyma_bind.IsBindError(schemaJSON) {
-		return nil, fmt.Errorf("%s", proxyma_bind.ParseBindError(schemaJSON))
-	}
-	var schema protocol.ServiceSchema
-	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-		return nil, fmt.Errorf("service '%s' details unavailable: %w", serviceName, err)
-	}
-	if schema.Name == "" {
-		schema.Name = serviceName
+	schema, err := proxyma_bind.LookupServiceSchema(serviceName)
+	if err != nil {
+		return nil, err
 	}
 	return &schema, nil
 }
@@ -81,35 +74,7 @@ func ParseInputsToJSON(inputsRaw string) string {
 // sampleValue synthesizes a representative sample for a parameter (L1).
 // Uses Default, Options, Type, and UIHint only — no parameter-name sniffing.
 func sampleValue(paramName string, param protocol.ServiceParameter) any {
-	if param.Default != "" {
-		switch param.Type {
-		case "bool":
-			return param.Default == "true" || param.Default == "1"
-		case "int":
-			var val int
-			_, _ = fmt.Sscanf(param.Default, "%d", &val)
-			return val
-		default:
-			return param.Default
-		}
-	}
-	if len(param.Options) > 0 {
-		return param.Options[0]
-	}
-	switch param.Type {
-	case "bool":
-		return true
-	case "int":
-		return 100
-	case "file":
-		hint := protocol.EffectiveUIHint(paramName, param)
-		if hint == "image_picker" {
-			return "/path/to/image.jpg"
-		}
-		return "/path/to/input_file"
-	default:
-		return "example_value"
-	}
+	return param.CoerceDefault(paramName)
 }
 
 // BuildSampleKVInputs generates a representative key1=val1,key2=val2 string sample.
@@ -226,12 +191,9 @@ func ValidateAndPrintServiceHelp(storagePath string, serviceName string, payload
 			}
 			pType := p.Type
 			if pType == "" {
-				pType = "string"
+				pType = protocol.ParamTypeString
 			}
-			desc := fmt.Sprintf("Value for %s", k)
-			if len(p.Options) > 0 {
-				desc = fmt.Sprintf("Options: [%s]", strings.Join(p.Options, ", "))
-			}
+			desc, _ := protocol.DescribeParameter(k, p)
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", k, pType, reqStr, defStr, desc)
 		}
 		_ = w.Flush()

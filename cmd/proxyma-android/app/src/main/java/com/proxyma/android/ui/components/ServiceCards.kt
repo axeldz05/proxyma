@@ -22,6 +22,7 @@ import com.proxyma.android.models.FileTask
 import com.proxyma.android.models.FormParameter
 import com.proxyma.android.models.PipelineSchema
 import com.proxyma.android.ui.theme.*
+import com.proxyma.android.utils.taskStatusColor
 
 @Composable
 fun RunTaskDialog(
@@ -79,11 +80,7 @@ fun TaskLogCardItem(
                     fontSize = 14.sp,
                     color = VioletSecondary
                 )
-                val statusColor = when (task.status) {
-                    "completed" -> MintGreen
-                    "failed" -> Color.Red
-                    else -> Color.Yellow
-                }
+                val statusColor = taskStatusColor(task.status)
                 Text(
                     text = task.status.uppercase(),
                     fontWeight = FontWeight.Bold,

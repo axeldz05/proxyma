@@ -3,6 +3,7 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -93,7 +94,7 @@ func doJSON[Resp any](ctx context.Context, c *HTTPPeerClient, method, target, pa
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !utils.HTTPSuccess(resp.StatusCode) {
 		return respVal, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -130,7 +131,7 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 	} else {
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if !utils.HTTPSuccess(resp.StatusCode) {
 			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 	}
@@ -168,10 +169,27 @@ func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string,
 	return relayRes, nil
 }
 
+// QUICScheme is the address scheme for QUIC/UDP hole-punch endpoints.
+const QUICScheme = "quic://"
+
+// FormatQUICAddr builds a quic://host:port address (L1).
+func FormatQUICAddr(hostport string) string {
+	return QUICScheme + hostport
+}
+
+// ParseQUICAddr strips the quic:// scheme. ok is false if addr is not a QUIC address.
+func ParseQUICAddr(addr string) (hostport string, ok bool) {
+	if !strings.HasPrefix(addr, QUICScheme) {
+		return "", false
+	}
+	hostport = strings.TrimPrefix(addr, QUICScheme)
+	return hostport, hostport != ""
+}
+
 // FirstQUICAddr returns the first quic:// address in the list.
 func FirstQUICAddr(addrs []string) (string, bool) {
 	for _, addr := range addrs {
-		if strings.HasPrefix(addr, "quic://") {
+		if _, ok := ParseQUICAddr(addr); ok {
 			return addr, true
 		}
 	}
@@ -185,6 +203,18 @@ func VerifyPeerCN(cert *x509.Certificate, expectedPeerID string) error {
 	}
 	if cert.Subject.CommonName != expectedPeerID {
 		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cert.Subject.CommonName)
+	}
+	return nil
+}
+
+// VerifyTLSPeerCN extracts the leaf CN from state and verifies it against expectedPeerID (L2).
+func VerifyTLSPeerCN(state *tls.ConnectionState, expectedPeerID string) error {
+	cn, ok := PeerCNFromTLS(state)
+	if !ok {
+		return fmt.Errorf("peer identity mismatch: missing certificate")
+	}
+	if cn != expectedPeerID {
+		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cn)
 	}
 	return nil
 }

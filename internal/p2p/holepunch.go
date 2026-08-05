@@ -42,6 +42,34 @@ func ParseHolePunchPing(p []byte) (senderID string, ok bool) {
 	return strings.TrimPrefix(payload, "ping:"), true
 }
 
+func defaultQUICConfig() *quic.Config {
+	return &quic.Config{KeepAlivePeriod: 15 * time.Second}
+}
+
+// BurstPings sends n hole-punch pings to addr at the given interval (L2).
+func BurstPings(pc net.PacketConn, addr *net.UDPAddr, localID string, n int, interval time.Duration) {
+	if pc == nil || addr == nil || n <= 0 {
+		return
+	}
+	pingPayload := HolePunchPingPayload(localID)
+	for i := 0; i < n; i++ {
+		_, _ = pc.WriteTo(pingPayload, addr)
+		if i+1 < n && interval > 0 {
+			time.Sleep(interval)
+		}
+	}
+}
+
+func (qm *QUICManager) serveIncomingStreams(conn *quic.Conn, tlsState *tls.ConnectionState) {
+	for {
+		stream, err := conn.AcceptStream(context.Background())
+		if err != nil {
+			return
+		}
+		go qm.handleIncomingStream(stream, tlsState)
+	}
+}
+
 // HolePunchPacketConn wraps net.PacketConn to intercept hole punching pings
 type HolePunchPacketConn struct {
 	net.PacketConn
@@ -140,9 +168,7 @@ func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls
 }
 
 func (qm *QUICManager) StartListener() error {
-	listener, err := qm.Transport.Listen(qm.TLSServer, &quic.Config{
-		KeepAlivePeriod: 15 * time.Second,
-	})
+	listener, err := qm.Transport.Listen(qm.TLSServer, defaultQUICConfig())
 	if err != nil {
 		return err
 	}
@@ -218,13 +244,7 @@ func (qm *QUICManager) handleIncomingConnection(conn *quic.Conn) {
 	}
 
 	tlsState := state.TLS
-	for {
-		stream, err := conn.AcceptStream(context.Background())
-		if err != nil {
-			return
-		}
-		go qm.handleIncomingStream(stream, &tlsState)
-	}
+	qm.serveIncomingStreams(conn, &tlsState)
 }
 
 func (qm *QUICManager) handleIncomingStream(stream *quic.Stream, tlsState *tls.ConnectionState) {
@@ -291,7 +311,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 	// Find the remote public UDP address in remoteAddresses list
 	var remoteUDP string
 	if quicAddr, ok := FirstQUICAddr(remoteAddresses); ok {
-		remoteUDP = strings.TrimPrefix(quicAddr, "quic://")
+		remoteUDP, _ = ParseQUICAddr(quicAddr)
 	}
 	if remoteUDP == "" {
 		return nil, fmt.Errorf("remote peer does not advertise quic:// public address")
@@ -384,20 +404,15 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		if qm.Logger != nil {
 			qm.Logger.Debug("Dialing QUIC session as caller", "peer", peerID)
 		}
-		qconn, err := qm.Transport.Dial(ctx, rUDPAddr, qm.TLSClient, &quic.Config{
-			KeepAlivePeriod: 15 * time.Second,
-		})
+		qconn, err := qm.Transport.Dial(ctx, rUDPAddr, qm.TLSClient, defaultQUICConfig())
 		if err != nil {
 			return nil, fmt.Errorf("failed to dial direct QUIC session: %w", err)
 		}
 
 		tlsState := qconn.ConnectionState().TLS
-		if len(tlsState.PeerCertificates) > 0 {
-			cert := tlsState.PeerCertificates[0]
-			if err := VerifyPeerCN(cert, peerID); err != nil {
-				_ = qconn.CloseWithError(0, "peer identity mismatch")
-				return nil, fmt.Errorf("peer identity mismatch in QUIC: %w", err)
-			}
+		if err := VerifyTLSPeerCN(&tlsState, peerID); err != nil {
+			_ = qconn.CloseWithError(0, "peer identity mismatch")
+			return nil, fmt.Errorf("peer identity mismatch in QUIC: %w", err)
 		}
 
 		qm.SetSession(peerID, qconn)
@@ -405,21 +420,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		if qm.Logger != nil {
 			qm.Logger.Debug("Outbound QUIC session accept loop starting", "peer", peerID)
 		}
-		go func(c *quic.Conn, ts *tls.ConnectionState, pID string) {
-			for {
-				stream, err := c.AcceptStream(context.Background())
-				if err != nil {
-					if qm.Logger != nil {
-						qm.Logger.Warn("Outbound QUIC session accept loop exited", "peer", pID, "error", err)
-					}
-					return
-				}
-				if qm.Logger != nil {
-					qm.Logger.Debug("Outbound QUIC session accepted a stream", "peer", pID)
-				}
-				go qm.handleIncomingStream(stream, ts)
-			}
-		}(qconn, &tlsState, peerID)
+		go qm.serveIncomingStreams(qconn, &tlsState)
 
 		return qconn, nil
 	} else {

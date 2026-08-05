@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,11 +19,11 @@ func TestBuildGRPCBidiStreamHandler_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "application/x-ndjson", r.Header.Get("Content-Type"))
 
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		flusher, ok := w.(http.Flusher)
-		require.True(t, ok)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
 
-		decoder := json.NewDecoder(r.Body)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		decoder := json.NewDecoder(bytes.NewReader(body))
 		encoder := json.NewEncoder(w)
 
 		for {
@@ -33,14 +34,8 @@ func TestBuildGRPCBidiStreamHandler_Success(t *testing.T) {
 				}
 				return
 			}
-
-			// Echo modified payload back
 			msg["processed"] = true
-			err := encoder.Encode(msg)
-			if err != nil {
-				return
-			}
-			flusher.Flush()
+			require.NoError(t, encoder.Encode(msg))
 		}
 	}))
 	t.Cleanup(ts.Close)
@@ -61,15 +56,26 @@ func TestBuildGRPCBidiStreamHandler_Success(t *testing.T) {
 	in <- map[string]any{"task": "audio_frame_2"}
 	close(in)
 
-	res1, ok1 := <-out
-	require.True(t, ok1)
-	require.Equal(t, "audio_frame_1", res1["task"])
-	require.Equal(t, true, res1["processed"])
-
-	res2, ok2 := <-out
-	require.True(t, ok2)
-	require.Equal(t, "audio_frame_2", res2["task"])
-	require.Equal(t, true, res2["processed"])
+	var results []map[string]any
+	timeout := time.After(2 * time.Second)
+	for len(results) < 2 {
+		select {
+		case res, ok := <-out:
+			if !ok {
+				require.Len(t, results, 2, "stream closed early")
+				goto done
+			}
+			results = append(results, res)
+		case <-timeout:
+			t.Fatalf("timeout waiting for stream chunks, got %d", len(results))
+		}
+	}
+done:
+	require.Len(t, results, 2)
+	require.Equal(t, "audio_frame_1", results[0]["task"])
+	require.Equal(t, true, results[0]["processed"])
+	require.Equal(t, "audio_frame_2", results[1]["task"])
+	require.Equal(t, true, results[1]["processed"])
 
 	select {
 	case err := <-errChan:

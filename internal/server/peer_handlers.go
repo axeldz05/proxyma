@@ -10,7 +10,6 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strings"
-	"time"
 )
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
@@ -24,10 +23,7 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// STUN-like Public IP Detection
-	remoteIP := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		remoteIP = host
-	}
+	remoteIP := utils.ClientHost(r.RemoteAddr)
 
 	// Try to parse the first announced address to extract scheme and port
 	if parsedUrl, err := url.Parse(req.Address.Addresses[0]); err == nil {
@@ -126,15 +122,12 @@ func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Security: Only allow probing the caller's IP to prevent SSRF
-	callerIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		callerIP = r.RemoteAddr
-	}
+	callerIP := utils.ClientHost(r.RemoteAddr)
 
 	// Clean targetHost/Port
-	targetAddr := req.Address
-	if strings.Contains(targetAddr, "://") {
-		parsed, err := url.Parse(targetAddr)
+	targetAddr := utils.StripURLScheme(req.Address)
+	if strings.Contains(req.Address, "://") {
+		parsed, err := url.Parse(req.Address)
 		if err == nil {
 			targetAddr = parsed.Host
 		}
@@ -151,7 +144,7 @@ func (s *Server) HandleProbe(w http.ResponseWriter, r *http.Request) {
 	probeAddress := net.JoinHostPort(callerIP, targetPort)
 	s.Config.Logger.Debug("Probing reachability for client", "probeAddress", probeAddress)
 
-	conn, err := net.DialTimeout("tcp", probeAddress, 2*time.Second)
+	conn, err := net.DialTimeout("tcp", probeAddress, PeerRPCProbe)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusOK, protocol.ProbeResponse{
 			Reachable: false,

@@ -136,14 +136,14 @@ func (s *Server) parseAndValidatePipeline(schemaJSON string) (protocol.PipelineS
 // applyPipelineAction persists and registers/unregisters a pipeline (L2 SSOT).
 func (s *Server) applyPipelineAction(schema protocol.PipelineSchema, action string) error {
 	switch action {
-	case "add":
+	case protocol.ActionAdd:
 		if s.Storage != nil {
 			if err := s.Storage.SavePipelineSchema(schema); err != nil {
 				return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
 			}
 		}
 		s.Compute.RegisterPipeline(schema)
-	case "remove":
+	case protocol.ActionRemove:
 		if s.Storage != nil {
 			if err := s.Storage.DeletePipelineSchema(schema.ID); err != nil {
 				return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
@@ -166,10 +166,10 @@ func (s *Server) LocalPipelineAdd(schemaJSON string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.applyPipelineAction(schema, "add"); err != nil {
+	if err := s.applyPipelineAction(schema, protocol.ActionAdd); err != nil {
 		return err
 	}
-	go s.NotifySchema(schema, "add")
+	go s.NotifySchema(schema, protocol.ActionAdd)
 	return nil
 }
 
@@ -178,10 +178,10 @@ func (s *Server) LocalPipelineRemove(id string) error {
 		return fmt.Errorf("pipeline ID cannot be empty")
 	}
 	schema := protocol.PipelineSchema{ID: id}
-	if err := s.applyPipelineAction(schema, "remove"); err != nil {
+	if err := s.applyPipelineAction(schema, protocol.ActionRemove); err != nil {
 		return err
 	}
-	go s.NotifySchema(schema, "remove")
+	go s.NotifySchema(schema, protocol.ActionRemove)
 	return nil
 }
 

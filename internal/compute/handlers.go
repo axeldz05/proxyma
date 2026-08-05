@@ -75,7 +75,7 @@ func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	s.taskStatuses.Store(webhookPayload.TaskID, webhookPayload)
+	s.setTaskStatus(webhookPayload)
 	s.logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",

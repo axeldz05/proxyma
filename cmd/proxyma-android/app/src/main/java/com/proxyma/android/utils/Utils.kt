@@ -138,10 +138,9 @@ fun getResultPath(res: String): String {
     val map = parseJSONMap(res)
     val outputs = map["outputs"] as? Map<String, Any>
     if (outputs != null) {
+        // Prefer canonical result_path; fall back to output_path then output_hash→local blob.
         val resultPath = outputs["result_path"] as? String
             ?: outputs["output_path"] as? String
-            ?: outputs["note_path"] as? String
-            ?: outputs["path"] as? String
         if (!resultPath.isNullOrEmpty() && !resultPath.startsWith("vfs://")) {
             return resultPath
         }
@@ -393,6 +392,30 @@ fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
     } catch (_: Exception) {
         null
     }
+}
+
+/** Background load of ServiceDetail via bind (L3). */
+fun loadServiceDetail(name: String, onResult: (com.proxyma.android.models.ServiceDetail?) -> Unit) {
+    runBindOnBg({ proxyma_bind.Proxyma_bind.getServiceDetails(name) }) { result ->
+        onResult(result.getOrNull()?.let { parseServiceDetail(it) })
+    }
+}
+
+/** Background load of run-dialog parameter specs + streaming flag (L3). */
+fun loadRunSpecs(
+    name: String,
+    onResult: (specs: List<com.proxyma.android.models.FormParameter>, isStreaming: Boolean) -> Unit
+) {
+    loadServiceDetail(name) { detail ->
+        val specs = detail?.parameters?.takeIf { it.isNotEmpty() } ?: DEFAULT_RUN_PARAMS
+        onResult(specs, detail?.isStreaming == true)
+    }
+}
+
+fun taskStatusColor(status: String): androidx.compose.ui.graphics.Color = when (status) {
+    "completed" -> com.proxyma.android.ui.theme.MintGreen
+    "failed" -> androidx.compose.ui.graphics.Color.Red
+    else -> androidx.compose.ui.graphics.Color.Yellow
 }
 
 fun parsePipelineSchema(json: String): com.proxyma.android.models.PipelineSchema? {

@@ -95,9 +95,9 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	caPath, _ := p2p.CACertPaths(certsDir)
 	certPath, keyPath := p2p.NodeCertPaths(certsDir, nodeID)
 
-	_ = os.WriteFile(caPath, []byte(caCert), 0644)
-	_ = os.WriteFile(certPath, []byte(cert), 0644)
-	_ = os.WriteFile(keyPath, privKeyPEM, 0600)
+	if err := p2p.WriteNodePEMs(caPath, certPath, keyPath, []byte(caCert), []byte(cert), privKeyPEM); err != nil {
+		return bindErrorJSON(fmt.Errorf("failed to write node PEMs: %w", err))
+	}
 
 	workersCount := cfg.Workers
 	if workersCount <= 0 {

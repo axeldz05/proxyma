@@ -34,7 +34,8 @@ Antes de refactorizar o mover código, inspecciona los archivos principales de c
 * [server.go](file:///home/drusila/Projects/proxyma/internal/server/server.go): Ciclo de vida del servidor demonio, servidor HTTP mTLS.
 * [peers.go](file:///home/drusila/Projects/proxyma/internal/server/peers.go): Topología (`AddPeer`/`AnnouncePresence`/`RemovePeer`).
 * [unix_listener.go](file:///home/drusila/Projects/proxyma/internal/server/unix_listener.go): Dispatcher IPC unix → métodos `Local*` (`writeUnixResponse`, `announceAndSync`).
-* [local_services.go](file:///home/drusila/Projects/proxyma/internal/server/local_services.go): **`LocalServiceDetail`** (SSOT schema), load/run/stream/add/remove + **`NotifyService*`**.
+* [service_catalog.go](file:///home/drusila/Projects/proxyma/internal/server/service_catalog.go): **`LocalServiceDetail`**, Load/Add/Remove, **`applyServiceAction`**, **`NotifyService*`**, Discover.
+* [service_exec.go](file:///home/drusila/Projects/proxyma/internal/server/service_exec.go): Run/Stream + ingest outputs.
 * [vfs_sync.go](file:///home/drusila/Projects/proxyma/internal/server/vfs_sync.go): Sync, `fetchBlobFromPeer`, `LocalVFSUpload` / `LocalVFSSubscribe` / `LocalLogs`.
 * [peer_rpc.go](file:///home/drusila/Projects/proxyma/internal/server/peer_rpc.go): **`callPeer` / `forEachPeer` / `mapEachPeer`** + timeouts `PeerRPC*`.
 * [nat.go](file:///home/drusila/Projects/proxyma/internal/server/nat.go): NAT + **`advertisedTCPPort`**.
@@ -172,22 +173,27 @@ Para detectar y mover código duplicado a paquetes comunes sin romper contratos 
 Al revisar el código, busca los siguientes patrones recurrentes:
 * **Fan-out de peers**: No reinventar loops + timeouts + liveness — usar `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer`.
 * **Pipeline persist**: Un solo camino — `applyPipelineAction` (Local* + gossip).
-* **Service gossip**: `NotifyService` / `NotifyServiceToPeer` (espejo de pipelines); add/remove + AddPeer catch-up.
-* **Task register/fail remoto**: Solo `DispatchTask` (LocalServiceRun no re-registra en brazo remoto).
-* **UIHint / pickers**: No snifar nombres en bind/Android — `protocol.InferUIHint` / `EffectiveUIHint`.
-* **Schema detail**: Un solo camino — `Server.LocalServiceDetail` / `GetServiceSchema` (offline); details reusa schema.
-* **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError` (incl. StartNode/ChangeStorage).
-* **Respuestas JSON en Handlers HTTP**: `utils.RespondJSON` / `RespondError` / `DecodeJSONOrError` / `GetRequiredQueryParam`.
-* **TLS / cert leaf**: `p2p.LoadNodeTLS`, `newNodeCertTemplate`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `PeerCNFromTLS` / `peerCNFromRequest`.
-* **HTTP client**: `p2p.NewHTTPClient`.
-* **QUIC addr**: siempre `p2p.FirstQUICAddr`.
-* **Hole-punch ping**: `HolePunchPingPayload` / `ParseHolePunchPing`.
-* **IPC Unix**: `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`; VFS vía `LocalVFSUpload` / `LocalVFSSubscribe`.
-* **Bolt JSON**: `boltGetJSON` / `boltPutJSON` / `boltLoadMapJSON` (también VFS).
+* **Service persist**: Un solo camino — `applyServiceAction` (espejo pipelines) + `NotifyService*`.
+* **Schema fill**: `protocol.NormalizeServiceSchema`; actions `ActionAdd`/`ActionRemove`.
+* **Param UI/defaults**: `DescribeParameter` / `CoerceDefault` / `ValidateValue` — no switches de tipo en CLI/bind.
+* **Result path**: `ResultLocalPath` / `OutputHashFromOutputs` — Android no snifar keys inventadas.
+* **Task register/fail remoto**: Solo `DispatchTask`.
+* **UIHint / pickers**: `InferUIHint` / `EffectiveUIHint` (DTO bind siempre emite effective).
+* **Schema detail**: `LocalServiceDetail` / `LookupServiceSchema` / `GetServiceSchema`.
+* **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError`; VFS open vía `ResolveLocalBlob`.
+* **Respuestas JSON HTTP**: `utils.RespondJSON` / `DecodeJSONOrError` / `HTTPSuccess`.
+* **TLS / cert**: `LoadNodeTLS`, `WriteNodePEMs`, `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash`, paths helpers, `PeerCNFromTLS` / `VerifyTLSPeerCN`.
+* **HTTP client**: `p2p.NewHTTPClient` (streams: timeout 0 + ctx).
+* **QUIC addr**: `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`.
+* **Hole-punch**: `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`.
+* **IPC Unix**: `dispatchUnix*`; VFS `LocalVFS*` / `ResolveLocalBlob`.
+* **Bolt**: `boltGetJSON` / `boltPutJSON` / `boltLoadMapJSON` / `boltPutFlag` / `boltHasKey`.
+* **CAS upsert**: `UpsertAndSubscribe` / `deleteBlobIfOrphan`.
 * **VFS URI**: `protocol.VFSURI` / `ParseVFSURI` / `IsVFSURI`.
-* **Puerto TCP público**: `advertisedTCPPort`.
-* **NDJSON pumps**: `pumpJSONEncode` / `pumpJSONDecode`.
-* **Boilerplate CLI**: no dial propio — bind helpers; `resolveExistingJSONPath`.
+* **Puerto TCP**: `protocol.DefaultTCPPort` + `configTCPPort` / `advertisedTCPPort`.
+* **NDJSON**: `utils.WriteNDJSON` / `PumpJSONEncode` / `PumpJSONDecode` / `ForEachNDJSON`.
+* **Net utils**: `StripURLScheme` / `ClientHost` / `FileExists` / `GetRoutableLocalIPs`.
+* **Boilerplate CLI**: PersistentFlag `cliStorage` only; no dial propio.
 
 ### Paso 2: Ubicación de Abstracciones
 

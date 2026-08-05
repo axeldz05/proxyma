@@ -44,6 +44,19 @@ func boltDelete(tx *bolt.Tx, bucket, key string) error {
 	return b.Delete([]byte(key))
 }
 
+func boltPutFlag(tx *bolt.Tx, bucket, key string) error {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return fmt.Errorf("%s bucket not found", bucket)
+	}
+	return b.Put([]byte(key), []byte("true"))
+}
+
+func boltHasKey(tx *bolt.Tx, bucket, key string) bool {
+	b := tx.Bucket([]byte(bucket))
+	return b != nil && b.Get([]byte(key)) != nil
+}
+
 func boltLoadMapJSON[T any](db *bolt.DB, bucket string) (map[string]T, error) {
 	out := make(map[string]T)
 	err := db.View(func(tx *bolt.Tx) error {

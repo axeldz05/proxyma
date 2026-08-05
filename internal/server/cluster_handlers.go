@@ -125,10 +125,8 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err1 := os.WriteFile(caPath, []byte(caCert), 0644)
-	err2 := os.WriteFile(certPath, []byte(nodeCert), 0644)
-	if err1 != nil || err2 != nil {
-		s.Config.Logger.Error("Failed to save rotated certs", "err1", err1, "err2", err2)
+	if err := p2p.WriteNodePEMs(caPath, certPath, "", []byte(caCert), []byte(nodeCert), nil); err != nil {
+		s.Config.Logger.Error("Failed to save rotated certs", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to save rotated certs")
 		return
 	}

@@ -8,10 +8,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
+	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strconv"
 	"strings"
@@ -26,18 +26,7 @@ type InvitePayload struct {
 }
 
 func getLocalIPs() ([]net.IP, error) {
-	ips, err := utils.GetLocalIPs()
-	if err != nil {
-		return nil, err
-	}
-	var filtered []net.IP
-	for _, ip := range ips {
-		if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
-			continue
-		}
-		filtered = append(filtered, ip)
-	}
-	return filtered, nil
+	return utils.GetRoutableLocalIPs()
 }
 
 func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {
@@ -45,11 +34,11 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	if err != nil {
 		return "", "", fmt.Errorf("could not read CA cert: %w", err)
 	}
-	block, _ := pem.Decode(caBytes)
-	if block == nil {
-		return "", "", fmt.Errorf("failed to decode CA PEM")
+	caDER, err := PEMCertDER(caBytes)
+	if err != nil {
+		return "", "", err
 	}
-	hash := sha256.Sum256(block.Bytes)
+	hash := sha256.Sum256(caDER)
 
 	// Generate a 32-byte random secret
 	secretBytes := make([]byte, 32)
@@ -59,15 +48,11 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	secretHex := hex.EncodeToString(secretBytes)
 
 	// Parse hostAddress to extract the port
-	cleanAddr := hostAddress
-	if strings.HasPrefix(cleanAddr, "https://") {
-		cleanAddr = strings.TrimPrefix(cleanAddr, "https://")
-	} else if strings.HasPrefix(cleanAddr, "http://") {
-		cleanAddr = strings.TrimPrefix(cleanAddr, "http://")
-	}
+	cleanAddr := utils.StripURLScheme(hostAddress)
 
 	host, portStr, pErr := net.SplitHostPort(cleanAddr)
-	var port uint16 = 8080
+	var port uint16
+	_, _ = fmt.Sscanf(protocol.DefaultTCPPort, "%d", &port)
 	if pErr == nil {
 		if p, pErr2 := strconv.Atoi(portStr); pErr2 == nil {
 			port = uint16(p)

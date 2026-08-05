@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"time"
 )
@@ -54,11 +55,11 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 		s.peerClient.UpdatePeerRoute(peerID, addressRecord)
 		go func(targetPeer string) {
 			for _, schema := range s.Compute.ListPipelines() {
-				s.NotifySchemaToPeer(targetPeer, schema, "add")
+				s.NotifySchemaToPeer(targetPeer, schema, protocol.ActionAdd)
 			}
 			for _, name := range s.Compute.ListServices() {
 				if schema, ok := s.Compute.GetService(name); ok {
-					s.NotifyServiceToPeer(targetPeer, schema, "add")
+					s.NotifyServiceToPeer(targetPeer, schema, protocol.ActionAdd)
 				}
 			}
 		}(peerID)
@@ -85,7 +86,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		}
 	}
 	if s.publicUDPAddr != "" {
-		addresses = append(addresses, "quic://"+s.publicUDPAddr)
+		addresses = append(addresses, p2p.FormatQUICAddr(s.publicUDPAddr))
 	}
 	payload := protocol.AddPeerRequest{
 		ID: s.Config.ID,

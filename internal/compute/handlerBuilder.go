@@ -4,53 +4,44 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"proxyma/internal/p2p"
+	"proxyma/internal/utils"
 	"time"
 )
 
-// pumpJSONEncode writes channel items as NDJSON to w until in closes or ctx cancels.
-func pumpJSONEncode(ctx context.Context, w io.Writer, in <-chan map[string]any) error {
-	encoder := json.NewEncoder(w)
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case item, ok := <-in:
-			if !ok {
-				return nil
-			}
-			if err := encoder.Encode(item); err != nil {
-				return err
-			}
-		}
+// doJSONPost POSTs JSON to endpointURL and decodes a JSON object response (L2).
+func doJSONPost(ctx context.Context, client *http.Client, endpointURL string, payload map[string]any) (map[string]any, error) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
-}
 
-// pumpJSONDecode reads NDJSON from r into out until EOF or ctx cancel.
-func pumpJSONDecode(ctx context.Context, r io.Reader, out chan<- map[string]any) error {
-	decoder := json.NewDecoder(r)
-	for {
-		var result map[string]any
-		if err := decoder.Decode(&result); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case out <- result:
-		}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("webhook request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !utils.HTTPSuccess(resp.StatusCode) {
+		bodyStr, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("remote server returned status %d: %s", resp.StatusCode, string(bodyStr))
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode remote response: %w", err)
+	}
+	return result, nil
 }
 
 // BuildUnaryHandler wraps a simple unary function into a ServiceHandler.
@@ -83,10 +74,10 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 
 			go func() {
 				defer func() { _ = stdinPipe.Close() }()
-				_ = pumpJSONEncode(ctx, stdinPipe, in)
+				_ = utils.PumpJSONEncode(ctx, stdinPipe, in)
 			}()
 
-			_ = pumpJSONDecode(ctx, stdoutPipe, out)
+			_ = utils.PumpJSONDecode(ctx, stdoutPipe, out)
 			return nil, nil
 		}
 
@@ -126,34 +117,7 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	client := p2p.NewHTTPClient(nil, timeout)
 
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
-		payloadBytes, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal webhook payload: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payloadBytes))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json") // Or application/grpc+json
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("webhook request failed: %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			bodyStr, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("remote server returned status %d: %s", resp.StatusCode, string(bodyStr))
-		}
-
-		var result map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, fmt.Errorf("failed to decode remote response: %w", err)
-		}
-
-		return result, nil
+		return doJSONPost(ctx, client, endpointURL, payload)
 	}
 }
 
@@ -185,7 +149,7 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 
 			go func() {
 				defer func() { _ = pw.Close() }()
-				if err := pumpJSONEncode(ctx, pw, in); err != nil {
+				if err := utils.PumpJSONEncode(ctx, pw, in); err != nil {
 					_ = pw.CloseWithError(err)
 				}
 			}()
@@ -197,9 +161,11 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 			}
 			req.Header.Set("Content-Type", "application/x-ndjson")
 
-			clientTimeout := timeout
-			if clientTimeout <= 0 {
-				clientTimeout = p2p.DefaultRPCTimeout
+			// Streaming: rely on ctx for deadline; avoid client-level timeout that
+			// would cut long-lived NDJSON pipes when handler timeout is 0.
+			clientTimeout := time.Duration(0)
+			if timeout > 0 {
+				clientTimeout = timeout
 			}
 			client := p2p.NewHTTPClient(nil, clientTimeout)
 			resp, err := client.Do(req)
@@ -208,12 +174,12 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 			}
 			defer func() { _ = resp.Body.Close() }()
 
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if !utils.HTTPSuccess(resp.StatusCode) {
 				bodyStr, _ := io.ReadAll(resp.Body)
 				return nil, fmt.Errorf("remote bidi stream server returned status %d: %s", resp.StatusCode, string(bodyStr))
 			}
 
-			if err := pumpJSONDecode(ctx, resp.Body, out); err != nil {
+			if err := utils.PumpJSONDecode(ctx, resp.Body, out); err != nil {
 				return nil, fmt.Errorf("failed to decode bidi response chunk: %w", err)
 			}
 			return nil, nil

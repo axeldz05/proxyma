@@ -1,8 +1,11 @@
 package proxyma_bind
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 
+	"proxyma/internal/protocol"
 	"proxyma/internal/server"
 )
 
@@ -86,6 +89,36 @@ func GetLocalBlobPath(hash string) string {
 		return filepath.Join(appStorage, hash)
 	}
 	return s.Storage.GetBlobPath(hash)
+}
+
+// ResolveLocalBlob fetches a VFS file on demand and returns its local blob path (L2).
+// On failure returns BindErrorJSON.
+func ResolveLocalBlob(name string) string {
+	if name == "" {
+		return BindErrorJSON(fmt.Errorf("missing name parameter"))
+	}
+	if errStr := FetchFileOnDemand(name); IsBindError(errStr) {
+		return errStr
+	}
+	filesJSON := GetVFSFilesJson()
+	if IsBindError(filesJSON) {
+		return filesJSON
+	}
+	var files []protocol.VFSFileStatus
+	if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
+		return BindErrorJSON(fmt.Errorf("failed to parse VFS list: %w", err))
+	}
+	var hash string
+	for _, f := range files {
+		if f.Name == name {
+			hash = f.Hash
+			break
+		}
+	}
+	if hash == "" {
+		return BindErrorJSON(fmt.Errorf("file '%s' not found in VFS topology", name))
+	}
+	return GetLocalBlobPath(hash)
 }
 
 // FetchFileOnDemand downloads an unsubscribed or missing file on demand from peers into local cache.

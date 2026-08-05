@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
+	"proxyma/internal/protocol"
 	"proxyma/shared/uischema"
 
 	"github.com/spf13/cobra"
@@ -48,14 +49,9 @@ func init() {
 				paramCopy := param
 				switch paramCopy.Type {
 				case "bool":
-					defaultVal := paramCopy.DefaultValue == "true" || paramCopy.DefaultValue == "1"
-					actionCmd.Flags().Bool(paramCopy.Name, defaultVal, paramCopy.Description)
+					actionCmd.Flags().Bool(paramCopy.Name, protocol.ParseDefaultBool(paramCopy.DefaultValue), paramCopy.Description)
 				case "int":
-					var defaultVal int
-					if paramCopy.DefaultValue != "" {
-						_, _ = fmt.Sscanf(paramCopy.DefaultValue, "%d", &defaultVal)
-					}
-					actionCmd.Flags().Int(paramCopy.Name, defaultVal, paramCopy.Description)
+					actionCmd.Flags().Int(paramCopy.Name, protocol.ParseDefaultInt(paramCopy.DefaultValue), paramCopy.Description)
 				default:
 					actionCmd.Flags().String(paramCopy.Name, paramCopy.DefaultValue, paramCopy.Description)
 				}

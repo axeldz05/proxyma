@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 )
 
 func (s *Server) listenUnixSocket() {
@@ -47,8 +48,7 @@ func writeUnixResponse(c net.Conn, respData any, actionErr error) {
 }
 
 func writeUnixNDJSON(c net.Conn, resp protocol.UnixResponse) {
-	respB, _ := json.Marshal(resp)
-	_, _ = c.Write(append(respB, '\n'))
+	_ = utils.WriteNDJSON(c, resp)
 }
 
 func (s *Server) handleUnixConnection(c net.Conn) {

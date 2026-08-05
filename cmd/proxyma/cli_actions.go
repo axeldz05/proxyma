@@ -98,25 +98,10 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			if name == "" {
 				return retErr("missing name parameter")
 			}
-			errStr := proxyma_bind.FetchFileOnDemand(name)
-			if errStr != "" {
-				msg := proxyma_bind.ParseBindError(errStr)
-				return retErr(fmt.Sprintf("failed to fetch file '%s' on demand: %s", name, msg))
+			localPath := proxyma_bind.ResolveLocalBlob(name)
+			if proxyma_bind.IsBindError(localPath) {
+				return retErr(fmt.Sprintf("failed to resolve file '%s': %s", name, proxyma_bind.ParseBindError(localPath)))
 			}
-			filesJson := proxyma_bind.GetVFSFilesJson()
-			var files []protocol.VFSFileStatus
-			_ = json.Unmarshal([]byte(filesJson), &files)
-			var hash string
-			for _, f := range files {
-				if f.Name == name {
-					hash = f.Hash
-					break
-				}
-			}
-			if hash == "" {
-				return retErr(fmt.Sprintf("file '%s' not found in VFS topology", name))
-			}
-			localPath := proxyma_bind.GetLocalBlobPath(hash)
 			openedPath, err := openFileWithSystemDefault(cliStorage, name, localPath)
 			if err != nil {
 				return retErr(fmt.Sprintf("File '%s' fetched into cache at %s, but failed to launch default app: %v", name, localPath, err))
@@ -148,7 +133,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			token := args["token"]
 			port := args["port"]
 			if port == "" {
-				port = "8080"
+				port = protocol.DefaultTCPPort
 			}
 			nodeID := args["node_id"]
 			errStr := proxyma_bind.JoinCluster(cliStorage, token, nodeID, port)

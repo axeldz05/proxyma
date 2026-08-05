@@ -7,17 +7,16 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"time"
 )
 
-// configTCPPort returns the configured listen TCP port (default 8443) as string and int.
+// configTCPPort returns the configured listen TCP port (default protocol.DefaultTCPPort) as string and int.
 func (s *Server) configTCPPort() (portStr string, portInt int) {
 	portStr = utils.ExtractPort(s.Config.Address)
-	portInt = 8443
+	_, _ = fmt.Sscanf(protocol.DefaultTCPPort, "%d", &portInt)
 	if portStr != "" {
 		_, _ = fmt.Sscanf(portStr, "%d", &portInt)
 	} else {
-		portStr = "8443"
+		portStr = protocol.DefaultTCPPort
 	}
 	return portStr, portInt
 }
@@ -54,7 +53,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 	var conn *net.UDPConn
 	var err error
 
-	extIP, extPort, conn, err = utils.GetExternalUDPListener(stunServer, 5*time.Second)
+	extIP, extPort, conn, err = utils.GetExternalUDPListener(stunServer, PeerRPCSTUN)
 	stunSuccess := err == nil
 
 	if !stunSuccess {
@@ -145,7 +144,7 @@ func (s *Server) determineSponsorAndNATStatus() {
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSTUN)
 		defer cancel()
 
 		probeReq := protocol.ProbeRequest{

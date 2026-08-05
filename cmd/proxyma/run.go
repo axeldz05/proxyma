@@ -12,7 +12,6 @@ import (
 )
 
 var (
-	runStorage   string
 	runDebugMode bool
 )
 
@@ -20,7 +19,7 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Starts the Proxyma node using the local configuration",
 	Run: func(cmd *cobra.Command, args []string) {
-		errStr := proxyma_bind.StartNode(runStorage, runDebugMode)
+		errStr := proxyma_bind.StartNode(cliStorage, runDebugMode)
 		if errStr != "" {
 			fmt.Printf("❌ Error starting node: %s\n", proxyma_bind.ParseBindError(errStr))
 			os.Exit(1)
@@ -39,7 +38,5 @@ var runCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(runCmd)
-	defaultStorage := getDefaultStorage()
-	runCmd.Flags().StringVar(&runStorage, "storage", defaultStorage, "Path to the node's anchor directory")
 	runCmd.Flags().BoolVar(&runDebugMode, "debug", false, "Show debug logs")
 }
