@@ -3,9 +3,9 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 
 	"github.com/stretchr/testify/require"
@@ -41,7 +41,7 @@ func TestValidateAndPrintServiceHelp(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Pre-create services.json
-	svcFile := filepath.Join(tempDir, "services.json")
+	svcFile := compute.ServicesFilePath(tempDir)
 	svcs := map[string]any{
 		"ocr": map[string]any{
 			"type": "exec",

@@ -17,7 +17,7 @@ import (
 )
 
 // DefaultRPCTimeout is the shared timeout for short peer RPCs outside server.PeerRPC*.
-const DefaultRPCTimeout = 10 * time.Second
+const DefaultRPCTimeout = protocol.RPCTimeoutSync
 
 // NewHTTPClient builds an http.Client with the given transport and timeout.
 // A nil RoundTripper uses http.DefaultTransport; a zero timeout means no client-level deadline.
@@ -154,11 +154,11 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 	return nil
 }
 
-// ForwardRelay POSTs a RelayRequest to sponsorAddr/relay/forward and decodes the response (L2).
+// ForwardRelay POSTs a RelayRequest to sponsorAddr + PathRelayForward and decodes the response (L2).
 func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string, relayReq protocol.RelayRequest) (protocol.RelayResponse, error) {
 	var zero protocol.RelayResponse
 	client := NewHTTPClient(rt, 0)
-	fwdResp, err := PostJSONAbsolute(ctx, client, sponsorAddr+"/relay/forward", relayReq)
+	fwdResp, err := PostJSONAbsolute(ctx, client, sponsorAddr+protocol.PathRelayForward, relayReq)
 	if err != nil {
 		return zero, err
 	}
@@ -171,6 +171,20 @@ func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string,
 		return zero, err
 	}
 	return relayRes, nil
+}
+
+// NewRelayRequest builds a RelayRequest with a secure ReqID (L2).
+func NewRelayRequest(target, method, path string, body []byte, headers map[string]string) protocol.RelayRequest {
+	return protocol.NewRelayRequest(generateSecureReqID(), target, method, path, body, headers)
+}
+
+// FlattenHTTPHeader converts http.Header to map[string]string joining multi-values with commas (L1).
+func FlattenHTTPHeader(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		out[k] = strings.Join(v, ",")
+	}
+	return out
 }
 
 // QUICScheme is the address scheme for QUIC/UDP hole-punch endpoints.

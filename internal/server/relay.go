@@ -9,10 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"time"
 
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
@@ -112,7 +112,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Body) > 65536 {
+	if len(req.Body) > protocol.MaxRelayBodyBytes {
 		utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay payload exceeds 64KB limit")
 		return
 	}
@@ -125,8 +125,8 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 	// Security validation: if no valid peer certificates are supplied via mTLS,
 	// only allow forwarding to the cluster joining endpoint.
 	if _, ok := peerCNFromRequest(r); !ok {
-		if req.Path != "/cluster/join" {
-			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not /cluster/join", "path", req.Path, "ip", r.RemoteAddr)
+		if req.Path != protocol.PathClusterJoin {
+			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not cluster join", "path", req.Path, "ip", r.RemoteAddr)
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")
 			return
 		}
@@ -296,15 +296,11 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 	relayRes := protocol.RelayResponse{
 		ReqID:      relayReq.ReqID,
 		StatusCode: res.StatusCode,
-		Headers:    make(map[string]string),
+		Headers:    p2p.FlattenHTTPHeader(res.Header),
 	}
 	bodyBytes, _ := io.ReadAll(res.Body)
 	relayRes.Body = bodyBytes
 	_ = res.Body.Close()
-
-	for k, v := range res.Header {
-		relayRes.Headers[k] = strings.Join(v, ",")
-	}
 
 	// Send reply back to Sponsor
 	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSync)

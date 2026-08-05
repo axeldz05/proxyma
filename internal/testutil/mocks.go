@@ -95,10 +95,6 @@ func (m *MockPeerClient) SendTaskResponse(ctx context.Context, url string, resp 
 	return nil
 }
 
-func (m *MockPeerClient) ExecuteService(ctx context.Context, addr string, svc string) (map[string]string, error) {
-	return nil, nil
-}
-
 func (m *MockPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
 	if m.OnPollRelay != nil {
 		return m.OnPollRelay(ctx, sponsorAddr, peerID)

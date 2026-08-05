@@ -1,19 +1,18 @@
-package utils
+package protocol
 
 import (
 	"os"
 	"path/filepath"
-	"proxyma/internal/protocol"
 )
 
 // RewriteLocalFilePaths stages local file path values in m via stage and rewrites them to vfs:// URIs (L2).
-// When annotateOutputs is true, also sets output_hash / output_name / output_size.
+// When annotateOutputs is true, also sets OutputHashKey / OutputNameKey / OutputSizeKey.
 func RewriteLocalFilePaths(m map[string]any, stage func(path string) (hash string, size int64, err error), annotateOutputs bool) {
 	if m == nil || stage == nil {
 		return
 	}
 	for k, v := range m {
-		pathStr, ok := protocol.IsStageableLocalPath(v)
+		pathStr, ok := IsStageableLocalPath(v)
 		if !ok {
 			continue
 		}
@@ -26,10 +25,10 @@ func RewriteLocalFilePaths(m map[string]any, stage func(path string) (hash strin
 			continue
 		}
 		if annotateOutputs {
-			m["output_hash"] = hash
-			m["output_name"] = filepath.Base(pathStr)
-			m["output_size"] = float64(size)
+			m[OutputHashKey] = hash
+			m[OutputNameKey] = filepath.Base(pathStr)
+			m[OutputSizeKey] = float64(size)
 		}
-		m[k] = protocol.VFSURI(hash)
+		m[k] = VFSURI(hash)
 	}
 }

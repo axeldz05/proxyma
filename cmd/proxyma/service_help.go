@@ -144,15 +144,7 @@ func ValidateAndPrintServiceHelp(storagePath string, serviceName string, payload
 	}
 	sort.Strings(paramKeys)
 
-	for _, k := range paramKeys {
-		param := schema.Parameters[k]
-		if param.Required {
-			val, exists := parsedPayload[k]
-			if !exists || val == nil || fmt.Sprintf("%v", val) == "" {
-				missingRequired = append(missingRequired, k)
-			}
-		}
-	}
+	missingRequired = protocol.MissingRequired(*schema, parsedPayload)
 
 	shouldDisplayHelp := isHelpRequested || len(missingRequired) > 0 || (payloadRaw == "" && len(schema.Parameters) > 0)
 

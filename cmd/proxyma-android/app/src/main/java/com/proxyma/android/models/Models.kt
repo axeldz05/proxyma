@@ -26,7 +26,7 @@ data class FormParameter(
     val options: List<String>? = null
 ) {
     fun isFilePicker(): Boolean =
-        type == "file" || uiHint == "file_picker" || uiHint == "image_picker"
+        type == "file" || uiHint == "file_picker" || uiHint == "image_picker" || uiHint == "audio_picker"
 
     fun isImagePicker(): Boolean = uiHint == "image_picker"
 }

@@ -802,7 +802,7 @@ func TestServerLoadsLocalServicesOnStartup(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "startup-services")
 
 	// Create a dummy services.json in the storage path
-	servicesFile := filepath.Join(cfg.StoragePath, "services.json")
+	servicesFile := compute.ServicesFilePath(cfg.StoragePath)
 	mockServices := `{
 		"test-script": {
 			"type": "script",
@@ -1772,7 +1772,7 @@ func TestLoadLocalServices_GRPCBidi(t *testing.T) {
 		}
 	}`, ts.URL)
 
-	servicesFile := filepath.Join(srv.Config.StoragePath, "services.json")
+	servicesFile := compute.ServicesFilePath(srv.Config.StoragePath)
 	require.NoError(t, os.WriteFile(servicesFile, []byte(servicesJSON), 0644))
 
 	srv.LoadLocalServices()

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
-	"proxyma/internal/utils"
 	"time"
 )
 
@@ -52,22 +51,26 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
 }
 
-func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
-	utils.RewriteLocalFilePaths(req.Payload, s.Storage.StageLocalFile, false)
-
+func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error) error {
 	s.Compute.RegisterOutgoingTask(req)
-
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
-	defer cancel()
-
-	err := s.callPeer(ctx, targetPeerID, func(ctx context.Context, peerID string) error {
-		return s.peerClient.SubmitTask(ctx, peerID, req)
-	})
-	if err != nil {
+	if err := submit(); err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
 		return err
 	}
 	return nil
+}
+
+func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
+	protocol.RewriteLocalFilePaths(req.Payload, s.Storage.StageLocalFile, false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	defer cancel()
+
+	return s.submitTrackedTask(req, func() error {
+		return s.callPeer(ctx, targetPeerID, func(ctx context.Context, peerID string) error {
+			return s.peerClient.SubmitTask(ctx, peerID, req)
+		})
+	})
 }
 
 func (s *Server) ensureQUICSession(peerID string) {

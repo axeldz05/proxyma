@@ -80,7 +80,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), protocol.RPCTimeoutTaskWait)
 	defer cancel()
 
 	caCert, cert, privKeyPEM, successfulAddr, err := p2p.JoinCluster(ctx, token, nodeID, localAddr, logFn)
@@ -130,11 +130,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 		s := getSrv()
 		if s != nil {
 			_ = s.ExecuteSync()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			for peerID := range s.GetPeersCopy() {
-				_, _ = s.DiscoverServices(ctx, peerID)
-			}
+			_, _ = s.LocalServiceDiscover()
 		}
 	}()
 

@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -77,13 +76,7 @@ func (r *P2PRoundTripper) prewarmConnection(peerID string, record protocol.Addre
 }
 
 func (r *P2PRoundTripper) sendRelayMessage(ctx context.Context, sponsorAddr string, targetPeer, path string, body []byte) ([]byte, error) {
-	relayReq := protocol.RelayRequest{
-		ReqID:  generateSecureReqID(),
-		Target: targetPeer,
-		Method: http.MethodPost,
-		Path:   path,
-		Body:   body,
-	}
+	relayReq := NewRelayRequest(targetPeer, http.MethodPost, path, body, nil)
 	relayRes, err := ForwardRelay(ctx, r.Base, sponsorAddr, relayReq)
 	if err != nil {
 		return nil, err
@@ -206,39 +199,20 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Phase 2: Relay Fallback
 	if sponsorAddr != "" {
-		relayReq := protocol.RelayRequest{
-			ReqID:  generateSecureReqID(),
-			Target: peerID,
-			Method: clone.Method,
-			Path:   clone.URL.Path,
-		}
+		relayReq := NewRelayRequest(peerID, clone.Method, clone.URL.Path, nil, nil)
 		if clone.Body != nil {
 			bodyBytes, _ := io.ReadAll(clone.Body)
 			_ = clone.Body.Close()
-			if len(bodyBytes) > 65536 {
+			if len(bodyBytes) > protocol.MaxRelayBodyBytes {
 				return nil, fmt.Errorf("payload exceeds 64KB limit for relay fallback")
 			}
 			relayReq.Body = bodyBytes
 		}
-		relayReq.Headers = make(map[string]string)
-		for k, v := range clone.Header {
-			relayReq.Headers[k] = strings.Join(v, ",")
-		}
+		relayReq.Headers = FlattenHTTPHeader(clone.Header)
 
 		relayRes, err := ForwardRelay(clone.Context(), r.Base, sponsorAddr, relayReq)
 		if err == nil {
-			res := &http.Response{
-				StatusCode:    relayRes.StatusCode,
-				Status:        http.StatusText(relayRes.StatusCode),
-				Body:          io.NopCloser(bytes.NewReader(relayRes.Body)),
-				Header:        make(http.Header),
-				ContentLength: int64(len(relayRes.Body)),
-				Request:       req,
-			}
-			for k, v := range relayRes.Headers {
-				res.Header.Set(k, v)
-			}
-			return res, nil
+			return relayRes.ToHTTPResponse(req), nil
 		}
 	}
 
@@ -258,13 +232,16 @@ func (r *P2PRoundTripper) tryExistingSession(clone *http.Request, req *http.Requ
 	}
 
 	r.logDebug("Routing request directly over existing QUIC session", "peerID", peerID)
+	return r.routeOverQUICSession(peerID, sess, req, clone)
+}
+
+func (r *P2PRoundTripper) routeOverQUICSession(peerID string, sess *quic.Conn, req, clone *http.Request) (*http.Response, bool) {
 	resp, err := r.sendRequestOverQUIC(sess, req, clone)
 	if err != nil {
-		r.logDebug("Failed to send request over existing QUIC session", "peerID", peerID, "error", err)
+		r.logDebug("Failed to send request over QUIC session", "peerID", peerID, "error", err)
 		r.QM.CloseAndRemoveSession(peerID, 0x01, "transport error")
 		return nil, false
 	}
-
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		r.QM.CloseAndRemoveSession(peerID, 0x02, "unauthorized")
 	}
@@ -314,15 +291,9 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(clone *http.Request, req *http.Re
 	}
 
 	r.logDebug("UDP Hole Punching succeeded, routing over direct QUIC", "peerID", peerID)
-	resp, err := r.sendRequestOverQUIC(sess, req, clone)
-	if err != nil {
-		r.logDebug("Failed to send request over newly punched QUIC session", "peerID", peerID, "error", err)
-		r.QM.CloseAndRemoveSession(peerID, 0x01, "failed")
-		return nil, err, true
-	}
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		r.QM.CloseAndRemoveSession(peerID, 0x02, "unauthorized")
+	resp, ok := r.routeOverQUICSession(peerID, sess, req, clone)
+	if !ok {
+		return nil, fmt.Errorf("failed to send request over newly punched QUIC session"), true
 	}
 	return resp, nil, true
 }

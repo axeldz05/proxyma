@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"proxyma/internal/protocol"
 	"strings"
 	"sync"
 	"time"
@@ -330,7 +331,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 
 	// Send to `/holepunch/init` of the remote peer via relay
 	msgBytes, _ := json.Marshal(msg)
-	respBytes, err := sendRelayReq(peerID, "/holepunch/init", msgBytes)
+	respBytes, err := sendRelayReq(peerID, protocol.PathHolePunchInit, msgBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send hole punch init over relay: %w", err)
 	}

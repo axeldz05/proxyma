@@ -1,12 +1,10 @@
 package p2p
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"proxyma/internal/protocol"
 	"strings"
@@ -56,7 +54,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 
 	logFn("Starting cluster join loops over packed addresses...", nil)
 	for _, addr := range payload.Addresses {
-		urlStr := fmt.Sprintf("%s/cluster/join", addr)
+		urlStr := fmt.Sprintf("%s%s", addr, protocol.PathClusterJoin)
 		logFn(fmt.Sprintf("Attempting connection to address: %s", urlStr), nil)
 		r, doErr := PostJSONAbsolute(ctx, client, urlStr, reqBody)
 		if doErr != nil {
@@ -81,24 +79,14 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 		logFn(fmt.Sprintf("Direct connections failed. Attempting Relay-assisted join via %s to target sponsor %s...", payload.RelayAddr, payload.SponsorID), nil)
 
 		bodyBytes, _ := json.Marshal(reqBody)
-		relayReq := protocol.RelayRequest{
-			ReqID:  generateSecureReqID(),
-			Target: payload.SponsorID,
-			Method: http.MethodPost,
-			Path:   "/cluster/join",
-			Headers: map[string]string{
-				"Content-Type": "application/json",
-			},
-			Body: bodyBytes,
-		}
-		logFn(fmt.Sprintf("Sending relayed join request to: %s/relay/forward", payload.RelayAddr), nil)
+		relayReq := NewRelayRequest(payload.SponsorID, http.MethodPost, protocol.PathClusterJoin, bodyBytes, map[string]string{
+			"Content-Type": "application/json",
+		})
+		logFn(fmt.Sprintf("Sending relayed join request to: %s%s", payload.RelayAddr, protocol.PathRelayForward), nil)
 		relayRes, fwdErr := ForwardRelay(ctx, client.Transport, payload.RelayAddr, relayReq)
 		if fwdErr == nil {
 			if relayRes.StatusCode == http.StatusOK {
-				resp = &http.Response{
-					StatusCode: relayRes.StatusCode,
-					Body:       io.NopCloser(bytes.NewReader(relayRes.Body)),
-				}
+				resp = relayRes.ToHTTPResponse(nil)
 				successfulAddr = payload.RelayAddr
 				logFn("Relay-assisted join succeeded!", nil)
 			} else {

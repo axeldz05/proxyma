@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestServiceAddCmd(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify services.json
-		servicesFile := filepath.Join(tempDir, "services.json")
+		servicesFile := compute.ServicesFilePath(tempDir)
 		data, err := os.ReadFile(servicesFile)
 		require.NoError(t, err)
 
@@ -88,7 +89,7 @@ func TestServiceAddCmd(t *testing.T) {
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 
-		servicesFile := filepath.Join(tempDir, "services.json")
+		servicesFile := compute.ServicesFilePath(tempDir)
 		data, err := os.ReadFile(servicesFile)
 		require.NoError(t, err)
 
@@ -116,7 +117,7 @@ func TestServiceAddCmd(t *testing.T) {
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 
-		servicesFile := filepath.Join(tempDir, "services.json")
+		servicesFile := compute.ServicesFilePath(tempDir)
 		data, err := os.ReadFile(servicesFile)
 		require.NoError(t, err)
 

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strconv"
@@ -25,7 +24,7 @@ type InvitePayload struct {
 }
 
 func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {
-	caBytes, err := os.ReadFile(caCertPath)
+	caBytes, err := ReadCAPEM(caCertPath)
 	if err != nil {
 		return "", "", fmt.Errorf("could not read CA cert: %w", err)
 	}

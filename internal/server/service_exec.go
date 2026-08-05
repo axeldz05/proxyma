@@ -86,16 +86,9 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
 	payload := parseServicePayload(payloadStr)
 
-	var targetPeerID string
-	var err error
-
-	if _, isPipeline := s.Compute.GetPipeline(serviceName); isPipeline {
-		targetPeerID = s.Config.ID
-	} else {
-		targetPeerID, _, _, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
-		if err != nil {
-			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
-		}
+	targetPeerID, err := s.resolveServiceBidTarget(serviceName)
+	if err != nil {
+		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
 	}
 
 	taskID := fmt.Sprintf("task_kt_%d", time.Now().UnixNano())
@@ -103,15 +96,15 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 		TaskID:          taskID,
 		Service:         serviceName,
 		RequesterNodeID: s.Config.ID,
-		ReplyTo:         fmt.Sprintf("https://%s.proxyma.local/services/callback", s.Config.ID),
+		ReplyTo:         fmt.Sprintf("https://%s.proxyma.local%s", s.Config.ID, protocol.PathServicesCallback),
 		Payload:         payload,
 	}
 
 	if targetPeerID == s.Config.ID {
-		s.Compute.RegisterOutgoingTask(taskReq)
-		err = s.Compute.SubmitTask(taskReq)
+		err = s.submitTrackedTask(taskReq, func() error {
+			return s.Compute.SubmitTask(taskReq)
+		})
 		if err != nil {
-			s.Compute.MarkTaskAsFailed(taskReq, err.Error())
 			return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to submit local task: %w", err)
 		}
 	} else {
@@ -135,7 +128,7 @@ func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, ch
 
 	handler, exists := s.Compute.GetHandler(serviceName)
 	if !exists {
-		targetPeerID, _, _, err := s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+		targetPeerID, err := s.resolveServiceBidTarget(serviceName)
 		if err != nil || targetPeerID == "" {
 			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster: %v", serviceName, err)
 		}

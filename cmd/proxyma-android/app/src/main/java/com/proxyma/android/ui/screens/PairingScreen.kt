@@ -96,7 +96,8 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                                 val storagePath = proxyma_bind.Proxyma_bind.getStoragePath()
                                 val token = inputs["token"]?.toString() ?: ""
                                 val nodeId = inputs["node_id"]?.toString() ?: ""
-                                val port = inputs["port"]?.toString() ?: "8080"
+                                val port = inputs["port"]?.toString()?.takeIf { it.isNotBlank() }
+                                    ?: formParams.firstOrNull { it.name == "port" }?.defaultValue.orEmpty()
                                 proxyma_bind.Proxyma_bind.joinCluster(storagePath, token, nodeId, port)
                             })
                         }

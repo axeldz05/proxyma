@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"proxyma/internal/protocol"
 )
 
 // TransferRecord stores telemetry data for byte transfer of a specific category at a point in time.
@@ -118,7 +120,7 @@ func (bt *BandwidthTracker) GetTotalBandwidth() (int64, int64) {
 func (bt *BandwidthTracker) CategorizePath(path string) string {
 	// should consider making a more generalized form of categorizing
 	// without needing to hardcode prefixes
-	if strings.HasPrefix(path, "/download/") {
+	if strings.HasPrefix(path, protocol.PathDownloadPrefix) {
 		cleanPath := path
 		if idx := strings.Index(path, "?"); idx != -1 {
 			cleanPath = path[:idx]
@@ -130,11 +132,11 @@ func (bt *BandwidthTracker) CategorizePath(path string) string {
 		}
 		return "vfs:download"
 	}
-	if strings.HasPrefix(path, "/upload") {
+	if strings.HasPrefix(path, protocol.PathUpload) {
 		return "vfs:upload"
 	}
-	if strings.HasPrefix(path, "/services/") {
-		cleanPath := strings.TrimPrefix(path, "/services/")
+	if strings.HasPrefix(path, protocol.ServicesPrefix) {
+		cleanPath := strings.TrimPrefix(path, protocol.ServicesPrefix)
 		if idx := strings.Index(cleanPath, "?"); idx != -1 {
 			queryParams := cleanPath[idx+1:]
 			basePath := cleanPath[:idx]

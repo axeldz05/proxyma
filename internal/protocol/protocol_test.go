@@ -28,15 +28,18 @@ func TestAddressRecordUnmarshaling(t *testing.T) {
 
 func TestInferUIHint(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "image_picker", protocol.InferUIHint("image_path", "file"))
-	require.Equal(t, "image_picker", protocol.InferUIHint("photo", "file"))
-	require.Equal(t, "image_picker", protocol.InferUIHint("img_src", "file"))
-	require.Equal(t, "file_picker", protocol.InferUIHint("document", "file"))
+	require.Equal(t, protocol.UIHintImagePicker, protocol.InferUIHint("image_path", "file"))
+	require.Equal(t, protocol.UIHintImagePicker, protocol.InferUIHint("photo", "file"))
+	require.Equal(t, protocol.UIHintImagePicker, protocol.InferUIHint("img_src", "file"))
+	require.Equal(t, protocol.UIHintFilePicker, protocol.InferUIHint("document", "file"))
 	require.Equal(t, "", protocol.InferUIHint("document", "string"))
 
-	p := protocol.ServiceParameter{Type: "file", UIHint: "audio_picker"}
-	require.Equal(t, "audio_picker", protocol.EffectiveUIHint("img", p))
-	require.Equal(t, "file_picker", protocol.EffectiveUIHint("doc", protocol.ServiceParameter{Type: "file"}))
+	p := protocol.ServiceParameter{Type: "file", UIHint: protocol.UIHintAudioPicker}
+	require.Equal(t, protocol.UIHintAudioPicker, protocol.EffectiveUIHint("img", p))
+	require.Equal(t, protocol.UIHintFilePicker, protocol.EffectiveUIHint("doc", protocol.ServiceParameter{Type: "file"}))
+	require.True(t, protocol.IsFilePickerHint(protocol.UIHintAudioPicker))
+	require.True(t, protocol.IsImagePickerHint(protocol.UIHintImagePicker))
+	require.False(t, protocol.IsImagePickerHint(protocol.UIHintFilePicker))
 }
 
 func TestNormalizeServiceSchema(t *testing.T) {

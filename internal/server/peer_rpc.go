@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"proxyma/internal/protocol"
 )
 
 // Named peer RPC timeouts (policy SSOT).
@@ -11,7 +13,7 @@ const (
 	PeerRPCShort     = 1 * time.Second
 	PeerRPCDefault   = 2 * time.Second
 	PeerRPCDiscover  = 3 * time.Second
-	PeerRPCSync      = 10 * time.Second
+	PeerRPCSync      = protocol.RPCTimeoutSync
 	PeerRPCBlob      = 30 * time.Second
 	PeerRPCBlobLong  = 2 * time.Minute
 	PeerRPCStream    = 10 * time.Minute
@@ -20,7 +22,7 @@ const (
 	PeerRPCRelayTick = 15 * time.Second // client relay poll interval
 	PeerRPCProbe     = 2 * time.Second  // TCP dial for HandleProbe
 	PeerRPCSTUN      = 5 * time.Second  // STUN / NAT probe
-	TaskWaitTimeout  = 90 * time.Second
+	TaskWaitTimeout  = protocol.RPCTimeoutTaskWait
 	// DefaultInviteMinutes is the SSOT default invite TTL.
 	DefaultInviteMinutes = 15
 )

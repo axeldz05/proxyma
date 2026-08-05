@@ -57,7 +57,7 @@ func IssueNodeCertificate(caFolderPath, nodeFolderPath, nodeID string) error {
 }
 
 func LoadNodeTLS(caCertPath, nodeCertPath, nodeKeyPath string) (*tls.Config, *tls.Config, error) {
-	caCertPEM, err := os.ReadFile(caCertPath)
+	caCertPEM, err := ReadCAPEM(caCertPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error loading CA cert: %w", err)
 	}
@@ -178,7 +178,7 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 		return nil, err
 	}
 
-	return signLeaf(csr.PublicKey, csr.Subject, []string{csr.Subject.CommonName, "localhost"}, caCert, caPrivKey)
+	return signLeaf(csr.PublicKey, csr.Subject, LeafDNSNames(csr.Subject.CommonName), caCert, caPrivKey)
 }
 
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -219,53 +219,38 @@ func generateNodeCert(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID 
 		return nil, nil, err
 	}
 
-	template := newNodeCertTemplate(pkix.Name{
+	pemBytes, err := signLeaf(&priv.PublicKey, pkix.Name{
 		Organization: []string{leafOrgName},
 		CommonName:   nodeID,
-	}, []string{nodeID, "localhost"})
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, caCert, &priv.PublicKey, caKey)
+	}, LeafDNSNames(nodeID), caCert, caKey)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	cert, err := x509.ParseCertificate(certDER)
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode signed leaf PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return cert, priv, nil
 }
 
 func saveCertAndKey(certPath, keyPath string, cert *x509.Certificate, key *ecdsa.PrivateKey) error {
-	certOut, err := os.Create(certPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = certOut.Close() }()
-	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
-		return fmt.Errorf("failed to encode certificate: %w", err)
-	}
-	if err := certOut.Close(); err != nil {
-		return err
-	}
-
-	keyOut, err := os.Create(keyPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = keyOut.Close() }()
 	privBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return err
 	}
-	if _, err := keyOut.Write(encodeECKeyPEM(privBytes)); err != nil {
-		return fmt.Errorf("failed to encode private key: %w", err)
-	}
-	if err := keyOut.Close(); err != nil {
+	if err := os.WriteFile(certPath, encodeCertPEM(cert.Raw), 0644); err != nil {
 		return err
 	}
-	return nil
+	return os.WriteFile(keyPath, encodeECKeyPEM(privBytes), 0600)
+}
+
+// LeafDNSNames returns the DNS SANs for a node leaf certificate (L1).
+func LeafDNSNames(nodeID string) []string {
+	return []string{nodeID, "localhost"}
 }
 
 func loadCertAndKey(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -342,7 +327,7 @@ func ReSignPeerCertificate(peerPubKey any, peerID string, caCertPath, caKeyPath 
 	return signLeaf(peerPubKey, pkix.Name{
 		CommonName:   peerID,
 		Organization: []string{leafOrgName},
-	}, []string{peerID, "localhost"}, caCert, caPrivKey)
+	}, LeafDNSNames(peerID), caCert, caPrivKey)
 }
 
 func signLeaf(pub any, subject pkix.Name, dnsNames []string, caCert *x509.Certificate, caPrivKey any) ([]byte, error) {

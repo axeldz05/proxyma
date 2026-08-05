@@ -93,14 +93,7 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 	}
 
 	pr.peers[peerID] = addressRecord
-	// SetPeerOnline will acquire activePeersMu.Lock() internally, which is safe since we lock in the correct order
-	pr.activePeersMu.Lock()
-	pr.activePeers[peerID] = true
-	pr.activePeersMu.Unlock()
-
-	pr.peerErrorsMu.Lock()
-	delete(pr.peerErrors, peerID)
-	pr.peerErrorsMu.Unlock()
+	pr.markOnlineClearError(peerID)
 
 	pr.logger.Info("peerID added to peers", "peerID", peerID, "node", pr.nodeID)
 	return true
@@ -137,12 +130,8 @@ func (pr *PeerRegistry) RemovePeer(peerID string) {
 	pr.logger.Info("peerID removed from peers", "peerID", peerID)
 }
 
-// SetPeerOnline marks a peer as online or offline.
-func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
-	if !online {
-		pr.SetPeerOffline(peerID, nil)
-		return
-	}
+// markOnlineClearError marks peer online and clears any stored error.
+func (pr *PeerRegistry) markOnlineClearError(peerID string) {
 	pr.activePeersMu.Lock()
 	pr.activePeers[peerID] = true
 	pr.activePeersMu.Unlock()
@@ -150,6 +139,15 @@ func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
 	pr.peerErrorsMu.Lock()
 	delete(pr.peerErrors, peerID)
 	pr.peerErrorsMu.Unlock()
+}
+
+// SetPeerOnline marks a peer as online or offline.
+func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
+	if !online {
+		pr.SetPeerOffline(peerID, nil)
+		return
+	}
+	pr.markOnlineClearError(peerID)
 }
 
 // SetPeerOffline marks a peer as offline and stores the connection error.
@@ -181,17 +179,25 @@ func (pr *PeerRegistry) IsPeerOnline(peerID string) bool {
 	return pr.activePeers[peerID]
 }
 
+// primaryPeerAddrs projects peers to their primary address under peersMu (caller must hold RLock).
+func primaryPeerAddrs(peers map[string]protocol.AddressRecord, filter func(protocol.AddressRecord) bool) map[string]string {
+	out := make(map[string]string)
+	for k, v := range peers {
+		if filter != nil && !filter(v) {
+			continue
+		}
+		if len(v.Addresses) > 0 {
+			out[k] = v.Addresses[0]
+		}
+	}
+	return out
+}
+
 // GetPeersCopy returns a mapping of all peer IDs to their primary address.
 func (pr *PeerRegistry) GetPeersCopy() map[string]string {
 	pr.peersMu.RLock()
 	defer pr.peersMu.RUnlock()
-	peers := make(map[string]string, len(pr.peers))
-	for k, v := range pr.peers {
-		if len(v.Addresses) > 0 {
-			peers[k] = v.Addresses[0]
-		}
-	}
-	return peers
+	return primaryPeerAddrs(pr.peers, nil)
 }
 
 // GetPeerRecord retrieves the address record of a specific peer.
@@ -215,13 +221,7 @@ func (pr *PeerRegistry) GetPeersRecordCopy() map[string]protocol.AddressRecord {
 func (pr *PeerRegistry) GetSponsorPeers() map[string]string {
 	pr.peersMu.RLock()
 	defer pr.peersMu.RUnlock()
-	sponsors := make(map[string]string)
-	for k, v := range pr.peers {
-		if v.IsSponsor && len(v.Addresses) > 0 {
-			sponsors[k] = v.Addresses[0]
-		}
-	}
-	return sponsors
+	return primaryPeerAddrs(pr.peers, func(v protocol.AddressRecord) bool { return v.IsSponsor })
 }
 
 // GetClusterServices returns the registered services of a specific peer.

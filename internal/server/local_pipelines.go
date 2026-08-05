@@ -35,17 +35,7 @@ func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
 		stepIDs = append(stepIDs, step.ID)
 	}
 
-	getSchema := func(serviceName string) (protocol.ServiceSchema, bool) {
-		if sc, ok := s.Compute.GetService(serviceName); ok {
-			return sc, true
-		}
-		if s.Peers != nil {
-			if sc, ok := s.Peers.GetServiceSchema(serviceName); ok {
-				return sc, true
-			}
-		}
-		return protocol.ServiceSchema{}, false
-	}
+	getSchema := s.lookupCachedServiceSchema
 
 	formatParams := func(params map[string]protocol.ServiceParameter) string {
 		if len(params) == 0 {

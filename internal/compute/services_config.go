@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,21 +45,17 @@ func BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired,
 		if schemaFile != "" {
 			fileToRead = schemaFile
 		}
-		data, readErr := os.ReadFile(fileToRead)
-		if readErr != nil {
-			return "", localService, fmt.Errorf("couldn't read service file: %w", readErr)
-		}
 		if schemaFile != "" {
 			var schema protocol.ServiceSchema
-			if err := json.Unmarshal(data, &schema); err != nil {
-				return "", localService, fmt.Errorf("invalid schema file format: %w", err)
+			if err := utils.ReadJSONFile(fileToRead, &schema); err != nil {
+				return "", localService, fmt.Errorf("couldn't read service file: %w", err)
 			}
 			localService.Schema = schema
 			serviceName = name
 			localService.Schema.Name = serviceName
 		} else {
-			if err := json.Unmarshal(data, &localService); err != nil {
-				return "", localService, fmt.Errorf("invalid file format: %w", err)
+			if err := utils.ReadJSONFile(fileToRead, &localService); err != nil {
+				return "", localService, fmt.Errorf("couldn't read service file: %w", err)
 			}
 			serviceName = localService.Schema.Name
 		}

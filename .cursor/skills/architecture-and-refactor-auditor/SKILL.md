@@ -178,14 +178,17 @@ Al revisar el código, busca los siguientes patrones recurrentes:
 * **Schema fill**: `protocol.NormalizeServiceSchema`; actions `ActionAdd`/`ActionRemove`.
 * **Param UI/defaults**: `DescribeParameter` / `CoerceDefault` / `ValidateValue` — no switches de tipo en CLI/bind.
 * **Result path**: `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` — Android no snifar keys.
-* **Staging paths**: `protocol.IsStageableLocalPath` + `utils.RewriteLocalFilePaths` (compute outputs + `DispatchTask`).
-* **Task register/fail remoto**: Solo `DispatchTask`.
-* **UIHint / pickers**: `InferUIHint` / `EffectiveUIHint` (DTO bind siempre emite effective).
-* **Schema detail**: `LocalServiceDetail` / `LookupServiceSchema`→`resolveServiceSchema` / `GetServiceSchema`.
-* **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError`; VFS open vía `ResolveLocalBlob`.
+* **Staging paths**: `protocol.IsStageableLocalPath` + `protocol.RewriteLocalFilePaths` (compute outputs + `DispatchTask`).
+* **Task register/fail remoto**: Solo `DispatchTask` / `submitTrackedTask`.
+* **UIHint / pickers**: `InferUIHint` / `EffectiveUIHint` / `IsFilePickerHint` / `IsImagePickerHint` (DTO bind siempre emite effective).
+* **Schema detail**: `LocalServiceDetail` / `LookupServiceSchema`→`resolveServiceSchema` / `GetServiceSchema` / `lookupCachedServiceSchema`.
+* **Errores bind/CLI**: `BindErrorJSON` / `ParseBindError` / `IsBindError`; VFS open vía `ResolveLocalBlob`; required → `MissingRequired`.
 * **Respuestas JSON HTTP**: `utils.RespondJSON` / `DecodeJSONOrError` / `HTTPSuccess`.
-* **TLS / cert**: `LoadNodeTLS`, `WriteNodePEMs`, `signLeaf`, `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`.
+* **TLS / cert**: `LoadNodeTLS`, `WriteNodePEMs`, `signLeaf`, `LeafDNSNames`, `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`.
 * **HTTP client**: `p2p.NewHTTPClient` / `PostJSONAbsolute` (streams: timeout 0 + ctx).
+* **HTTP paths**: `protocol.Path*` / `PathRel` (mux + client + mTLS + relay).
+* **Relay**: `NewRelayRequest` / `ForwardRelay` / `MaxRelayBodyBytes` / `RelayResponse.ToHTTPResponse` / `FlattenHTTPHeader`.
+* **RPC timeouts**: `protocol.RPCTimeout*` (+ `server.PeerRPC*` domain aliases).
 * **QUIC addr**: `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`.
 * **Hole-punch**: `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`.
 * **IPC Unix**: `dispatchUnix*`; VFS `LocalVFS*` / `ResolveLocalBlob`.
@@ -194,7 +197,8 @@ Al revisar el código, busca los siguientes patrones recurrentes:
 * **VFS URI**: `protocol.VFSURI` / `ParseVFSURI` / `IsVFSURI` / `IsStageableLocalPath`.
 * **Puerto TCP**: `protocol.DefaultTCPPort` + `configTCPPort` / `advertisedTCPPort`.
 * **NDJSON**: `utils.WriteNDJSON` / `PumpJSONEncode` / `PumpJSONDecode` / `ForEachNDJSON` / `ScanNDJSON`.
-* **JSON files**: `utils.ReadJSONFile` / `WriteJSONFile`.
+* **JSON files**: `utils.ReadJSONFile` / `WriteJSONFile` (+ `protocol.SaveConfig`/`LoadConfig`).
+* **Catalog kinds**: `catalogKinds` / `syncCatalogToPeer`.
 * **Net utils**: `StripURLScheme` / `ClientHost` / `FileExists` / `GetRoutableLocalIPs`.
 * **Boilerplate CLI**: PersistentFlag `cliStorage` only; no dial propio.
 

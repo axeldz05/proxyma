@@ -1,12 +1,15 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
+	"net/http"
 	"path/filepath"
+	"proxyma/internal/utils"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -198,6 +201,13 @@ const (
 	ParamTypeFloat  = "float"
 )
 
+// UI hint constants (SSOT).
+const (
+	UIHintFilePicker  = "file_picker"
+	UIHintImagePicker = "image_picker"
+	UIHintAudioPicker = "audio_picker"
+)
+
 // InferUIHint returns a UI hint for a parameter from its name and type (L1 SSOT).
 // Empty string means no special picker. Prefer explicit UIHint on the schema when set.
 func InferUIHint(paramName, paramType string) string {
@@ -206,9 +216,9 @@ func InferUIHint(paramName, paramType string) string {
 	}
 	lower := strings.ToLower(paramName)
 	if strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "photo") {
-		return "image_picker"
+		return UIHintImagePicker
 	}
-	return "file_picker"
+	return UIHintFilePicker
 }
 
 // EffectiveUIHint returns explicit hint if set, otherwise InferUIHint.
@@ -217,6 +227,36 @@ func EffectiveUIHint(paramName string, p ServiceParameter) string {
 		return p.UIHint
 	}
 	return InferUIHint(paramName, p.Type)
+}
+
+// IsFilePickerHint reports whether hint is any file-like picker (L2).
+func IsFilePickerHint(hint string) bool {
+	return hint == UIHintFilePicker || hint == UIHintImagePicker || hint == UIHintAudioPicker
+}
+
+// IsImagePickerHint reports whether hint is an image picker (L2).
+func IsImagePickerHint(hint string) bool {
+	return hint == UIHintImagePicker
+}
+
+// MissingRequired returns names of required parameters absent or empty in payload (L1).
+func MissingRequired(schema ServiceSchema, payload map[string]any) []string {
+	var missing []string
+	for name, p := range schema.Parameters {
+		if !p.Required {
+			continue
+		}
+		v, ok := payload[name]
+		if !ok || v == nil {
+			missing = append(missing, name)
+			continue
+		}
+		if s, isStr := v.(string); isStr && s == "" {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 // CoerceDefault parses p.Default into a typed value (L1). Falls back to type samples when empty.
@@ -246,7 +286,7 @@ func (p ServiceParameter) CoerceDefault(paramName string) any {
 	case ParamTypeFloat:
 		return 1.0
 	case ParamTypeFile:
-		if EffectiveUIHint(paramName, p) == "image_picker" {
+		if EffectiveUIHint(paramName, p) == UIHintImagePicker {
 			return "/path/to/image.jpg"
 		}
 		return "/path/to/input_file"
@@ -363,10 +403,10 @@ func OutputHashFromOutputs(outputs map[string]any) (hash string, name string, si
 	if outputs == nil {
 		return "", "", 0
 	}
-	if h, ok := outputs["output_hash"].(string); ok && h != "" {
+	if h, ok := outputs[OutputHashKey].(string); ok && h != "" {
 		hash = h
-		name, _ = outputs["output_name"].(string)
-		if sz, ok := outputs["output_size"].(float64); ok {
+		name, _ = outputs[OutputNameKey].(string)
+		if sz, ok := outputs[OutputSizeKey].(float64); ok {
 			size = int64(sz)
 		}
 		return hash, name, size
@@ -383,6 +423,13 @@ func OutputHashFromOutputs(outputs map[string]any) (hash string, name string, si
 
 // ResultLocalPathKey is the canonical outputs key for a resolved local file path.
 const ResultLocalPathKey = "result_path"
+
+// Output metadata keys written by RewriteLocalFilePaths when annotateOutputs is true.
+const (
+	OutputHashKey = "output_hash"
+	OutputNameKey = "output_name"
+	OutputSizeKey = "output_size"
+)
 
 // ResultLocalPath returns a non-VFS local filesystem path from task outputs (L1 SSOT).
 // Prefer result_path, then output_path. Empty if only hashes / vfs URIs remain.
@@ -483,28 +530,12 @@ type AddPeerRequest struct {
 }
 
 func SaveConfig(cfg NodeConfig) error {
-	configPath := filepath.Join(cfg.StoragePath, "config.json")
-	file, err := os.Create(configPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(cfg)
+	return utils.WriteJSONFile(filepath.Join(cfg.StoragePath, "config.json"), cfg)
 }
 
 func LoadConfig(storagePath string) (NodeConfig, error) {
-	configPath := filepath.Join(storagePath, "config.json")
-	file, err := os.Open(configPath)
-	if err != nil {
-		return NodeConfig{}, err
-	}
-	defer func() { _ = file.Close() }()
-
 	var cfg NodeConfig
-	err = json.NewDecoder(file).Decode(&cfg)
+	err := utils.ReadJSONFile(filepath.Join(storagePath, "config.json"), &cfg)
 	return cfg, err
 }
 
@@ -518,12 +549,41 @@ type RelayRequest struct {
 	Body    []byte            `json:"body"`
 }
 
+// NewRelayRequest builds a RelayRequest (L1). ReqID must be set by the caller (or via p2p.NewRelayRequest).
+func NewRelayRequest(reqID, target, method, path string, body []byte, headers map[string]string) RelayRequest {
+	return RelayRequest{
+		ReqID:   reqID,
+		Target:  target,
+		Method:  method,
+		Path:    path,
+		Headers: headers,
+		Body:    body,
+	}
+}
+
 // RelayResponse encapsulates an HTTP response returned by the target node
 type RelayResponse struct {
 	ReqID      string            `json:"req_id"`
 	StatusCode int               `json:"status_code"`
 	Headers    map[string]string `json:"headers"`
 	Body       []byte            `json:"body"`
+}
+
+// ToHTTPResponse synthesizes an http.Response from a relay response (L1).
+// Caller owns closing Body. req may be nil.
+func (rr RelayResponse) ToHTTPResponse(req *http.Request) *http.Response {
+	res := &http.Response{
+		StatusCode:    rr.StatusCode,
+		Status:        http.StatusText(rr.StatusCode),
+		Body:          io.NopCloser(bytes.NewReader(rr.Body)),
+		Header:        make(http.Header),
+		ContentLength: int64(len(rr.Body)),
+		Request:       req,
+	}
+	for k, v := range rr.Headers {
+		res.Header.Set(k, v)
+	}
+	return res
 }
 
 type ProbeRequest struct {

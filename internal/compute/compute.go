@@ -8,12 +8,10 @@ import (
 	"maps"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
-	"proxyma/internal/utils"
 	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type ComputeEngine struct {
@@ -286,7 +284,7 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), protocol.RPCTimeoutTaskWait)
 		outputs, err := handler.Execute(ctx, stepPayload)
 		cancel()
 
@@ -313,7 +311,7 @@ func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) {
 	if c.vfsBlobStager == nil {
 		return
 	}
-	utils.RewriteLocalFilePaths(outputs, c.vfsBlobStager, true)
+	protocol.RewriteLocalFilePaths(outputs, c.vfsBlobStager, true)
 }
 
 func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.PipelineStep, schema protocol.PipelineSchema) {
@@ -387,7 +385,7 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		c.setTaskStatus(responsePayload)
 
 		if t.ReplyTo != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), protocol.RPCTimeoutTaskCallback)
 			err := c.peerClient.SendTaskResponse(ctx, t.ReplyTo, responsePayload)
 			cancel()
 			if err != nil {
@@ -406,7 +404,7 @@ func (c *ComputeEngine) sendPipelineError(t protocol.TaskRequest, err error) {
 	}
 	c.setTaskStatus(responsePayload)
 	if t.ReplyTo != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), protocol.RPCTimeoutTaskCallback)
 		_ = c.peerClient.SendTaskResponse(ctx, t.ReplyTo, responsePayload)
 		cancel()
 	}

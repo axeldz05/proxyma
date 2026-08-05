@@ -106,9 +106,9 @@ func GetServiceDetails(name string) string {
 	var params []ParameterDetail
 	for pName, rules := range schema.Parameters {
 		desc, uiHint := protocol.DescribeParameter(pName, rules)
-		if rules.Type == protocol.ParamTypeFile {
+		if protocol.IsFilePickerHint(uiHint) || rules.Type == protocol.ParamTypeFile {
 			hasFileParam = true
-			if uiHint == "image_picker" {
+			if protocol.IsImagePickerHint(uiHint) {
 				hasImageParam = true
 			}
 		}

@@ -89,27 +89,26 @@ fun ServiceDetailLayout(
             item {
                 Text("This service requires no parameters.", color = Color.Gray)
             }
-        } else {
-            item {
-                DynamicActionForm(
-                    parameters = formParams,
-                    submitButtonText = if (details.isStreaming == true) "Start Stream" else "Execute Task",
-                    onSubmit = { inputs, onComplete ->
-                        val payloadJson = Gson().toJson(inputs)
-                        val streaming = details.isStreaming == true
-                        enqueueFileTask(
-                            fileTasks = fileTasks,
-                            name = details.name,
-                            payloadJson = payloadJson,
-                            streaming = streaming,
-                            context = context,
-                            unaryAction = { proxyma_bind.Proxyma_bind.runService(details.name, payloadJson) },
-                            onDone = onComplete
-                        )
-                        onBack()
-                    }
-                )
-            }
+        }
+        item {
+            DynamicActionForm(
+                parameters = formParams,
+                submitButtonText = if (details.isStreaming == true) "Start Stream" else "Execute Task",
+                onSubmit = { inputs, onComplete ->
+                    val payloadJson = Gson().toJson(inputs)
+                    val streaming = details.isStreaming == true
+                    enqueueFileTask(
+                        fileTasks = fileTasks,
+                        name = details.name,
+                        payloadJson = payloadJson,
+                        streaming = streaming,
+                        context = context,
+                        unaryAction = { proxyma_bind.Proxyma_bind.runService(details.name, payloadJson) },
+                        onDone = onComplete
+                    )
+                    onBack()
+                }
+            )
         }
     }
 }

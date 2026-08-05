@@ -57,18 +57,6 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 	}
 }
 
-// syncCatalogToPeer pushes local pipelines and services to a newly joined peer.
-func (s *Server) syncCatalogToPeer(peerID string) {
-	for _, schema := range s.Compute.ListPipelines() {
-		s.NotifySchemaToPeer(peerID, schema, protocol.ActionAdd)
-	}
-	for _, name := range s.Compute.ListServices() {
-		if schema, ok := s.Compute.GetService(name); ok {
-			s.NotifyServiceToPeer(peerID, schema, protocol.ActionAdd)
-		}
-	}
-}
-
 func (s *Server) GetPeersCopy() map[string]string {
 	return s.Peers.GetPeersCopy()
 }
