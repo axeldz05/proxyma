@@ -46,6 +46,9 @@ type Server struct {
 	publicUDPAddr string
 	quicMgr       *p2p.QUICManager
 	natMapper     *p2p.NATMapper
+
+	webrtcPCs   sync.Map
+	webrtcPCSeq uint64
 }
 
 type DownloadJob struct {
@@ -268,6 +271,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.Compute.Close()
 			s.Config.Logger.Info("Compute Engine closed.")
 		}
+
+		s.closeWebRTCPeers()
 
 		if s.quicMgr != nil {
 			s.quicMgr.Close()

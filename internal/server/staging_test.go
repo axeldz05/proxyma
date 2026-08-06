@@ -157,3 +157,46 @@ func TestDispatchTaskLeavesNonexistentLocalPathUnchanged(t *testing.T) {
 
 	require.Equal(t, missing, seen)
 }
+
+func TestWebRTCSignalingRoundTripOverMTLS(t *testing.T) {
+	t.Parallel()
+
+	answerer := NewServer(t, testutil.DefaultConfig(t, "webrtc-answerer"), nil)
+	offerer := NewServer(t, testutil.DefaultConfig(t, "webrtc-offerer"), nil)
+	linkClusterPeers(t, answerer, offerer)
+
+	signalURL := answerer.Config.Address + protocol.PathWebRTCSignal
+	handler := compute.BuildWebRTCHandlerWithClient(signalURL, 5*time.Second, offerer.Client())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	in := make(chan map[string]any, 1)
+	out := make(chan map[string]any, 4)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handler.ExecuteStream(ctx, in, out)
+	}()
+
+	ping := map[string]any{"ping": true, "n": float64(1)}
+	in <- ping
+	close(in)
+
+	select {
+	case chunk, ok := <-out:
+		require.True(t, ok, "expected echoed DataChannel chunk")
+		require.Equal(t, ping, chunk)
+	case err := <-errCh:
+		require.NoError(t, err)
+		t.Fatal("handler finished without echo")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for mTLS WebRTC echo")
+	}
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("WebRTC mTLS handler did not terminate cleanly")
+	}
+}

@@ -107,7 +107,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | JSON files | `ReadJSONFile` / `WriteJSONFile` |
 | Service bid cost | `Compute.EstimateTaskCost` / `BuildServiceBid` / `selectBestServiceBid` (`CostUnits` / `PowerScore`) |
 | HTTP stream handlers | `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler` via `BuildHandler` |
-| WebRTC DataChannel | `BuildWebRTCHandler` / `newHostOnlyPeerConnection` (`Type=webrtc`, HTTP signaling offer→answer) |
+| WebRTC DataChannel | `BuildWebRTCHandler` / `BuildWebRTCHandlerWithClient` / `AcceptWebRTCOfferEcho` (`Type=webrtc`) |
+| WebRTC signaling | `POST` `protocol.PathWebRTCSignal` → `HandleWebRTCSignal` (mTLS echo answerer) |
 
 ---
 

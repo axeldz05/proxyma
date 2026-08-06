@@ -271,9 +271,11 @@ func TestPathConstantsAndPathRel(t *testing.T) {
 	require.True(t, strings.HasPrefix(protocol.PathUpload, "/"))
 	require.True(t, strings.HasPrefix(protocol.PathClusterJoin, "/"))
 	require.True(t, strings.HasPrefix(protocol.PathServicesBid, "/"))
+	require.True(t, strings.HasPrefix(protocol.PathWebRTCSignal, "/"))
 	require.True(t, strings.HasPrefix(protocol.ServicesPrefix, "/"))
 	require.Equal(t, "upload", protocol.PathRel(protocol.PathUpload))
 	require.Equal(t, "cluster/join", protocol.PathRel(protocol.PathClusterJoin))
+	require.Equal(t, "webrtc/signal", protocol.PathRel(protocol.PathWebRTCSignal))
 	require.Equal(t, "peers", protocol.PathRel("peers")) // already relative
 	require.Equal(t, 65536, protocol.MaxRelayBodyBytes)
 }

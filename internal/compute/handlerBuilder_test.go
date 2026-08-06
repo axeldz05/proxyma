@@ -401,22 +401,12 @@ func startWebRTCEchoAnswerer(t *testing.T) *httptest.Server {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
 		var offer webrtc.SessionDescription
-		if err := json.Unmarshal(body, &offer); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if offer.Type != webrtc.SDPTypeOffer {
-			http.Error(w, "expected offer", http.StatusBadRequest)
-			return
-		}
-
-		pc, err := newHostOnlyPeerConnection()
+		pc, answer, err := AcceptWebRTCOfferEcho(offer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -424,31 +414,8 @@ func startWebRTCEchoAnswerer(t *testing.T) *httptest.Server {
 		mu.Lock()
 		pcs = append(pcs, pc)
 		mu.Unlock()
-
-		pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-				_ = dc.SendText(string(msg.Data))
-			})
-		})
-
-		if err := pc.SetRemoteDescription(offer); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		answer, err := pc.CreateAnswer(nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		gatherDone := webrtc.GatheringCompletePromise(pc)
-		if err := pc.SetLocalDescription(answer); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		<-gatherDone
-
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(pc.LocalDescription())
+		_ = json.NewEncoder(w).Encode(answer)
 	}))
 	t.Cleanup(ts.Close)
 	return ts

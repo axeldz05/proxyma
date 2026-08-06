@@ -31,6 +31,7 @@ const (
 	PathRelayReply       = "/relay/reply"
 	PathTelemetry        = "/telemetry"
 	PathHolePunchInit    = "/holepunch/init"
+	PathWebRTCSignal     = "/webrtc/signal"
 )
 
 // MaxRelayBodyBytes is the SSOT size limit for relay-forwarded request bodies.

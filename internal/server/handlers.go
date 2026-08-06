@@ -37,6 +37,7 @@ func (s *Server) MountHandlers() http.Handler {
 	mux.HandleFunc("POST "+protocol.PathRelayReply, s.HandleRelayReply)
 	mux.HandleFunc("GET "+protocol.PathTelemetry, s.HandleTelemetry)
 	mux.HandleFunc("POST "+protocol.PathHolePunchInit, s.HandleHolePunchInit)
+	mux.HandleFunc("POST "+protocol.PathWebRTCSignal, s.HandleWebRTCSignal)
 	// Bandwidth wrap once here so httptest fixtures and ListenAndServe share the same stack.
 	return s.wrapWithBandwidthCounting(s.mTLSGuard(mux))
 }
