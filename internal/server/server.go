@@ -11,6 +11,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
+	"proxyma/internal/telemetry"
 	"proxyma/internal/utils"
 	"strings"
 	"sync"
@@ -59,6 +60,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
+	telemetry.InitFromEnv()
 	s := &Server{
 		Config:        cfg,
 		peerClient:    peerClient,

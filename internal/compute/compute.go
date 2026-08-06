@@ -8,6 +8,7 @@ import (
 	"maps"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/telemetry"
 	"runtime"
 	"sort"
 	"sync"
@@ -424,7 +425,7 @@ func (ce *ComputeEngine) BuildServiceBid(query protocol.DiscoveryQuery) (protoco
 	cpuLoad, memPressure := hostResourceSampler()
 	costUnits := estimated + int64(cpuLoad*200) + int64(memPressure*200)
 	powerScore := int64(cpuLoad*1000) + int64(memPressure*100)
-	return protocol.ServiceBid{
+	bid := protocol.ServiceBid{
 		NodeID:          ce.nodeID,
 		NodeAddr:        ce.nodeAddr,
 		EstimatedMillis: estimated,
@@ -433,7 +434,9 @@ func (ce *ComputeEngine) BuildServiceBid(query protocol.DiscoveryQuery) (protoco
 		CostUnits:       costUnits,
 		PowerScore:      powerScore,
 		CanAccept:       true,
-	}, true
+	}
+	telemetry.ExportBidAsync(bid)
+	return bid, true
 }
 
 func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
