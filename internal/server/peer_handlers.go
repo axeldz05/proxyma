@@ -7,10 +7,44 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strings"
 )
+
+func requirePeerCNMatchesBodyID(w http.ResponseWriter, r *http.Request, bodyID string) bool {
+	cn, ok := peerCNFromRequest(r)
+	if !ok {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return false
+	}
+	if cn != bodyID {
+		utils.RespondError(w, http.StatusForbidden, "certificate CN must match peer ID in request body")
+		return false
+	}
+	return true
+}
+
+// allowLeaveOrSponsorEvict: self-leave (CN==bodyID) or CA authority evicting another peer.
+func (s *Server) allowLeaveOrSponsorEvict(w http.ResponseWriter, r *http.Request, bodyID string) bool {
+	cn, ok := peerCNFromRequest(r)
+	if !ok {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return false
+	}
+	if cn == bodyID {
+		return true
+	}
+	if cn == s.Config.ID && s.Config.CAPath != "" {
+		if _, err := os.Stat(p2p.CAKeyPath(s.Config.CAPath)); err == nil {
+			return true
+		}
+	}
+	utils.RespondError(w, http.StatusForbidden, "certificate CN must match peer ID, or caller must be CA authority")
+	return false
+}
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	req, ok := utils.DecodeJSONOrError[protocol.AddPeerRequest](w, r)
@@ -19,6 +53,9 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ID == "" || len(req.Address.Addresses) == 0 || req.Address.Addresses[0] == "" {
 		utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
+		return
+	}
+	if !requirePeerCNMatchesBodyID(w, r, req.ID) {
 		return
 	}
 
@@ -95,16 +132,26 @@ func (s *Server) handlePeerIDAction(w http.ResponseWriter, r *http.Request, logM
 	if !ok {
 		return
 	}
+	if !requirePeerCNMatchesBodyID(w, r, req.ID) {
+		return
+	}
 	after(req.ID)
 	s.Config.Logger.Info(logMsg, "peer_id", req.ID)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": respMsg})
 }
 
 func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
-	s.handlePeerIDAction(w, r, "Peer left cluster", "Peer successfully removed", func(id string) {
-		s.RemovePeer(id)
-		go s.RotateCAAndResignPeers()
-	})
+	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
+	if !ok {
+		return
+	}
+	if !s.allowLeaveOrSponsorEvict(w, r, req.ID) {
+		return
+	}
+	s.RemovePeer(req.ID)
+	go s.RotateCAAndResignPeers()
+	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
 }
 
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {

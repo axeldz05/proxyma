@@ -35,14 +35,9 @@ func (s *Server) advertisedTCPPort() string {
 func (s *Server) determineSponsorAndNATStatus() {
 	s.Config.Logger.Info("Determining NAT and Sponsor status...")
 
-	// 1. Check override
-	if s.Config.IsSponsorOverride != nil {
-		s.isSponsor = *s.Config.IsSponsorOverride
-		s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
-		return
-	}
+	sponsorOverride := s.Config.IsSponsorOverride
 
-	// 2. Perform STUN check to get public IP
+	// Perform STUN check to get public IP (override only sets isSponsor; do not skip QUIC/NAT).
 	stunServer := s.Config.STUNServer
 	if stunServer == "" {
 		stunServer = "stun.l.google.com:19302"
@@ -59,7 +54,11 @@ func (s *Server) determineSponsorAndNATStatus() {
 	if !stunSuccess {
 		s.Config.Logger.Warn("STUN check failed, trying UPnP fallback to discover gateway", "error", err)
 		if s.Config.DisableUPnP {
-			s.isSponsor = false
+			if sponsorOverride != nil {
+				s.isSponsor = *sponsorOverride
+			} else {
+				s.isSponsor = false
+			}
 			return
 		}
 		// Bind a local UDP socket to use for QUIC
@@ -67,7 +66,11 @@ func (s *Server) determineSponsorAndNATStatus() {
 		conn, listenErr = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 		if listenErr != nil {
 			s.Config.Logger.Warn("Could not bind local UDP socket after STUN failure", "error", listenErr)
-			s.isSponsor = false
+			if sponsorOverride != nil {
+				s.isSponsor = *sponsorOverride
+			} else {
+				s.isSponsor = false
+			}
 			return
 		}
 	} else {
@@ -80,6 +83,9 @@ func (s *Server) determineSponsorAndNATStatus() {
 		udpPort := conn.LocalAddr().(*net.UDPAddr).Port
 
 		s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
+		s.natMapper.SetOnMapped(func(mappedTCP, mappedUDP int) {
+			s.refreshPublicUDPFromMapping(extIP, mappedUDP)
+		})
 		s.natMapper.Start()
 
 		mappedTCP, mappedUDP := s.natMapper.GetMappedPorts()
@@ -105,7 +111,12 @@ func (s *Server) determineSponsorAndNATStatus() {
 	if !stunSuccess {
 		s.Config.Logger.Warn("Could not determine public IP, assuming private/CGNAT network")
 		_ = conn.Close()
-		s.isSponsor = false
+		if sponsorOverride != nil {
+			s.isSponsor = *sponsorOverride
+			s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
+		} else {
+			s.isSponsor = false
+		}
 		return
 	}
 
@@ -135,11 +146,8 @@ func (s *Server) determineSponsorAndNATStatus() {
 	if utils.IsPrivateOrCGNATIP(extIP) {
 		s.Config.Logger.Info("Node is behind CGNAT/Private range. Auto-detected as NOT a Sponsor.", "ip", extIP)
 		s.isSponsor = false
-		return
-	}
-
-	// 3. Probe ourselves via a peer in the cluster (Bootstrap Node)
-	if s.Config.BootstrapNode != "" {
+	} else if s.Config.BootstrapNode != "" {
+		// Probe ourselves via a peer in the cluster (Bootstrap Node)
 		ownPort := s.advertisedTCPPort()
 
 		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
@@ -155,22 +163,42 @@ func (s *Server) determineSponsorAndNATStatus() {
 		if err != nil {
 			s.Config.Logger.Warn("Probe request to Bootstrap Node failed, assuming firewalled", "error", err)
 			s.isSponsor = false
-			return
-		}
-
-		if !probeResp.Reachable {
+		} else if !probeResp.Reachable {
 			s.Config.Logger.Info("Node port is unreachable from outside (Firewalled). Auto-detected as NOT a Sponsor.", "error", probeResp.Error)
 			s.isSponsor = false
-			return
+		} else {
+			s.Config.Logger.Info("Node is publicly reachable. Auto-detected as a Sponsor!")
+			s.isSponsor = true
 		}
-
-		s.Config.Logger.Info("Node is publicly reachable. Auto-detected as a Sponsor!")
-		s.isSponsor = true
 	} else {
 		// If we are the Bootstrap Node (no bootstrap node configured) and we have a public IP, we assume we are a Sponsor.
 		s.Config.Logger.Info("No Bootstrap Node configured. Assuming publicly reachable Sponsor since IP is public.", "ip", extIP)
 		s.isSponsor = true
 	}
+
+	if sponsorOverride != nil {
+		s.isSponsor = *sponsorOverride
+		s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
+	}
+}
+
+// refreshPublicUDPFromMapping updates publicUDPAddr when UPnP finishes mapping asynchronously.
+func (s *Server) refreshPublicUDPFromMapping(extIP string, mappedUDP int) {
+	if mappedUDP <= 0 || extIP == "" {
+		return
+	}
+	host := extIP
+	if s.publicUDPAddr != "" {
+		if h, _, err := net.SplitHostPort(s.publicUDPAddr); err == nil && h != "" {
+			host = h
+		}
+	}
+	newAddr := fmt.Sprintf("%s:%d", host, mappedUDP)
+	s.publicUDPAddr = newAddr
+	if s.quicMgr != nil {
+		s.quicMgr.PublicUDPAddr = newAddr
+	}
+	s.Config.Logger.Info("Updated public UDP address from NAT mapping", "publicUDP", newAddr)
 }
 
 func (s *Server) IsSponsorNode() bool {

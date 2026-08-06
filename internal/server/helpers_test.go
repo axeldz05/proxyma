@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"strings"
@@ -15,6 +17,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func mtlsClientForPeer(t *testing.T, sponsor *TestServer, peerID string) *http.Client {
+	t.Helper()
+	caPath := filepath.Dir(sponsor.Config.StoragePath)
+	require.NoError(t, p2p.IssueNodeCertificate(caPath, sponsor.Config.StoragePath, peerID))
+	caCertFile, _ := p2p.CACertPaths(caPath)
+	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(sponsor.Config.StoragePath, peerID)
+	_, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
+	require.NoError(t, err)
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   clientTLS,
+			DisableKeepAlives: true,
+		},
+	}
+}
 
 func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string) string {
 	t.Helper()

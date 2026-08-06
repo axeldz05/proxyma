@@ -125,7 +125,14 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 
 	// Security validation: if no valid peer certificates are supplied via mTLS,
 	// only allow forwarding to the cluster joining endpoint.
-	if _, ok := peerCNFromRequest(r); !ok {
+	if cn, ok := peerCNFromRequest(r); ok {
+		if req.OriginPeerID == "" {
+			req.OriginPeerID = cn
+		} else if req.OriginPeerID != cn {
+			utils.RespondError(w, http.StatusForbidden, "OriginPeerID must match authenticated peer CN")
+			return
+		}
+	} else {
 		if req.Path != protocol.PathClusterJoin {
 			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not cluster join", "path", req.Path, "ip", r.RemoteAddr)
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")
@@ -156,6 +163,10 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case resp := <-waiter:
+		if len(resp.Body) > protocol.MaxRelayBodyBytes {
+			utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay response exceeds 64KB limit")
+			return
+		}
 		utils.RespondJSON(w, http.StatusOK, resp)
 	case <-ctx.Done():
 		utils.RespondError(w, http.StatusGatewayTimeout, "Target did not respond in time")
@@ -165,6 +176,11 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 	resp, ok := utils.DecodeJSONOrError[protocol.RelayResponse](w, r)
 	if !ok {
+		return
+	}
+
+	if len(resp.Body) > protocol.MaxRelayBodyBytes {
+		utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay response exceeds 64KB limit")
 		return
 	}
 
@@ -283,13 +299,13 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 		req.Header.Set(k, v)
 	}
 
-	// Relayed requests were already authenticated at the sponsor. Attach a mock
-	// leaf whose CN is this node so mTLSGuard accepts the in-process serve
-	// (empty CN used to pass older guards; PeerCNFromTLS now requires non-empty CN).
-	req.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{{
-			Subject: pkix.Name{CommonName: s.Config.ID},
-		}},
+	// Preserve originator identity from the sponsor; do not forge self-cert for auth.
+	if relayReq.OriginPeerID != "" {
+		req.TLS = &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{{
+				Subject: pkix.Name{CommonName: relayReq.OriginPeerID},
+			}},
+		}
 	}
 
 	w := httptest.NewRecorder()
@@ -302,9 +318,16 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 		StatusCode: res.StatusCode,
 		Headers:    p2p.FlattenHTTPHeader(res.Header),
 	}
-	bodyBytes, _ := io.ReadAll(res.Body)
-	relayRes.Body = bodyBytes
+	limited := io.LimitReader(res.Body, int64(protocol.MaxRelayBodyBytes)+1)
+	bodyBytes, _ := io.ReadAll(limited)
 	_ = res.Body.Close()
+	if len(bodyBytes) > protocol.MaxRelayBodyBytes {
+		s.Config.Logger.Warn("Relay response body exceeds cap; truncating to error", "reqID", relayReq.ReqID, "size", len(bodyBytes))
+		relayRes.StatusCode = http.StatusRequestEntityTooLarge
+		relayRes.Body = []byte(`{"error":"relay response exceeds 64KB limit"}`)
+	} else {
+		relayRes.Body = bodyBytes
+	}
 
 	// Send reply back to Sponsor
 	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSync)

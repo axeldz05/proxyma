@@ -149,6 +149,7 @@ fun DynamicActionForm(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ParameterInput(
     param: FormParameter,
@@ -338,15 +339,50 @@ fun ParameterInput(
                         }
                     }
                 } else {
-                    val isPassword = param.uiHint == "password"
-                    OutlinedTextField(
-                        value = stringValue,
-                        onValueChange = { onValueChange(it) },
-                        isError = errorMessage != null,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None
-                    )
+                    val opts = param.options
+                    if (!opts.isNullOrEmpty()) {
+                        var expanded by remember(param.name) { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
+                            expanded = expanded,
+                            onExpandedChange = { expanded = !expanded }
+                        ) {
+                            OutlinedTextField(
+                                value = stringValue,
+                                onValueChange = {},
+                                readOnly = true,
+                                isError = errorMessage != null,
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth(),
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
+                            ) {
+                                opts.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option) },
+                                        onClick = {
+                                            onValueChange(option)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        val isPassword = param.uiHint == "password"
+                        OutlinedTextField(
+                            value = stringValue,
+                            onValueChange = { onValueChange(it) },
+                            isError = errorMessage != null,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None
+                        )
+                    }
                 }
             }
         }

@@ -410,6 +410,11 @@ func (c *ComputeEngine) sendPipelineError(t protocol.TaskRequest, err error) {
 	}
 }
 
+// EstimateTaskCost returns the same local cost estimate used for remote bids (L2).
+func (ce *ComputeEngine) EstimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
+	return ce.estimateTaskCost(query)
+}
+
 func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
 	currentTasks := len(ce.taskQueue)
 	busyWorkers := ce.activeWorkers.Load()

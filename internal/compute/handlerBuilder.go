@@ -36,6 +36,12 @@ func doJSONPost(ctx context.Context, client *http.Client, endpointURL string, pa
 // BuildUnaryHandler wraps a simple unary function into a ServiceHandler.
 func BuildUnaryHandler(fn func(ctx context.Context, payload map[string]any) (map[string]any, error)) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
+		if in != nil || out != nil {
+			if out != nil {
+				close(out)
+			}
+			return nil, fmt.Errorf("unary service does not support streaming")
+		}
 		return fn(ctx, payload)
 	}
 }
@@ -106,6 +112,12 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	client := p2p.NewHTTPClient(nil, timeout)
 
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
+		if in != nil || out != nil {
+			if out != nil {
+				close(out)
+			}
+			return nil, fmt.Errorf("unary grpc service does not support streaming")
+		}
 		return doJSONPost(ctx, client, endpointURL, payload)
 	}
 }

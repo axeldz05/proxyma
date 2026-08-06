@@ -90,3 +90,31 @@ func TestStreamingServiceEmitsChunksAndCancelsCleanly(t *testing.T) {
 	require.True(t, entered.Load())
 	require.Len(t, chunks, 2)
 }
+
+func TestStreamingUnaryServiceFailsFast(t *testing.T) {
+	t.Parallel()
+
+	sv := NewServer(t, testutil.DefaultConfig(t, "unary-stream"), nil)
+	require.NoError(t, sv.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name: "echo-unary",
+		Type: protocol.ServiceTypeScript,
+		Parameters: map[string]protocol.ServiceParameter{
+			"x": {Type: "string"},
+		},
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"ok": true}, nil
+	})))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sv.LocalServiceStreamRun("echo-unary", `{"x":"1"}`, func(chunk map[string]any) {})
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "does not support streaming")
+	case <-time.After(2 * time.Second):
+		t.Fatal("unary stream hung (deadlock on range out) instead of failing fast")
+	}
+}

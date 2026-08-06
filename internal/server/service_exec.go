@@ -126,6 +126,10 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protoco
 func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, chunkCallback func(chunk map[string]any)) error {
 	payload := parseServicePayload(payloadStr)
 
+	if schema, ok := s.Compute.GetService(serviceName); ok && !schema.IsStreaming() {
+		return fmt.Errorf("service '%s' does not support streaming (type %q is unary)", serviceName, schema.Type)
+	}
+
 	handler, exists := s.Compute.GetHandler(serviceName)
 	if !exists {
 		targetPeerID, err := s.resolveServiceBidTarget(serviceName)

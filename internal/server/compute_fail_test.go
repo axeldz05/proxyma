@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"testing"
@@ -74,4 +75,52 @@ func TestLocalServiceRunFailsWhenServiceUnknown(t *testing.T) {
 	_, err := sv.LocalServiceRun("does-not-exist", `{}`)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to discover service")
+}
+
+func TestServiceBidPrefersPeerWhenLocalCostHigher(t *testing.T) {
+	t.Parallel()
+
+	mock := &testutil.MockPeerClient{
+		OnFetchServiceBid: func(ctx context.Context, peerID string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
+			return protocol.ServiceBid{
+				NodeID:          "fast-peer",
+				NodeAddr:        "https://fast-peer.invalid",
+				Schema:          protocol.ServiceSchema{Name: "ocr"},
+				EstimatedMillis: 50,
+				CanAccept:       true,
+			}, nil
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "bidder-local"), mock)
+	sv.AddPeer("fast-peer", protocol.AddressRecord{Addresses: []string{"https://fast-peer.invalid"}})
+	sv.SetPeerOnline("fast-peer", true)
+
+	require.NoError(t, sv.Compute.RegisterNewService(protocol.ServiceSchema{
+		Name: "ocr",
+		Parameters: map[string]protocol.ServiceParameter{
+			"file": {Type: protocol.ParamTypeFile, Required: true},
+		},
+	}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return map[string]any{}, nil
+	})))
+
+	localEst, ok := sv.Compute.EstimateTaskCost(protocol.DiscoveryQuery{Service: "ocr"})
+	require.True(t, ok)
+	require.Greater(t, localEst, int64(50), "local estimate must exceed peer bid so peer wins")
+
+	peerID, _, _, err := sv.RequestServiceToCluster(protocol.DiscoveryQuery{
+		Service:      "ocr",
+		SortStrategy: protocol.StrategyFastest,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fast-peer", peerID, "must not sticky-select local via hardcoded 10ms")
+
+	for _, strategy := range []string{"", protocol.StrategyCheapest, protocol.StrategyLowPower} {
+		peerID, _, _, err = sv.RequestServiceToCluster(protocol.DiscoveryQuery{
+			Service:      "ocr",
+			SortStrategy: strategy,
+		})
+		require.NoError(t, err)
+		require.Equal(t, "fast-peer", peerID, "strategy %q", strategy)
+	}
 }

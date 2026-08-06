@@ -9,6 +9,54 @@ import (
 	"strings"
 )
 
+// pipelineHasCycle reports whether Connections form a cycle among steps (ignores $initial).
+func pipelineHasCycle(schema protocol.PipelineSchema) bool {
+	adj := make(map[string][]string, len(schema.Steps))
+	inDegree := make(map[string]int, len(schema.Steps))
+	for _, step := range schema.Steps {
+		inDegree[step.ID] = 0
+	}
+	type edgeKey struct{ from, to string }
+	seen := make(map[edgeKey]bool)
+	for _, conn := range schema.Connections {
+		if conn.FromStep == "$initial" || conn.FromStep == "" || conn.ToStep == "" {
+			continue
+		}
+		if _, ok := inDegree[conn.FromStep]; !ok {
+			continue
+		}
+		if _, ok := inDegree[conn.ToStep]; !ok {
+			continue
+		}
+		key := edgeKey{conn.FromStep, conn.ToStep}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		adj[conn.FromStep] = append(adj[conn.FromStep], conn.ToStep)
+		inDegree[conn.ToStep]++
+	}
+	queue := make([]string, 0, len(inDegree))
+	for id, deg := range inDegree {
+		if deg == 0 {
+			queue = append(queue, id)
+		}
+	}
+	visited := 0
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		visited++
+		for _, m := range adj[n] {
+			inDegree[m]--
+			if inDegree[m] == 0 {
+				queue = append(queue, m)
+			}
+		}
+	}
+	return visited < len(schema.Steps)
+}
+
 func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
 	if schema.ID == "" {
 		return fmt.Errorf("pipeline ID cannot be empty")
@@ -33,6 +81,10 @@ func (s *Server) ValidatePipelineSchema(schema protocol.PipelineSchema) error {
 		stepServices[step.ID] = step.Service
 		stepNodes[step.ID] = step.TargetNodeID
 		stepIDs = append(stepIDs, step.ID)
+	}
+
+	if pipelineHasCycle(schema) {
+		return fmt.Errorf("pipeline contains a cycle in Connections")
 	}
 
 	getSchema := s.lookupCachedServiceSchema

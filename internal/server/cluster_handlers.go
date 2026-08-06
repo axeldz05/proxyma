@@ -31,6 +31,21 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	// Note: We cannot perform a net.DialTimeout here because the joining node
 	// is currently running 'proxyma join' and its HTTP server hasn't started yet.
 
+	if req.ID == "" {
+		utils.RespondError(w, http.StatusBadRequest, "ID is required")
+		return
+	}
+	csrCN, err := p2p.CSRCommonName([]byte(req.CSR))
+	if err != nil {
+		s.Config.Logger.Error("Error parsing CSR", "error", err)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid CSR")
+		return
+	}
+	if csrCN != req.ID {
+		utils.RespondError(w, http.StatusBadRequest, "CSR CommonName must match join ID")
+		return
+	}
+
 	caKeyPath := p2p.CAKeyPath(s.Config.CAPath)
 
 	newCertPEM, err := p2p.SignCSR([]byte(req.CSR), s.Config.CAPath, caKeyPath)

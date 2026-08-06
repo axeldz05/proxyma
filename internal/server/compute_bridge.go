@@ -12,13 +12,16 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	var bids []protocol.ServiceBid
 
 	if schema, ok := s.Compute.GetService(query.Service); ok {
-		bids = append(bids, protocol.ServiceBid{
-			NodeID:          s.Config.ID,
-			NodeAddr:        s.Config.Address,
-			Schema:          schema,
-			CanAccept:       true,
-			EstimatedMillis: 10,
-		})
+		estimated, canAccept := s.Compute.EstimateTaskCost(query)
+		if canAccept {
+			bids = append(bids, protocol.ServiceBid{
+				NodeID:          s.Config.ID,
+				NodeAddr:        s.Config.Address,
+				Schema:          schema,
+				CanAccept:       true,
+				EstimatedMillis: estimated,
+			})
+		}
 	}
 
 	peerBids := mapEachPeer(s, forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) (protocol.ServiceBid, error) {
@@ -39,16 +42,29 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		return "", "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)
 	}
 
-	bestBid := bids[0]
-	if query.SortStrategy == protocol.StrategyFastest {
-		for _, bid := range bids {
-			if bid.EstimatedMillis < bestBid.EstimatedMillis {
-				bestBid = bid
+	bestBid := selectBestServiceBid(bids, query.SortStrategy)
+	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
+}
+
+// selectBestServiceBid picks a bid by SortStrategy. Empty strategy defaults to StrategyFastest
+// (lowest EstimatedMillis) so local-first bids[0] sticky selection is never used.
+func selectBestServiceBid(bids []protocol.ServiceBid, strategy string) protocol.ServiceBid {
+	best := bids[0]
+	switch strategy {
+	case protocol.StrategyCheapest, protocol.StrategyLowPower, protocol.StrategyFastest, "":
+		for _, bid := range bids[1:] {
+			if bid.EstimatedMillis < best.EstimatedMillis {
+				best = bid
+			}
+		}
+	default:
+		for _, bid := range bids[1:] {
+			if bid.EstimatedMillis < best.EstimatedMillis {
+				best = bid
 			}
 		}
 	}
-
-	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
+	return best
 }
 
 func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error) error {

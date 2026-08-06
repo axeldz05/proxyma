@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"net/http"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"time"
@@ -54,4 +55,32 @@ func (s *Server) AttachQUICManager(qm *p2p.QUICManager) {
 // QUICManager returns the active QUIC manager (may be nil).
 func (s *Server) QUICManager() *p2p.QUICManager {
 	return s.quicMgr
+}
+
+// PublicUDPAddr returns the advertised public UDP address.
+func (s *Server) PublicUDPAddr() string {
+	return s.publicUDPAddr
+}
+
+// ProcessRelayRequest exposes processRelayRequest for tests.
+func (s *Server) ProcessRelayRequest(sponsorAddr string, relayReq protocol.RelayRequest) {
+	s.processRelayRequest(sponsorAddr, relayReq)
+}
+
+// RefreshPublicUDPFromMapping exposes refreshPublicUDPFromMapping for tests.
+func (s *Server) RefreshPublicUDPFromMapping(extIP string, mappedUDP int) {
+	s.refreshPublicUDPFromMapping(extIP, mappedUDP)
+}
+
+// SetPublicUDPAddr sets publicUDPAddr for tests.
+func (s *Server) SetPublicUDPAddr(addr string) {
+	s.publicUDPAddr = addr
+	if s.quicMgr != nil {
+		s.quicMgr.PublicUDPAddr = addr
+	}
+}
+
+// SetHTTPHandler replaces the in-process mux used by processRelayRequest (tests only).
+func (s *Server) SetHTTPHandler(h http.Handler) {
+	s.handler = h
 }

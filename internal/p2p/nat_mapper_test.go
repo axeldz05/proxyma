@@ -96,3 +96,32 @@ func TestNATMapperLifecycle(t *testing.T) {
 
 	assert.Empty(t, m.mappings)
 }
+
+func TestNATMapperOnMappedFiresAfterAsyncMap(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	nm := NewNATMapper(logger, 8000, 8001)
+	m := &mockNAT{
+		natType:      "Mock",
+		deviceAddr:   net.ParseIP("192.168.1.1"),
+		externalAddr: net.ParseIP("198.51.100.7"),
+		internalAddr: net.ParseIP("192.168.1.10"),
+		mappings:     make(map[string]int),
+	}
+	nm.discoverGateway = func() (nat.NAT, error) { return m, nil }
+
+	mappedCh := make(chan [2]int, 2)
+	nm.SetOnMapped(func(tcp, udp int) {
+		mappedCh <- [2]int{tcp, udp}
+	})
+	nm.Start()
+	t.Cleanup(nm.Stop)
+
+	assert.Eventually(t, func() bool {
+		select {
+		case ports := <-mappedCh:
+			return ports[0] == 8100 || ports[1] == 8101
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}

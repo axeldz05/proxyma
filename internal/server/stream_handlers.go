@@ -16,10 +16,23 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
-	decodeNotifyOK(w, r, func(req protocol.PipelineNotification) {
-		s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
-		_ = s.applyPipelineAction(req.Schema, req.Action)
-	})
+	req, ok := utils.DecodeJSONOrError[protocol.PipelineNotification](w, r)
+	if !ok {
+		return
+	}
+	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
+	if req.Action == protocol.ActionAdd {
+		if err := s.ValidatePipelineSchema(req.Schema); err != nil {
+			s.Config.Logger.Warn("Rejecting invalid pipeline schema from peer", "pipelineID", req.Schema.ID, "error", err)
+			utils.RespondError(w, http.StatusBadRequest, "invalid pipeline schema: "+err.Error())
+			return
+		}
+	}
+	if err := s.applyPipelineAction(req.Schema, req.Action); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func decodeNotifyOK[T any](w http.ResponseWriter, r *http.Request, fn func(T)) {

@@ -13,10 +13,23 @@ import (
 	"proxyma/internal/utils"
 )
 
+func resolveEditorBinary() (string, error) {
+	if env := os.Getenv("PROXYMA_EDITOR"); env != "" {
+		if _, err := os.Stat(env); err != nil {
+			return "", fmt.Errorf("PROXYMA_EDITOR=%q not found: %w", env, err)
+		}
+		return env, nil
+	}
+	if p, err := exec.LookPath("proxyma-editor"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("editor binary not found: set PROXYMA_EDITOR or place proxyma-editor on PATH")
+}
+
 func launchEditor(pipelineID string, fileToOpen string) string {
-	binaryPath := "/home/drusila/Projects/proxyma-services/editor/proxyma-editor"
-	if _, err := os.Stat(binaryPath); err != nil {
-		return proxyma_bind.BindErrorJSON(fmt.Errorf("editor binary not found. Please compile it first: %v", err))
+	binaryPath, err := resolveEditorBinary()
+	if err != nil {
+		return proxyma_bind.BindErrorJSON(err)
 	}
 
 	cmdArgs := []string{"--storage", cliStorage}
@@ -32,7 +45,7 @@ func launchEditor(pipelineID string, fileToOpen string) string {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		return proxyma_bind.BindErrorJSON(fmt.Errorf("failed to run editor: %v", err))
 	}

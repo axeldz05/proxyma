@@ -521,7 +521,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = respGood.Body.Close() }()
 
-		require.Equal(t, http.StatusInternalServerError, respGood.StatusCode, "Token accepted, fails to sign false CSR")
+		require.Equal(t, http.StatusBadRequest, respGood.StatusCode, "Token accepted, fails on invalid CSR")
 
 		respReused, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
 		require.NoError(t, err)
@@ -887,9 +887,9 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 
-	// Because we use a real http client, r.RemoteAddr will be 127.0.0.1:something
-	// We expect the server to detect 127.0.0.1 and add it to the addresses
-	resp, err := sponsor.Client().Do(req)
+	// CN must match body ID; issue leaf under sponsor CA for the announcing node.
+	client := mtlsClientForPeer(t, sponsor, "new-stun-node")
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -915,6 +915,7 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	t.Parallel()
 	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-update"), nil)
+	client := mtlsClientForPeer(t, sponsor, "dynamic-node")
 
 	// First announce
 	req1 := protocol.AddPeerRequest{
@@ -927,7 +928,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	body1, _ := json.Marshal(req1)
 	httpReq1, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body1))
 	httpReq1.Header.Set("Content-Type", "application/json")
-	resp1, err := sponsor.Client().Do(httpReq1)
+	resp1, err := client.Do(httpReq1)
 	require.NoError(t, err)
 	_ = resp1.Body.Close()
 
@@ -948,7 +949,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 	body2, _ := json.Marshal(req2)
 	httpReq2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body2))
 	httpReq2.Header.Set("Content-Type", "application/json")
-	resp2, err := sponsor.Client().Do(httpReq2)
+	resp2, err := client.Do(httpReq2)
 	require.NoError(t, err)
 	_ = resp2.Body.Close()
 
@@ -1029,14 +1030,13 @@ func TestOfflineNotificationAndSelfHealing(t *testing.T) {
 	srv1.SetPeerOnline(srv2.Config.ID, true)
 	require.True(t, srv1.IsPeerOnline(srv2.Config.ID))
 
-	offlineReq := struct {
-		ID string `json:"id"`
-	}{ID: srv2.Config.ID}
+	offlineReq := protocol.PeerIDRequest{ID: srv2.Config.ID}
 	body, _ := json.Marshal(offlineReq)
 	req, err := http.NewRequest("POST", srv1.Config.Address+"/peers/offline", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv1.Client().Do(req)
+	client := mtlsClientForPeer(t, srv1, srv2.Config.ID)
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1179,6 +1179,57 @@ func TestDetermineSponsorAndNATStatus(t *testing.T) {
 	})
 }
 
+func TestPublicUDPAddrTracksMappedPort(t *testing.T) {
+	t.Parallel()
+	sv := NewServer(t, testutil.DefaultConfig(t, "udp-map"), nil)
+	sv.SetPublicUDPAddr("203.0.113.9:40000")
+	sv.RefreshPublicUDPFromMapping("203.0.113.9", 45000)
+	require.Equal(t, "203.0.113.9:45000", sv.PublicUDPAddr())
+}
+
+func TestSponsorOverrideStillStartsQUIC(t *testing.T) {
+	t.Parallel()
+
+	stunConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stunConn.Close() })
+	go func() {
+		buf := make([]byte, 1024)
+		n, raddr, readErr := stunConn.ReadFromUDP(buf)
+		if readErr != nil || n < 20 {
+			return
+		}
+		if binary.BigEndian.Uint32(buf[4:8]) != 0x2112A442 {
+			return
+		}
+		resp := make([]byte, 32)
+		binary.BigEndian.PutUint16(resp[0:2], 0x0101)
+		binary.BigEndian.PutUint16(resp[2:4], 12)
+		binary.BigEndian.PutUint32(resp[4:8], 0x2112A442)
+		copy(resp[8:20], buf[8:20])
+		binary.BigEndian.PutUint16(resp[20:22], 0x0020)
+		binary.BigEndian.PutUint16(resp[22:24], 8)
+		resp[25] = 0x01
+		senderIP := raddr.IP.To4()
+		binary.BigEndian.PutUint16(resp[26:28], uint16(raddr.Port)^0x2112)
+		binary.BigEndian.PutUint32(resp[28:32], binary.BigEndian.Uint32(senderIP)^0x2112A442)
+		_, _ = stunConn.WriteToUDP(resp, raddr)
+	}()
+
+	isSponsor := true
+	cfg := testutil.DefaultConfig(t, "override-quic")
+	cfg.IsSponsorOverride = &isSponsor
+	cfg.DisableUPnP = true
+	cfg.STUNServer = stunConn.LocalAddr().String()
+	sv := NewServer(t, cfg, nil)
+	sv.CheckNAT()
+
+	require.True(t, sv.IsSponsorNode(), "override must still set sponsor flag")
+	require.NotNil(t, sv.QUICManager(), "override must not skip QUIC stack")
+	require.NotEmpty(t, sv.PublicUDPAddr())
+	require.Eventually(t, func() bool { return sv.QUICManager() != nil }, time.Second, 20*time.Millisecond)
+}
+
 func TestAnnounceEndpointEnforcesMTLS(t *testing.T) {
 	srv := NewServer(t, testutil.DefaultConfig(t, "sponsor-node"), nil)
 
@@ -1275,42 +1326,91 @@ func TestPeerLeavesClusterGracefullyAndNotifiesOthers(t *testing.T) {
 	// Verify Peer 1 is in active registry on Sponsor
 	require.Contains(t, sponsor.GetPeersCopy(), peer1.Config.ID)
 
-	// 1. Peer 2 announces to Sponsor, then goes offline (before CA rotation occurs)
+	// 1. Peer 2 is registered then marked offline locally (HTTP offline requires CN==ID)
 	sponsor.AddPeer(peer2.Config.ID, protocol.AddressRecord{
 		Addresses: []string{peer2.Config.Address},
 		IsSponsor: false,
 	})
 	require.Contains(t, sponsor.GetPeersCopy(), peer2.Config.ID)
 	require.True(t, sponsor.IsPeerOnline(peer2.Config.ID))
-
-	offlineReq := struct {
-		ID string `json:"id"`
-	}{ID: peer2.Config.ID}
-	bodyBytesOffline, _ := json.Marshal(offlineReq)
-	reqOffline, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/offline", bytes.NewBuffer(bodyBytesOffline))
-	reqOffline.Header.Set("Content-Type", "application/json")
-	respOffline, err := sponsor.Client().Do(reqOffline)
-	require.NoError(t, err)
-	defer func() { _ = respOffline.Body.Close() }()
-	require.Equal(t, http.StatusOK, respOffline.StatusCode)
-
-	// Verify Peer 2 is marked as offline on Sponsor
+	sponsor.SetPeerOffline(peer2.Config.ID, nil)
 	require.False(t, sponsor.IsPeerOnline(peer2.Config.ID))
 
-	// 2. Peer 1 requests graceful leave from Sponsor (which triggers async CA rotation)
-	leaveReq := struct {
-		ID string `json:"id"`
-	}{ID: peer1.Config.ID}
+	// 2. Peer 1 requests graceful leave from Sponsor with matching CN (issued from sponsor CA)
+	peer1Client := mtlsClientForPeer(t, sponsor, peer1.Config.ID)
+	leaveReq := protocol.PeerIDRequest{ID: peer1.Config.ID}
 	bodyBytes, _ := json.Marshal(leaveReq)
-	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/leave", bytes.NewBuffer(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersLeave, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := sponsor.Client().Do(req)
+	resp, err := peer1Client.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Verify Peer 1 is removed from Sponsor's registry
 	require.NotContains(t, sponsor.GetPeersCopy(), peer1.Config.ID)
+}
+
+func TestLeavePeerRequiresCertCNMatchBodyID(t *testing.T) {
+	t.Parallel()
+
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-cn"), nil)
+	bob := NewServer(t, testutil.DefaultConfig(t, "bob-cn"), nil)
+
+	sponsor.AddPeer("alice", protocol.AddressRecord{Addresses: []string{"https://alice.invalid"}})
+	sponsor.AddPeer("victim", protocol.AddressRecord{Addresses: []string{"https://victim.invalid"}})
+	bob.AddPeer("victim", protocol.AddressRecord{Addresses: []string{"https://victim.invalid"}})
+	bob.AddPeer(sponsor.Config.ID, protocol.AddressRecord{Addresses: []string{sponsor.Config.Address}, IsSponsor: true})
+
+	aliceClient := mtlsClientForPeer(t, sponsor, "alice")
+
+	leaveBody, _ := json.Marshal(protocol.PeerIDRequest{ID: "victim"})
+	req, err := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersLeave, bytes.NewReader(leaveBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := aliceClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Contains(t, sponsor.GetPeersCopy(), "victim")
+	require.Contains(t, bob.GetPeersCopy(), "victim")
+
+	victimClient := mtlsClientForPeer(t, sponsor, "victim")
+	reqOK, err := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersLeave, bytes.NewReader(leaveBody))
+	require.NoError(t, err)
+	reqOK.Header.Set("Content-Type", "application/json")
+	respOK, err := victimClient.Do(reqOK)
+	require.NoError(t, err)
+	defer func() { _ = respOK.Body.Close() }()
+	require.Equal(t, http.StatusOK, respOK.StatusCode)
+	require.NotContains(t, sponsor.GetPeersCopy(), "victim")
+}
+
+func TestSponsorCACanEvictPeerViaLeave(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-evict"), nil)
+	sponsor.AddPeer("node-3", protocol.AddressRecord{Addresses: []string{"https://node-3.invalid"}})
+
+	caPath := sponsor.Config.CAPath
+	caBefore, err := os.ReadFile(caPath)
+	require.NoError(t, err)
+
+	leaveBody, _ := json.Marshal(protocol.PeerIDRequest{ID: "node-3"})
+	req, err := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersLeave, bytes.NewReader(leaveBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	// Sponsor client cert CN == sponsor ID, body ID == node-3 (e2e 11 pattern).
+	resp, err := sponsor.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotContains(t, sponsor.GetPeersCopy(), "node-3")
+
+	// Wait for async RotateCAAndResignPeers so TempDir cleanup does not race writers.
+	require.Eventually(t, func() bool {
+		caAfter, readErr := os.ReadFile(caPath)
+		return readErr == nil && !bytes.Equal(caBefore, caAfter)
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
@@ -1741,6 +1841,100 @@ func TestPipelineSchemaValidation(t *testing.T) {
 		err := srv.LocalPipelineAdd(string(mustMarshal(p)))
 		require.NoError(t, err)
 	})
+}
+
+func registerCycleCheckServices(t *testing.T, srv *TestServer) {
+	t.Helper()
+	for _, name := range []string{"svc-a", "svc-b"} {
+		err := srv.Compute.RegisterNewService(protocol.ServiceSchema{
+			Name: name,
+			Parameters: map[string]protocol.ServiceParameter{
+				"in": {Type: "string", Required: true},
+			},
+			Outputs: map[string]protocol.ServiceParameter{
+				"out": {Type: "string"},
+			},
+		}, compute.BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+			return map[string]any{"out": "x"}, nil
+		}))
+		require.NoError(t, err)
+	}
+}
+
+func cyclicPipeline() protocol.PipelineSchema {
+	return protocol.PipelineSchema{
+		ID: "cyclic-pipe",
+		Steps: []protocol.PipelineStep{
+			{ID: "a", Service: "svc-a"},
+			{ID: "b", Service: "svc-b"},
+		},
+		Connections: []protocol.PipelineConnection{
+			{FromStep: "a", FromPort: "out", ToStep: "b", ToPort: "in"},
+			{FromStep: "b", FromPort: "out", ToStep: "a", ToPort: "in"},
+		},
+	}
+}
+
+func TestPipelineRejectsCycle(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(t, testutil.DefaultConfig(t, "cycle-node"), nil)
+	registerCycleCheckServices(t, srv)
+
+	err := srv.LocalPipelineAdd(string(mustMarshal(cyclicPipeline())))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cycle")
+
+	_, ok := srv.Compute.GetPipeline("cyclic-pipe")
+	require.False(t, ok, "cyclic pipeline must not be registered")
+
+	schemas, loadErr := srv.Storage.LoadPipelineSchemas()
+	require.NoError(t, loadErr)
+	_, persisted := schemas["cyclic-pipe"]
+	require.False(t, persisted, "cyclic pipeline must not be persisted")
+}
+
+func TestSchemaNotifyRejectsInvalidPipeline(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(t, testutil.DefaultConfig(t, "notify-cycle"), nil)
+	registerCycleCheckServices(t, srv)
+
+	payload := protocol.PipelineNotification{
+		Schema: cyclicPipeline(),
+		Action: protocol.ActionAdd,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathSchemasNotify, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	_, ok := srv.Compute.GetPipeline("cyclic-pipe")
+	require.False(t, ok)
+
+	invalidPort := protocol.PipelineSchema{
+		ID: "bad-port-pipe",
+		Steps: []protocol.PipelineStep{
+			{ID: "a", Service: "svc-a"},
+			{ID: "b", Service: "svc-b"},
+		},
+		Connections: []protocol.PipelineConnection{
+			{FromStep: "a", FromPort: "out", ToStep: "b", ToPort: "invented"},
+		},
+	}
+	body2, _ := json.Marshal(protocol.PipelineNotification{Schema: invalidPort, Action: protocol.ActionAdd})
+	req2, err := http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathSchemasNotify, bytes.NewReader(body2))
+	require.NoError(t, err)
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := srv.Client().Do(req2)
+	require.NoError(t, err)
+	defer func() { _ = resp2.Body.Close() }()
+	require.Equal(t, http.StatusBadRequest, resp2.StatusCode)
+	_, ok = srv.Compute.GetPipeline("bad-port-pipe")
+	require.False(t, ok)
 }
 
 func TestLoadLocalServices_GRPCBidi(t *testing.T) {

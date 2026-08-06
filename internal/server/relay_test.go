@@ -10,6 +10,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,4 +177,95 @@ func TestAdaptiveRelayPollingAndFailover(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for failover poll to second sponsor")
 	}
+}
+
+func TestRelayResponseEnforcesSizeCap(t *testing.T) {
+	t.Parallel()
+
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-cap"), nil)
+
+	huge := protocol.RelayResponse{
+		ReqID:      "cap-1",
+		StatusCode: 200,
+		Body:       bytes.Repeat([]byte("B"), protocol.MaxRelayBodyBytes+1),
+	}
+	body, _ := json.Marshal(huge)
+	req, err := http.NewRequest(http.MethodPost, sv.Config.Address+protocol.PathRelayReply, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := sv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+
+	var mu sync.Mutex
+	var got protocol.RelayResponse
+	mock := &testutil.MockPeerClient{
+		OnReplyRelay: func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
+			mu.Lock()
+			got = resp
+			mu.Unlock()
+			return nil
+		},
+	}
+	sv2 := NewServer(t, testutil.DefaultConfig(t, "relay-cap-proc"), mock)
+	sv2.SetHTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("X"), protocol.MaxRelayBodyBytes+512))
+	}))
+	sv2.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
+		ReqID:        "cap-proc",
+		Method:       http.MethodGet,
+		Path:         "/huge",
+		OriginPeerID: "alice",
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, http.StatusRequestEntityTooLarge, got.StatusCode)
+	require.LessOrEqual(t, len(got.Body), protocol.MaxRelayBodyBytes)
+}
+
+func TestRelayedRequestPreservesOriginIdentity(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var lastStatus int
+	mock := &testutil.MockPeerClient{
+		OnReplyRelay: func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
+			mu.Lock()
+			lastStatus = resp.StatusCode
+			mu.Unlock()
+			return nil
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-origin"), mock)
+	sv.AddPeer("alice", protocol.AddressRecord{Addresses: []string{"https://alice.invalid"}})
+	require.True(t, sv.IsPeerOnline("alice"))
+
+	sv.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
+		ReqID:        "origin-1",
+		Method:       http.MethodPost,
+		Path:         protocol.PathPeersOffline,
+		OriginPeerID: "alice",
+		Headers:      map[string]string{"Content-Type": "application/json"},
+		Body:         []byte(`{"id":"alice"}`),
+	})
+	require.False(t, sv.IsPeerOnline("alice"), "CN=alice must authorize offline for alice, not self")
+	mu.Lock()
+	require.Equal(t, http.StatusOK, lastStatus)
+	mu.Unlock()
+
+	sv.AddPeer("bob", protocol.AddressRecord{Addresses: []string{"https://bob.invalid"}})
+	require.True(t, sv.IsPeerOnline("bob"))
+	sv.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
+		ReqID:   "origin-2",
+		Method:  http.MethodPost,
+		Path:    protocol.PathPeersOffline,
+		Headers: map[string]string{"Content-Type": "application/json"},
+		Body:    []byte(`{"id":"bob"}`),
+	})
+	require.True(t, sv.IsPeerOnline("bob"), "missing origin must not authorize offline")
+	mu.Lock()
+	require.Equal(t, http.StatusForbidden, lastStatus)
+	mu.Unlock()
 }

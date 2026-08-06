@@ -181,6 +181,19 @@ func SignCSR(csrPEM []byte, caCertPath string, caKeyPath string) (certPEM []byte
 	return signLeaf(csr.PublicKey, csr.Subject, LeafDNSNames(csr.Subject.CommonName), caCert, caPrivKey)
 }
 
+// CSRCommonName extracts Subject.CommonName from a PEM-encoded certificate request.
+func CSRCommonName(csrPEM []byte) (string, error) {
+	block, _ := pem.Decode(csrPEM)
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		return "", fmt.Errorf("failed to decode PEM block containing CSR")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse CSR: %w", err)
+	}
+	return csr.Subject.CommonName, nil
+}
+
 func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	priv, err := generatePrivateKey()
 	if err != nil {

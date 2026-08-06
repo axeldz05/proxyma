@@ -166,3 +166,26 @@ func TestBuildGRPCBidiHandler_ServerError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "500")
 }
+
+func TestBuildUnaryHandler_RejectsStreaming(t *testing.T) {
+	t.Parallel()
+	handler := BuildUnaryHandler(func(ctx context.Context, payload map[string]any) (map[string]any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+	in := make(chan map[string]any)
+	close(in)
+	out := make(chan map[string]any, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- handler.ExecuteStream(context.Background(), in, out)
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "does not support streaming")
+	case <-time.After(2 * time.Second):
+		t.Fatal("unary ExecuteStream hung instead of failing fast")
+	}
+	_, ok := <-out
+	require.False(t, ok, "out channel must be closed")
+}

@@ -541,12 +541,13 @@ func LoadConfig(storagePath string) (NodeConfig, error) {
 
 // RelayRequest encapsulates an HTTP request to be forwarded by the Sponsor
 type RelayRequest struct {
-	ReqID   string            `json:"req_id"`
-	Target  string            `json:"target"` // PeerID
-	Method  string            `json:"method"`
-	Path    string            `json:"path"`
-	Headers map[string]string `json:"headers"`
-	Body    []byte            `json:"body"`
+	ReqID        string            `json:"req_id"`
+	Target       string            `json:"target"` // PeerID
+	Method       string            `json:"method"`
+	Path         string            `json:"path"`
+	Headers      map[string]string `json:"headers"`
+	Body         []byte            `json:"body"`
+	OriginPeerID string            `json:"origin_peer_id,omitempty"`
 }
 
 // NewRelayRequest builds a RelayRequest (L1). ReqID must be set by the caller (or via p2p.NewRelayRequest).

@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -52,4 +54,34 @@ func startMockUnixSocket(t *testing.T, dir string, handler func(req protocol.Uni
 	}()
 
 	return l
+}
+
+func TestEditPipelineResolvesEditorBinary(t *testing.T) {
+	// Not parallel: uses t.Setenv for PROXYMA_EDITOR / PATH.
+
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fake-editor")
+	require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	t.Setenv("PROXYMA_EDITOR", fake)
+	path, err := resolveEditorBinary()
+	require.NoError(t, err)
+	require.Equal(t, fake, path)
+
+	t.Setenv("PROXYMA_EDITOR", filepath.Join(dir, "missing"))
+	_, err = resolveEditorBinary()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "PROXYMA_EDITOR")
+
+	t.Setenv("PROXYMA_EDITOR", "")
+	binDir := filepath.Join(dir, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	onPath := filepath.Join(binDir, "proxyma-editor")
+	require.NoError(t, os.WriteFile(onPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	path, err = resolveEditorBinary()
+	require.NoError(t, err)
+	resolved, err := exec.LookPath("proxyma-editor")
+	require.NoError(t, err)
+	require.Equal(t, resolved, path)
 }

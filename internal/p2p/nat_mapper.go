@@ -22,6 +22,7 @@ type NATMapper struct {
 	udpMappedPort   int
 	natDev          nat.NAT
 	discoverGateway func() (nat.NAT, error)
+	onMapped        func(mappedTCP, mappedUDP int)
 }
 
 func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
@@ -31,6 +32,13 @@ func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
 		udpPort:         udpPort,
 		discoverGateway: nat.DiscoverGateway,
 	}
+}
+
+// SetOnMapped registers a callback invoked after successful port mapping updates.
+func (nm *NATMapper) SetOnMapped(fn func(mappedTCP, mappedUDP int)) {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	nm.onMapped = fn
 }
 
 func (nm *NATMapper) Start() {
@@ -105,9 +113,14 @@ func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, s
 	}
 	nm.mu.Lock()
 	setMapped(extPort)
+	cb := nm.onMapped
+	tcpMapped, udpMapped := nm.tcpMappedPort, nm.udpMappedPort
 	nm.mu.Unlock()
 	if nm.logger != nil {
 		nm.logger.Info(strings.ToUpper(proto)+" port mapped successfully", "internal", port, "external", extPort)
+	}
+	if cb != nil {
+		cb(tcpMapped, udpMapped)
 	}
 }
 
