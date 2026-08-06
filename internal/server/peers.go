@@ -6,6 +6,7 @@ import (
 	"net"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"time"
 )
 
@@ -67,13 +68,30 @@ func (s *Server) GetSponsorPeers() map[string]string {
 
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	s.CheckNAT()
+	tcpPortStr := s.advertisedTCPPort()
 	addresses := []string{s.Config.Address}
+	seen := map[string]bool{s.Config.Address: true}
+	// LAN/container IPs as fallbacks when node-ID DNS is unavailable (bare metal).
+	if ips, err := utils.GetLocalIPs(); err == nil {
+		for _, ip := range ips {
+			if ip.To4() == nil || ip.IsLoopback() {
+				continue
+			}
+			addr := fmt.Sprintf("https://%s:%s", ip.String(), tcpPortStr)
+			if !seen[addr] {
+				addresses = append(addresses, addr)
+				seen[addr] = true
+			}
+		}
+	}
 	if s.isSponsor && s.publicUDPAddr != "" {
 		host, _, err := net.SplitHostPort(s.publicUDPAddr)
 		if err == nil {
-			tcpPortStr := s.advertisedTCPPort()
 			publicTCPAddr := fmt.Sprintf("https://%s:%s", host, tcpPortStr)
-			addresses = append(addresses, publicTCPAddr)
+			if !seen[publicTCPAddr] {
+				addresses = append(addresses, publicTCPAddr)
+				seen[publicTCPAddr] = true
+			}
 		}
 	}
 	if s.publicUDPAddr != "" {

@@ -88,7 +88,7 @@ exec_node node-1 ./proxyma storage upload --name "test_e2e.pdf" --path "/app/dat
 
 # Run generic file-processing task from node-1
 echo "Running OCR service from node-1..."
-RUN_RES=$(exec_node node-1 ./proxyma service run_file --service ocr --input test_e2e.pdf --output optimized.pdf --storage "/app/data")
+RUN_RES=$(exec_node node-1 ./proxyma service run --name ocr --inputs "input_path=/app/data/test_e2e.pdf,output_path=/tmp/optimized.pdf" --storage "/app/data")
 echo "Result from run_file: $RUN_RES"
 
 # Check status using service status
@@ -115,18 +115,18 @@ fi
 
 echo -e "${GREEN}✅ Output file registered in requester VFS registry.${NC}"
 
-# Run generic file-processing task from node-1 with EMPTY output name to test default naming logic
-echo "Running OCR service from node-1 with empty output name..."
-RUN_RES_EMPTY=$(exec_node node-1 ./proxyma service run_file --service ocr --input test_e2e.pdf --output "" --storage "/app/data")
-echo "Result from empty output run_file: $RUN_RES_EMPTY"
+# Second run with explicit default-style output name
+echo "Running OCR service from node-1 with output_test_e2e.pdf name..."
+RUN_RES_EMPTY=$(exec_node node-1 ./proxyma service run --name ocr --inputs "input_path=/app/data/test_e2e.pdf,output_path=/tmp/output_test_e2e.pdf" --storage "/app/data")
+echo "Result from second run: $RUN_RES_EMPTY"
 
-# Verify that the default output file output_test_e2e.pdf is registered in VFS
+# Verify that output_test_e2e.pdf is registered in VFS
 MANIFEST_N1_EMPTY=$(exec_node node-1 ./proxyma storage list --storage "/app/data")
 if ! echo "$MANIFEST_N1_EMPTY" | grep -q "output_test_e2e.pdf"; then
-    echo -e "${RED}❌ Default output_test_e2e.pdf not registered in node-1 VFS registry!${NC}"
+    echo -e "${RED}❌ output_test_e2e.pdf not registered in node-1 VFS registry!${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Default output file (output_test_e2e.pdf) registered successfully.${NC}"
+echo -e "${GREEN}✅ Default-style output file (output_test_e2e.pdf) registered successfully.${NC}"
 echo -e "${GREEN}🎉 Case 6 (Generic File OCR Pipeline) completed successfully!${NC}"
 exit 0

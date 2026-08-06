@@ -161,6 +161,12 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	portStr, _ := s.configTCPPort()
 	addr := "0.0.0.0:" + portStr
 
+	// http.Server.ServeTLS clones TLSConfig. Static Certificates/ClientCAs on the
+	// original pointer are therefore invisible to the listener after start.
+	// GetConfigForClient is copied by Clone and reloads leaf+CA from disk per handshake,
+	// so RotateCAAndResignPeers / ReloadTLSConfig stay effective without restart.
+	s.armHotReloadServerTLS(serverTLS)
+
 	hs := &http.Server{
 		Addr:      addr,
 		Handler:   mux,

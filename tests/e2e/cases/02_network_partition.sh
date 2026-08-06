@@ -9,8 +9,21 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Network Partition...${NC}"
 
+cleanup_on_exit() {
+    local exit_code=$?
+    trap - EXIT
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}❌ Test failed with exit code $exit_code. Keeping containers for inspection.${NC}"
+        export KEEP_E2E_DATA=true
+    else
+        cleanup_e2e
+    fi
+    exit $exit_code
+}
+trap cleanup_on_exit EXIT
+
+# Initial cleanup
 cleanup_e2e
-trap cleanup_e2e EXIT
 
 # Create directories
 mkdir -p "$E2E_DATA_DIR/node-1"
@@ -90,10 +103,17 @@ echo "Reconnecting node-3 to network $NETWORK_NAME..."
 docker network connect "$NETWORK_NAME" "$NODE3_CONTAINER"
 sleep 2
 
-# 6. Sync healed cluster
+# 6. Sync healed cluster (retry: docker DNS / peer routes can lag briefly after reconnect)
 echo "Triggering synchronization after reconnection..."
-exec_node node-3 ./proxyma storage sync > /dev/null
-exec_node node-1 ./proxyma storage sync > /dev/null
+for _ in 1 2 3; do
+    exec_node node-3 ./proxyma storage sync > /dev/null || true
+    exec_node node-1 ./proxyma storage sync > /dev/null || true
+    if wait_for_condition 5 1 "partition_b.txt" call_api node-1 GET 8081 manifest && \
+       wait_for_condition 5 1 "partition_a.txt" call_api node-3 GET 8083 manifest; then
+        break
+    fi
+    sleep 2
+done
 
 # 7. Verify convergence
 echo "🔍 Verifying metadata convergence on node-1..."

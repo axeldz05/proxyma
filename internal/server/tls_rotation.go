@@ -16,6 +16,23 @@ func (s *Server) SetTLSConfigs(serverTLS, clientTLS *tls.Config) {
 	s.clientTLSConfig = clientTLS
 }
 
+// armHotReloadServerTLS installs GetConfigForClient so ServeTLS's cloned config
+// still picks up rotated certs/CA from disk on every handshake (L2).
+func (s *Server) armHotReloadServerTLS(cfg *tls.Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		caPath := s.Config.CAPath
+		certPath, keyPath := p2p.ResolveNodeCertPaths(caPath, s.Config.StoragePath, s.Config.ID)
+		stls, _, err := p2p.LoadNodeTLS(caPath, certPath, keyPath)
+		if err != nil {
+			return nil, err
+		}
+		return stls, nil
+	}
+}
+
 func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 	newServerTLS, newClientTLS, err := p2p.LoadNodeTLS(caPath, certPath, keyPath)
 	if err != nil {
@@ -27,15 +44,29 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 
 	s.Config.Logger.Info("Reloading dynamic TLS configuration across server and client...")
 
+	// Server side: ServeTLS clones TLSConfig; armHotReloadServerTLS makes handshakes
+	// reload from disk. Still refresh the base pointer for httptest / non-cloned paths.
 	if s.serverTLSConfig != nil {
 		s.serverTLSConfig.Certificates = newServerTLS.Certificates
 		s.serverTLSConfig.ClientCAs = newServerTLS.ClientCAs
+		s.armHotReloadServerTLS(s.serverTLSConfig)
 	}
 
+	// Client side is held by HTTP transports by pointer (not cloned) — mutate in place.
 	if s.clientTLSConfig != nil {
 		s.clientTLSConfig.Certificates = newClientTLS.Certificates
 		s.clientTLSConfig.RootCAs = newClientTLS.RootCAs
 		s.clientTLSConfig.VerifyPeerCertificate = newClientTLS.VerifyPeerCertificate
+		s.clientTLSConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			_, ctls, loadErr := p2p.LoadNodeTLS(caPath, certPath, keyPath)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			if len(ctls.Certificates) == 0 {
+				return nil, fmt.Errorf("no client certificate available after reload")
+			}
+			return &ctls.Certificates[0], nil
+		}
 	}
 
 	return nil

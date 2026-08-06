@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"proxyma/internal/protocol"
@@ -135,58 +136,74 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var lastErr error
-	// Phase 1: Direct Routing
-	for _, rawAddr := range record.Addresses {
-		parsedAddr, err := url.Parse(rawAddr)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if parsedAddr.Scheme == "quic" {
-			continue
-		}
+	// Hostnames first (docker DNS); IPs after relay so stale bridge/STUN
+	// addresses cannot burn the whole parent RPC deadline.
+	hostnames, ipAddrs := splitDirectAddresses(record.Addresses)
 
-		host := parsedAddr.Hostname()
-		port := defaultPortForURL(parsedAddr)
+	tryDirect := func(addrs []string) (*http.Response, bool) {
+		for _, rawAddr := range addrs {
+			parsedAddr, err := url.Parse(rawAddr)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if parsedAddr.Scheme == "quic" {
+				continue
+			}
 
-		if r.OwnAddress != "" {
-			ownParsed, errOwn := url.Parse(r.OwnAddress)
-			if errOwn == nil {
-				ownPort := defaultPortForURL(ownParsed)
+			host := parsedAddr.Hostname()
+			port := defaultPortForURL(parsedAddr)
 
-				isLoopbackTarget := utils.IsLoopbackHost(host)
-
-				if (isLoopbackTarget && port == ownPort) || (parsedAddr.Host == ownParsed.Host) {
-					if peerID != r.NodeID {
-						r.logDebug("Skipping loopback address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
-						continue
+			if r.OwnAddress != "" {
+				ownParsed, errOwn := url.Parse(r.OwnAddress)
+				if errOwn == nil {
+					ownPort := defaultPortForURL(ownParsed)
+					isLoopbackTarget := utils.IsLoopbackHost(host)
+					if (isLoopbackTarget && port == ownPort) || (parsedAddr.Host == ownParsed.Host) {
+						if peerID != r.NodeID {
+							r.logDebug("Skipping address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
+							continue
+						}
 					}
 				}
 			}
-		}
 
-		clone.URL.Scheme = parsedAddr.Scheme
-		clone.URL.Host = parsedAddr.Host
+			clone.URL.Scheme = parsedAddr.Scheme
+			clone.URL.Host = parsedAddr.Host
 
-		// Attempt direct connection with a short timeout to fail-fast on unreachable IPs
-		r.logDebug("Routing direct request", "url", clone.URL.String())
-		dCtx, dCancel := context.WithTimeout(clone.Context(), 3000*time.Millisecond)
-		directReq := clone.Clone(dCtx)
-		resp, err := r.Base.RoundTrip(directReq)
-		dCancel()
-		if err == nil {
+			r.logDebug("Routing direct request", "url", clone.URL.String())
+			// TCP probe fail-fast on dead IPs without binding the HTTP body to a
+			// short request context (that aborted large blob downloads).
+			probeAddr := net.JoinHostPort(host, port)
+			if conn, dialErr := net.DialTimeout("tcp", probeAddr, 3*time.Second); dialErr != nil {
+				lastErr = dialErr
+				continue
+			} else {
+				_ = conn.Close()
+			}
+			directReq := clone.Clone(clone.Context())
+			resp, err := r.Base.RoundTrip(directReq)
+			if err != nil {
+				lastErr = err
+				continue
+			}
 			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
 				cert := resp.TLS.PeerCertificates[0]
-				if err := VerifyPeerCN(cert, peerID); err != nil {
+				if vErr := VerifyPeerCN(cert, peerID); vErr != nil {
 					_ = resp.Body.Close()
 					r.logDebug("Rejecting direct connection: peer identity mismatch", "expected", peerID, "got", cert.Subject.CommonName)
-					lastErr = err
+					lastErr = vErr
 					continue
 				}
 			}
-			return resp, nil
+			return resp, true
 		}
-		lastErr = err
+		return nil, false
+	}
+
+	// Phase 1a: DNS hostnames only (fast fail when unknown)
+	if resp, ok := tryDirect(hostnames); ok {
+		return resp, nil
 	}
 
 	// Phase 1.5: UDP Hole Punching to establish QUIC session
@@ -197,7 +214,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		lastErr = err
 	}
 
-	// Phase 2: Relay Fallback
+	// Phase 2: Relay Fallback before IP literals (critical for partitioned nets)
 	if sponsorAddr != "" {
 		relayReq := NewRelayRequest(peerID, clone.Method, clone.URL.Path, nil, nil)
 		if clone.Body != nil {
@@ -214,6 +231,14 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err == nil {
 			return relayRes.ToHTTPResponse(req), nil
 		}
+		if lastErr == nil {
+			lastErr = err
+		}
+	}
+
+	// Phase 3: IP literals last (private docker IPs, then public STUN)
+	if resp, ok := tryDirect(ipAddrs); ok {
+		return resp, nil
 	}
 
 	if lastErr != nil {
@@ -354,6 +379,28 @@ func defaultPortForURL(u *url.URL) string {
 		return "443"
 	}
 	return "80"
+}
+
+// splitDirectAddresses separates DNS hostnames from IP literals.
+// IPs (private or public) are tried after relay so stale docker/STUN
+// endpoints cannot exhaust the parent RPC deadline before fallback.
+func splitDirectAddresses(addrs []string) (hostnames, ipAddrs []string) {
+	for _, raw := range addrs {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "quic" {
+			continue
+		}
+		host := parsed.Hostname()
+		if host == "" {
+			continue
+		}
+		if net.ParseIP(host) == nil {
+			hostnames = append(hostnames, raw)
+			continue
+		}
+		ipAddrs = append(ipAddrs, raw)
+	}
+	return hostnames, ipAddrs
 }
 
 // CancelReadCloser wraps an io.ReadCloser to call a cancel function when closed.

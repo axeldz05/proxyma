@@ -60,15 +60,9 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 		}
 	}
 
-	localIP := "127.0.0.1"
-	ips, _ := utils.GetLocalIPs()
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			localIP = ip.String()
-			break
-		}
-	}
-	localAddr := fmt.Sprintf("https://%s:%s", localIP, port)
+	// Prefer stable node-ID hostname (matches `proxyma init` and Docker Compose DNS).
+	// Ephemeral bridge/LAN IPs are added later by AnnouncePresence as secondary addresses.
+	localAddr := fmt.Sprintf("https://%s:%s", nodeID, port)
 
 	logFn := func(msg string, err error) {
 		if appLogger != nil {

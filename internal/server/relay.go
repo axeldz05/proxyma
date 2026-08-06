@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,10 +283,13 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 		req.Header.Set(k, v)
 	}
 
-	// Since this request is relayed and has already been verified/routed by the server,
-	// we attach a mock TLS state to bypass the local mTLSGuard middleware checks.
+	// Relayed requests were already authenticated at the sponsor. Attach a mock
+	// leaf whose CN is this node so mTLSGuard accepts the in-process serve
+	// (empty CN used to pass older guards; PeerCNFromTLS now requires non-empty CN).
 	req.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{{}},
+		PeerCertificates: []*x509.Certificate{{
+			Subject: pkix.Name{CommonName: s.Config.ID},
+		}},
 	}
 
 	w := httptest.NewRecorder()

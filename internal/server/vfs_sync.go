@@ -19,6 +19,28 @@ func (s *Server) ExecuteSync() error {
 			return err
 		}
 		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
+
+		// Push local entries the peer lacks (or has older). Critical after partition
+		// heal: the isolated node can reach the sponsor, but the sponsor often cannot
+		// dial the reconnected peer (DNS lag / stale IP) and has no relay of its own.
+		for name, local := range s.Storage.GetVFSSnapshot() {
+			remote, ok := manifest[name]
+			if ok && !local.Deleted && remote.Hash == local.Hash && remote.Version >= local.Version {
+				continue
+			}
+			if ok && local.Deleted && remote.Deleted && remote.Version >= local.Version {
+				continue
+			}
+			nErr := s.peerClient.Notify(ctx, peerID, protocol.PeerNotification{
+				File:   local,
+				Source: s.Config.Address,
+			})
+			if nErr != nil {
+				s.Config.Logger.Debug("Sync push notify failed", "peer", peerID, "file", name, "error", nErr)
+				continue
+			}
+		}
+
 		for _, file := range missingFiles {
 			s.downloadQueue <- DownloadJob{
 				File:   file,
@@ -50,6 +72,19 @@ func (s *Server) downloadWorker() {
 				return s.fetchBlobFromPeer(ctx, peerID, job.File)
 			})
 			cancel()
+			// Manifest source may only hold metadata (e.g. relay sponsor). Fall back
+			// to any reachable peer that still has the physical blob.
+			if err != nil {
+				_, ok := firstPeer(s, forEachPeerOpts{Timeout: PeerRPCBlobLong, SkipSelf: true}, func(ctx context.Context, peerID string) (struct{}, error) {
+					if peerID == job.Source {
+						return struct{}{}, fmt.Errorf("already tried source peer")
+					}
+					return struct{}{}, s.fetchBlobFromPeer(ctx, peerID, job.File)
+				})
+				if ok {
+					err = nil
+				}
+			}
 			if err != nil {
 				s.Config.Logger.Error("Failed to download blob from peer", "hash", job.File.Hash, "peer", job.Source, "error", err)
 			} else {
