@@ -213,6 +213,26 @@ func RemoveService(name string) string {
 	})
 }
 
+// SubscribeService records interest in remote service notifies (name or pattern).
+func SubscribeService(name string) string {
+	return dispatchUnixOrLocal("service_subscribe", map[string]string{"name": name}, func(s *server.Server) (any, error) {
+		if err := s.LocalServiceSubscribe(name, true); err != nil {
+			return nil, err
+		}
+		return bindMessageJSON(fmt.Sprintf("Subscribed to service pattern %q", name)), nil
+	})
+}
+
+// UnsubscribeService drops a service interest pattern.
+func UnsubscribeService(name string) string {
+	return dispatchUnixOrLocal("service_unsubscribe", map[string]string{"name": name}, func(s *server.Server) (any, error) {
+		if err := s.LocalServiceSubscribe(name, false); err != nil {
+			return nil, err
+		}
+		return bindMessageJSON(fmt.Sprintf("Unsubscribed from service pattern %q", name)), nil
+	})
+}
+
 // RunService runs a task and waits up to 30s.
 // Optional sortStrategy: fastest|cheapest|low_power (or canonical proxyma/strategy/* URNs).
 func RunService(name string, payloadJson string, sortStrategy ...string) string {

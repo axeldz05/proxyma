@@ -236,6 +236,24 @@ var Registry = []DomainDetail{
 				Parameters:  []ParameterDetail{svcNameParam},
 			},
 			{
+				Name:        "subscribe",
+				Title:       "Subscribe Service",
+				Description: "Subscribe to remote service notifies by name or pattern (e.g. vision.*)",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern (suffix * / .*)"},
+				},
+			},
+			{
+				Name:        "unsubscribe",
+				Title:       "Unsubscribe Service",
+				Description: "Stop filtering interest for a service name or pattern",
+				OutputType:  "text",
+				Parameters: []ParameterDetail{
+					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern to drop"},
+				},
+			},
+			{
 				Name:        "run",
 				Title:       "Run Service",
 				Description: "Execute a compute service (unary, streaming, or file transformation)",

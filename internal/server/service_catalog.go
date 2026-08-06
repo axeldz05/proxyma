@@ -152,3 +152,13 @@ func (s *Server) NotifyService(schema protocol.ServiceSchema, action string) {
 		return s.notifyService(ctx, peerID, schema, action)
 	})
 }
+
+// LocalServiceSubscribe records interest in a remote service name/pattern (L2).
+// When any subscription exists, HandleServiceNotify only materializes matching schemas.
+func (s *Server) LocalServiceSubscribe(pattern string, subscribe bool) error {
+	if pattern == "" {
+		return fmt.Errorf("missing service subscription pattern")
+	}
+	s.Storage.SetServiceSubscription(pattern, subscribe)
+	return nil
+}

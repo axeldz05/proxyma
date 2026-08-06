@@ -31,7 +31,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 	}
 
 	if err = db.Update(func(tx *bolt.Tx) error {
-		buckets := []string{"subscriptions", "peers", "pipeline_schemas", "vfs_index"}
+		buckets := []string{"subscriptions", "service_subscriptions", "peers", "pipeline_schemas", "vfs_index"}
 		for _, bName := range buckets {
 			if _, err := tx.CreateBucketIfNotExists([]byte(bName)); err != nil {
 				logger.Error("Failed to create bucket", "bucket", bName, "error", err)
@@ -95,6 +95,60 @@ func (se *StorageEngine) IsSubscribed(fileName string) bool {
 		return nil
 	})
 	return subscribed
+}
+
+// SetServiceSubscription records interest in a service name or prefix pattern (e.g. "ocr", "vision.*").
+func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool) {
+	if pattern == "" {
+		return
+	}
+	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
+		if subscribed {
+			return boltPutFlag(tx, "service_subscriptions", pattern)
+		}
+		return boltDelete(tx, "service_subscriptions", pattern)
+	})
+	if err != nil {
+		se.logger.Error("Failed to update service subscription", "pattern", pattern, "error", err)
+	}
+}
+
+// HasServiceSubscriptions reports whether any service interest filters are active.
+func (se *StorageEngine) HasServiceSubscriptions() bool {
+	var n int
+	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("service_subscriptions"))
+		if b == nil {
+			return nil
+		}
+		n = b.Stats().KeyN
+		return nil
+	})
+	return n > 0
+}
+
+// IsServiceSubscribed returns true when name matches any stored pattern.
+// If no service subscriptions exist, returns true (accept-all / join sync compat).
+func (se *StorageEngine) IsServiceSubscribed(name string) bool {
+	if !se.HasServiceSubscriptions() {
+		return true
+	}
+	matched := false
+	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("service_subscriptions"))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if protocol.MatchServicePattern(string(k), name) {
+				matched = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return matched
 }
 
 func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {

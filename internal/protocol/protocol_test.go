@@ -121,6 +121,17 @@ func TestNormalizeSortStrategy(t *testing.T) {
 	require.Equal(t, protocol.StrategyCheapest, protocol.NormalizeSortStrategy(protocol.StrategyCheapest))
 }
 
+func TestMatchServicePattern(t *testing.T) {
+	t.Parallel()
+	require.True(t, protocol.MatchServicePattern("ocr", "ocr"))
+	require.False(t, protocol.MatchServicePattern("ocr", "translate"))
+	require.True(t, protocol.MatchServicePattern("*", "anything"))
+	require.True(t, protocol.MatchServicePattern("vision.*", "vision.ocr"))
+	require.True(t, protocol.MatchServicePattern("vision.*", "vision"))
+	require.False(t, protocol.MatchServicePattern("vision.*", "audio.ocr"))
+	require.True(t, protocol.MatchServicePattern("vision*", "vision.ocr"))
+}
+
 func TestMissingRequired(t *testing.T) {
 	t.Parallel()
 	schema := protocol.ServiceSchema{

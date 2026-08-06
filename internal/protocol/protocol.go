@@ -510,6 +510,26 @@ func NormalizeSortStrategy(s string) string {
 	}
 }
 
+// MatchServicePattern reports whether serviceName matches a subscription pattern.
+// Patterns: exact name, "*", or prefix with trailing "*" / ".*" (e.g. "vision.*", "vision*").
+func MatchServicePattern(pattern, serviceName string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" || pattern == serviceName {
+		return true
+	}
+	if strings.HasSuffix(pattern, ".*") {
+		prefix := strings.TrimSuffix(pattern, ".*")
+		return serviceName == prefix || strings.HasPrefix(serviceName, prefix+".")
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(serviceName, strings.TrimSuffix(pattern, "*"))
+	}
+	return false
+}
+
 type PeerNotification struct {
 	File   IndexEntry `json:"file"`
 	Source string     `json:"source"`

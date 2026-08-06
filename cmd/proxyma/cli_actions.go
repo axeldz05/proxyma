@@ -198,6 +198,12 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 			serviceName := args["name"]
 			return proxyma_bind.RemoveService(serviceName)
 
+		case "subscribe":
+			return proxyma_bind.SubscribeService(args["name"])
+
+		case "unsubscribe":
+			return proxyma_bind.UnsubscribeService(args["name"])
+
 		case "run":
 			serviceName := resolveServiceName(args)
 			inputsRaw := resolvePayloadRaw(args)

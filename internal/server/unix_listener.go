@@ -138,6 +138,18 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		case "service_remove":
 			respData, actionErr = s.LocalServiceRemove(req.Args["name"])
 
+		case "service_subscribe":
+			actionErr = s.LocalServiceSubscribe(req.Args["name"], true)
+			if actionErr == nil {
+				respData = fmt.Sprintf("Subscribed to service pattern %q", req.Args["name"])
+			}
+
+		case "service_unsubscribe":
+			actionErr = s.LocalServiceSubscribe(req.Args["name"], false)
+			if actionErr == nil {
+				respData = fmt.Sprintf("Unsubscribed from service pattern %q", req.Args["name"])
+			}
+
 		case "service_stream":
 			svcName := req.Args["service"]
 			payloadStr := req.Args["payload"]

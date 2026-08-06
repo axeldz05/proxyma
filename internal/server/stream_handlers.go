@@ -11,6 +11,10 @@ import (
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 	decodeNotifyOK(w, r, func(req protocol.ServiceNotification) {
+		if !s.Storage.IsServiceSubscribed(req.Schema.Name) {
+			s.Config.Logger.Debug("Ignoring unsolicited service notify", "service", req.Schema.Name, "peer", req.NodeID)
+			return
+		}
 		s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
 	})
 }
