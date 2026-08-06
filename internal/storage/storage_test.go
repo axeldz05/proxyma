@@ -614,3 +614,95 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 	hasBlob, _ := engine.HasPhysicalBlob(meta.Hash)
 	require.False(t, hasBlob, "physical blob must be GC'd after remote tombstone in manifest")
 }
+
+func TestStageLocalFileDistinctLogicalNamesForSameBasename(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "stage-distinct-names")
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+
+	dirA := filepath.Join(t.TempDir(), "dirA")
+	dirB := filepath.Join(t.TempDir(), "dirB")
+	require.NoError(t, os.MkdirAll(dirA, 0o755))
+	require.NoError(t, os.MkdirAll(dirB, 0o755))
+	pathA := filepath.Join(dirA, "out.pdf")
+	pathB := filepath.Join(dirB, "out.pdf")
+	require.NoError(t, os.WriteFile(pathA, []byte("content-A"), 0o644))
+	require.NoError(t, os.WriteFile(pathB, []byte("content-B"), 0o644))
+
+	hashA, sizeA, err := engine.StageLocalFile(pathA)
+	require.NoError(t, err)
+	require.NotEmpty(t, hashA)
+	require.Equal(t, int64(len("content-A")), sizeA)
+
+	hashB, sizeB, err := engine.StageLocalFile(pathB)
+	require.NoError(t, err)
+	require.NotEmpty(t, hashB)
+	require.Equal(t, int64(len("content-B")), sizeB)
+	require.NotEqual(t, hashA, hashB)
+
+	snap := engine.GetVFSSnapshot()
+	var names []string
+	for name, entry := range snap {
+		if entry.Deleted {
+			continue
+		}
+		names = append(names, name)
+		switch entry.Hash {
+		case hashA:
+			require.NotEqual(t, "out.pdf", name, "logical VFS name must not collide on basename alone")
+		case hashB:
+			require.NotEqual(t, "out.pdf", name, "logical VFS name must not collide on basename alone")
+		}
+	}
+	require.GreaterOrEqual(t, len(names), 2, "both staged blobs must have distinct VFS index entries")
+
+	metaA, okA := engine.GetFileMeta(snapNameForHash(snap, hashA))
+	metaB, okB := engine.GetFileMeta(snapNameForHash(snap, hashB))
+	require.True(t, okA)
+	require.True(t, okB)
+	require.NotEqual(t, metaA.Name, metaB.Name)
+	require.Equal(t, protocol.VFSURI(hashA), protocol.VFSURI(metaA.Hash))
+	require.Equal(t, protocol.VFSURI(hashB), protocol.VFSURI(metaB.Hash))
+}
+
+func snapNameForHash(snap map[string]protocol.IndexEntry, hash string) string {
+	for name, entry := range snap {
+		if entry.Hash == hash && !entry.Deleted {
+			return name
+		}
+	}
+	return ""
+}
+
+func TestStageAndRewriteRewritesNestedPayloadPaths(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "stage-and-rewrite")
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("hello-stage"), 0o644))
+
+	payload := map[string]any{
+		"input": localPath,
+		"keep":  "vfs://already-there",
+		"nested": map[string]any{
+			"file": localPath,
+		},
+	}
+	engine.StageAndRewrite(payload, false)
+
+	require.True(t, protocol.IsVFSURI(payload["input"].(string)))
+	require.Equal(t, "vfs://already-there", payload["keep"])
+	nested := payload["nested"].(map[string]any)
+	require.True(t, protocol.IsVFSURI(nested["file"].(string)))
+	require.Equal(t, payload["input"], nested["file"])
+}

@@ -77,7 +77,7 @@ func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error
 }
 
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
-	protocol.RewriteLocalFilePaths(req.Payload, s.Storage.StageLocalFile, false)
+	s.Storage.StageAndRewrite(req.Payload, false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
 	defer cancel()

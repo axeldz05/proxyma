@@ -235,6 +235,7 @@ func (se *StorageEngine) SaveVerifiedPhysicalBlob(expectedHash string, content i
 }
 
 // StageLocalFile opens a local path, saves it as a CAS blob, and upserts VFS metadata (L2).
+// Logical VFS names are stage/<hash>/<basename> so same basenames from different paths do not collide.
 func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64, err error) {
 	fi, err := os.Stat(pathStr)
 	if err != nil {
@@ -252,13 +253,18 @@ func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64
 	if err != nil {
 		return "", 0, err
 	}
-	name := filepath.Base(pathStr)
+	name := "stage/" + hash + "/" + filepath.Base(pathStr)
 	se.UpsertAndSubscribe(protocol.IndexEntry{
 		Name: name,
 		Hash: hash,
 		Size: size,
 	}, false)
 	return hash, size, nil
+}
+
+// StageAndRewrite stages local file paths in m and rewrites them to vfs:// URIs (L2).
+func (se *StorageEngine) StageAndRewrite(m map[string]any, annotateOutputs bool) {
+	protocol.RewriteLocalFilePaths(m, se.StageLocalFile, annotateOutputs)
 }
 
 func (se *StorageEngine) CleanupTempFiles() {
