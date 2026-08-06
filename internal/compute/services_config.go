@@ -166,6 +166,8 @@ func BuildHandler(serviceType protocol.ServiceType, exec string) (ServiceHandler
 			return BuildWebRTCHandler(exec, 30*time.Second), nil
 		}
 		return nil, fmt.Errorf("webrtc requires http(s) signaling URL, got %q", exec)
+	case protocol.ServiceTypeScreen:
+		return BuildScreenHandler(exec, 30*time.Second), nil
 	default:
 		return nil, fmt.Errorf("unknown service type: %s", serviceType)
 	}

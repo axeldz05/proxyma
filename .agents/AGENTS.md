@@ -109,6 +109,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | HTTP stream handlers | `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler` via `BuildHandler` |
 | WebRTC DataChannel | `BuildWebRTCHandler` / `BuildWebRTCHandlerWithClient` / `AcceptWebRTCOfferEcho` (`Type=webrtc`) |
 | WebRTC signaling | `POST` `protocol.PathWebRTCSignal` → `HandleWebRTCSignal` (mTLS echo answerer) |
+| Screen frame stream | `BuildScreenHandler` / `ServiceTypeScreen` (`fake` JPEG NDJSON `{n,frame_b64}`) |
 
 ---
 
@@ -133,4 +134,4 @@ See [`.cursorrules.md`](../.cursorrules.md) skills table (`architecture-and-refa
 
 ## Roadmap (Context Only)
 
-BadgerDB; Raft; gRPC real / screen share — do not implement unless asked. WebRTC DataChannel (`Type=webrtc`) exists via `BuildWebRTCHandler`.
+BadgerDB; Raft; gRPC real — do not implement unless asked. WebRTC DataChannel + screen fake frames exist (`BuildWebRTCHandler`, `BuildScreenHandler`).

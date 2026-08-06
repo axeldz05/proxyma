@@ -3,6 +3,7 @@ package compute
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -310,6 +311,96 @@ drained:
 	case <-time.After(3 * time.Second):
 		t.Fatal("WebRTC handler did not terminate cleanly")
 	}
+}
+
+func TestScreenShareServiceEmitsMediaFrames(t *testing.T) {
+	t.Parallel()
+
+	handler, err := BuildHandler(protocol.ServiceTypeScreen, "fake")
+	require.NoError(t, err)
+	require.NotNil(t, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	in := make(chan map[string]any, 1)
+	in <- map[string]any{"frames": float64(5)}
+	close(in)
+	out := make(chan map[string]any, 16)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handler.ExecuteStream(ctx, in, out)
+	}()
+
+	const wantN = 5
+	var frames []map[string]any
+	deadline := time.After(3 * time.Second)
+	for len(frames) < wantN {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				require.Len(t, frames, wantN, "out closed early")
+				goto drained
+			}
+			frames = append(frames, chunk)
+		case err := <-errCh:
+			require.NoError(t, err)
+			t.Fatal("handler finished before frames")
+		case <-deadline:
+			t.Fatalf("timeout waiting for screen frames, got %d", len(frames))
+		}
+	}
+drained:
+	require.Len(t, frames, wantN)
+	var prev float64
+	for i, f := range frames {
+		n, ok := f["n"].(float64)
+		require.True(t, ok, "frame %d missing n", i)
+		require.Greater(t, n, prev)
+		prev = n
+		b64, ok := f["frame_b64"].(string)
+		require.True(t, ok, "frame %d missing frame_b64", i)
+		raw, err := decodeFrameB64(b64)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(raw), 3)
+		require.Equal(t, []byte{0xff, 0xd8, 0xff}, raw[:3], "JPEG SOI magic")
+	}
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("screen handler did not finish")
+	}
+
+	// Unlimited fake stream stops on ctx cancel
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	in2 := make(chan map[string]any)
+	close(in2)
+	out2 := make(chan map[string]any, 64)
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- handler.ExecuteStream(ctx2, in2, out2)
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-out2:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	cancel2()
+	select {
+	case err := <-errCh2:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("screen handler ignored context cancel")
+	}
+}
+
+func decodeFrameB64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
 }
 
 func TestBuildHandlerTypeAliasesMatchHTTPStreamSemantics(t *testing.T) {
