@@ -251,3 +251,72 @@ func TestBidiHandlerRoundTripsNDJSONChunks(t *testing.T) {
 	t.Parallel()
 	TestBuildGRPCBidiHandler_Success(t)
 }
+
+func TestBuildHandlerTypeAliasesMatchHTTPStreamSemantics(t *testing.T) {
+	t.Parallel()
+
+	bidiTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		body, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(body) // echo NDJSON request body
+	}))
+	t.Cleanup(bidiTS.Close)
+
+	streamTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(streamTS.Close)
+
+	aliases := []struct {
+		typ      protocol.ServiceType
+		exec     string
+		wantNorm protocol.ServiceType
+	}{
+		{protocol.ServiceTypeHTTPBidi, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
+		{protocol.ServiceTypeGRPCBidi, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
+		{protocol.ServiceTypeBidiGRPC, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
+		{protocol.ServiceTypeBidiStream, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
+		{protocol.ServiceTypeHTTPServerStream, streamTS.URL, protocol.ServiceTypeServerStream},
+		{protocol.ServiceTypeGRPCServerStream, streamTS.URL, protocol.ServiceTypeServerStream},
+		{protocol.ServiceTypeServerStream, streamTS.URL, protocol.ServiceTypeServerStream},
+	}
+
+	for _, tc := range aliases {
+		t.Run(string(tc.typ), func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.wantNorm, tc.typ.Normalize())
+			require.True(t, tc.typ.IsStreaming())
+
+			h, err := BuildHandler(tc.typ, tc.exec)
+			require.NoError(t, err)
+			require.NotNil(t, h)
+
+			in := make(chan map[string]any, 1)
+			out := make(chan map[string]any, 4)
+			in <- map[string]any{"ping": true}
+			close(in)
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- h.ExecuteStream(context.Background(), in, out) }()
+
+			select {
+			case chunk, ok := <-out:
+				require.True(t, ok, "expected at least one NDJSON chunk")
+				require.NotContains(t, fmt.Sprint(chunk), "not implemented")
+			case err := <-errCh:
+				require.NoError(t, err)
+				t.Fatal("stream ended without chunks")
+			case <-time.After(2 * time.Second):
+				t.Fatal("timeout waiting for alias handler chunk")
+			}
+			select {
+			case err := <-errCh:
+				require.NoError(t, err)
+				require.NotContains(t, fmt.Sprint(err), "not yet implemented")
+			case <-time.After(2 * time.Second):
+				// drain may still be in progress; non-fatal if we already got a chunk
+			}
+		})
+	}
+}

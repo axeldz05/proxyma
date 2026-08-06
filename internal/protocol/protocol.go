@@ -132,6 +132,7 @@ const (
 	ServiceTypeServerStream     ServiceType = "server_stream"
 	ServiceTypeHTTPServerStream ServiceType = "http_server_stream"
 	ServiceTypeGRPCServerStream ServiceType = "grpc_server_stream" // legacy alias → server_stream
+	ServiceTypeHTTPBidi         ServiceType = "http_bidi"          // HTTP NDJSON bidi (preferred name)
 )
 
 func (t ServiceType) IsStreaming() bool {
@@ -140,11 +141,12 @@ func (t ServiceType) IsStreaming() bool {
 }
 
 // Normalize maps streaming aliases to a canonical type.
-// Canonical streaming types: grpc_bidi (HTTP bidi), server_stream (HTTP server-stream),
-// and plain "bidi" (script-based streams).
+// Canonical streaming types: grpc_bidi (HTTP NDJSON bidi; also http_bidi),
+// server_stream (HTTP server-stream), and plain "bidi" (script-based streams).
+// Names with "grpc_" are legacy — transport is HTTP/NDJSON, not protobuf gRPC.
 func (t ServiceType) Normalize() ServiceType {
 	switch t {
-	case ServiceTypeBidiGRPC, ServiceTypeBidiStream:
+	case ServiceTypeBidiGRPC, ServiceTypeBidiStream, ServiceTypeHTTPBidi:
 		return ServiceTypeGRPCBidi
 	case ServiceTypeHTTPServerStream, ServiceTypeGRPCServerStream:
 		return ServiceTypeServerStream
