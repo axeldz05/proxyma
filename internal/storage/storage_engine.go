@@ -108,8 +108,12 @@ func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
 func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.IndexEntry) []protocol.IndexEntry {
 	var missingFiles []protocol.IndexEntry
 	for logicalName, remoteFileInfo := range manifest {
+		if remoteFileInfo.Deleted {
+			se.ProcessRemoteDeletion(remoteFileInfo)
+			continue
+		}
 		updated := se.vfs.Upsert(remoteFileInfo)
-		if !remoteFileInfo.Deleted && se.IsSubscribed(logicalName) {
+		if se.IsSubscribed(logicalName) {
 			hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
 			if err != nil {
 				se.logger.Error("Something happened while using HasPhysicalBlob", "error", err)
@@ -198,15 +202,8 @@ func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 }
 
 func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content io.Reader) error {
-	savedHash, _, err := se.physical.SaveBlob(content)
-	if err != nil {
-		return fmt.Errorf("failed to save blob physically: %w", err)
-	}
-
-	if savedHash != fileInfo.Hash {
-		_ = se.deleteBlobIfOrphan(savedHash, false)
-		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", fileInfo.Hash, "got", savedHash)
-		return fmt.Errorf("hash mismatch")
+	if err := se.SaveVerifiedPhysicalBlob(fileInfo.Hash, content); err != nil {
+		return err
 	}
 
 	entry, exists := se.vfs.Get(fileInfo.Name)
@@ -220,6 +217,20 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
 	}
 
+	return nil
+}
+
+// SaveVerifiedPhysicalBlob stores content and fails hard unless SHA-256 matches expectedHash (L2).
+func (se *StorageEngine) SaveVerifiedPhysicalBlob(expectedHash string, content io.Reader) error {
+	savedHash, _, err := se.physical.SaveBlob(content)
+	if err != nil {
+		return fmt.Errorf("failed to save blob physically: %w", err)
+	}
+	if savedHash != expectedHash {
+		_ = se.deleteBlobIfOrphan(savedHash, false)
+		se.logger.Warn("SECURITY ALERT: Peer sent corrupted or false hash", "expected", expectedHash, "got", savedHash)
+		return fmt.Errorf("hash mismatch")
+	}
 	return nil
 }
 

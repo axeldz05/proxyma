@@ -1,13 +1,12 @@
 package server
 
 import (
+	"context"
 	"io"
-	"net"
 	"net/http"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"time"
 )
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
@@ -66,12 +65,9 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 
 	utils.RespondJSON(w, http.StatusOK, resp)
 
-	// Start pinging A in a background goroutine
+	// Callee-side punch: same dialer rule as initiator (lower ID dials).
 	if s.quicMgr != nil && msg.PublicUDP != "" {
-		rUDPAddr, err := net.ResolveUDPAddr("udp", msg.PublicUDP)
-		if err == nil {
-			go p2p.BurstPings(s.quicMgr.PacketConn, rUDPAddr, s.Config.ID, 20, 150*time.Millisecond)
-		}
+		go s.quicMgr.RespondToHolePunch(context.Background(), msg.SenderID, msg.PublicUDP)
 	}
 }
 

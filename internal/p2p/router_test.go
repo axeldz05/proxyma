@@ -1,6 +1,7 @@
 package p2p_test
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -150,4 +151,41 @@ func TestP2PRoundTripperPeerIdentityMismatch(t *testing.T) {
 	_, err = client.Do(req)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "peer identity mismatch")
+}
+
+func TestRelayFallbackPreservesURLQuery(t *testing.T) {
+	t.Parallel()
+
+	var forwarded protocol.RelayRequest
+	sponsorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != protocol.PathRelayForward {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&forwarded))
+		respBody := `{"req_id":"test-query","status_code":200,"headers":{},"body":"T0s="}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(respBody))
+	}))
+	t.Cleanup(sponsorSrv.Close)
+
+	router := &p2p.P2PRoundTripper{
+		SponsorAddress: sponsorSrv.URL,
+		Base:           http.DefaultTransport,
+	}
+	router.UpdatePeerRoute("node", protocol.AddressRecord{
+		Addresses: []string{"http://127.0.0.1:0"},
+		Sequence:  1,
+	})
+
+	client := &http.Client{Transport: router}
+	req, err := http.NewRequest(http.MethodPost, "http://node.proxyma.local/services/stream?service=ocr", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	require.Equal(t, "/services/stream?service=ocr", forwarded.Path)
 }

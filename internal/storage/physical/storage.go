@@ -37,12 +37,17 @@ func isHexString(s string) bool {
 	return true
 }
 
+// IsValidCASHash reports whether s is a 64-char hex SHA-256 digest (L1).
+func IsValidCASHash(s string) bool {
+	return len(s) == 64 && isHexString(s)
+}
+
 func (st *Storage) populateCache() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	_ = VisitAndDo(st, func(path string, d fs.DirEntry) error {
 		name := d.Name()
-		if len(name) == 64 && isHexString(name) {
+		if IsValidCASHash(name) {
 			st.blobCache[name] = true
 		}
 		return nil
@@ -104,6 +109,9 @@ func (st *Storage) BlobExists(hash string) (bool, error) {
 }
 
 func (st *Storage) ReadBlob(hash string, w io.Writer) error {
+	if !IsValidCASHash(hash) {
+		return ErrFileDoesNotExist
+	}
 	fullPath := filepath.Join(st.baseDir, hash)
 
 	file, err := os.Open(fullPath)

@@ -104,8 +104,7 @@ func (s *Server) fetchBlobFromPeer(ctx context.Context, peerID string, entry pro
 	if entry.Name != "" {
 		return s.Storage.StoreRemoteBlob(entry, body)
 	}
-	_, _, err = s.Storage.SavePhysicalBlob(body)
-	return err
+	return s.Storage.SaveVerifiedPhysicalBlob(entry.Hash, body)
 }
 
 func (s *Server) FetchFileOnDemand(name string) error {

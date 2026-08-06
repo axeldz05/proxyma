@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/testutil"
@@ -512,4 +513,104 @@ func TestCleanupTempFilesRespectsActiveDownloads(t *testing.T) {
 
 	// Clean up recent temp file manually
 	_ = os.Remove(recentTempPath)
+}
+
+func TestDownloadRejectsNonCASHashPaths(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "dl-sanitize")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+
+	dbPath := filepath.Join(cfg.StoragePath, "metadata.db")
+	dbBytes, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	require.NotEmpty(t, dbBytes)
+
+	req := httptest.NewRequest(http.MethodGet, "/download/metadata.db", nil)
+	w := httptest.NewRecorder()
+	engine.HandleDownload(w, req)
+
+	require.True(t, w.Code == http.StatusBadRequest || w.Code == http.StatusNotFound,
+		"expected 400/404, got %d", w.Code)
+	require.NotEqual(t, dbBytes, w.Body.Bytes(), "must not leak metadata.db contents")
+
+	content := []byte("cas-blob-payload")
+	hash, _, err := engine.SavePhysicalBlob(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	okReq := httptest.NewRequest(http.MethodGet, "/download/"+hash, nil)
+	okW := httptest.NewRecorder()
+	engine.HandleDownload(okW, okReq)
+	require.Equal(t, http.StatusOK, okW.Code)
+	require.Equal(t, content, okW.Body.Bytes())
+}
+
+func TestRemoteTombstoneNotificationGCsPhysicalBlob(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "tombstone-gc-notify")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+
+	fileName := "orphan-me.txt"
+	content := []byte("blob that should be GC'd on remote tombstone")
+	require.NoError(t, engine.SaveLocalFile(fileName, bytes.NewReader(content)))
+
+	meta, ok := engine.GetFileMeta(fileName)
+	require.True(t, ok)
+	hash := meta.Hash
+	hasBlob, _ := engine.HasPhysicalBlob(hash)
+	require.True(t, hasBlob)
+
+	tombstone := protocol.IndexEntry{
+		Name: fileName, Hash: hash, Version: meta.Version + 1, Deleted: true, Size: meta.Size,
+	}
+	body, err := json.Marshal(protocol.PeerNotification{File: tombstone, Source: "https://peer:8080"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/notify", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	engine.HandleNotification(w, req)
+
+	require.True(t, w.Code == http.StatusOK || w.Code == http.StatusAccepted)
+	got, exists := engine.GetFileMeta(fileName)
+	require.True(t, exists)
+	require.True(t, got.Deleted)
+	hasBlob, _ = engine.HasPhysicalBlob(hash)
+	require.False(t, hasBlob, "physical blob must be GC'd after remote tombstone notification")
+}
+
+func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "tombstone-gc-manifest")
+
+	engine := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+
+	fileName := "manifest-orphan.txt"
+	content := []byte("blob GC via ProcessRemoteManifest")
+	require.NoError(t, engine.SaveLocalFile(fileName, bytes.NewReader(content)))
+	meta, ok := engine.GetFileMeta(fileName)
+	require.True(t, ok)
+
+	_ = engine.ProcessRemoteManifest(map[string]protocol.IndexEntry{
+		fileName: {Name: fileName, Hash: meta.Hash, Version: meta.Version + 1, Deleted: true, Size: meta.Size},
+	})
+
+	got, exists := engine.GetFileMeta(fileName)
+	require.True(t, exists)
+	require.True(t, got.Deleted)
+	hasBlob, _ := engine.HasPhysicalBlob(meta.Hash)
+	require.False(t, hasBlob, "physical blob must be GC'd after remote tombstone in manifest")
 }

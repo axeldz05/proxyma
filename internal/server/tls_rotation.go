@@ -69,6 +69,10 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 		}
 	}
 
+	if s.quicMgr != nil {
+		s.quicMgr.ReloadTLS(s.clientTLSConfig, s.serverTLSConfig)
+	}
+
 	return nil
 }
 

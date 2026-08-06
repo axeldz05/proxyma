@@ -216,7 +216,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Phase 2: Relay Fallback before IP literals (critical for partitioned nets)
 	if sponsorAddr != "" {
-		relayReq := NewRelayRequest(peerID, clone.Method, clone.URL.Path, nil, nil)
+		relayReq := NewRelayRequest(peerID, clone.Method, RequestPathWithQuery(clone.URL), nil, nil)
 		if clone.Body != nil {
 			bodyBytes, _ := io.ReadAll(clone.Body)
 			_ = clone.Body.Close()

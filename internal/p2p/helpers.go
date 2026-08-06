@@ -178,6 +178,17 @@ func NewRelayRequest(target, method, path string, body []byte, headers map[strin
 	return protocol.NewRelayRequest(generateSecureReqID(), target, method, path, body, headers)
 }
 
+// RequestPathWithQuery returns path, or path?query when RawQuery is set (L1).
+func RequestPathWithQuery(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawQuery == "" {
+		return u.Path
+	}
+	return u.Path + "?" + u.RawQuery
+}
+
 // FlattenHTTPHeader converts http.Header to map[string]string joining multi-values with commas (L1).
 func FlattenHTTPHeader(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))

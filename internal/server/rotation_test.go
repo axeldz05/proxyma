@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"net"
 	"net/http"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"testing"
@@ -138,4 +140,46 @@ func TestClusterCARotation(t *testing.T) {
 
 		require.Equal(t, http.StatusForbidden, resp.StatusCode, "Push from non-sponsor must be forbidden")
 	}
+}
+
+func TestCARotationReloadsQUICTLS(t *testing.T) {
+	// Not parallel: RotateCA mutates shared certs-dir layout; keep sequential with TestClusterCARotation.
+	sponsorCfg := testutil.DefaultConfig(t, "sponsor-quic-rot")
+	isSponsorTrue := true
+	sponsorCfg.IsSponsorOverride = &isSponsorTrue
+	sponsorSrv := NewServer(t, sponsorCfg, nil)
+
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = udp.Close() })
+
+	qm := p2p.NewQUICManager(
+		sponsorCfg.ID, udp,
+		sponsorSrv.ClientTLSConfig(), sponsorSrv.ServerTLSConfig(),
+		sponsorSrv.MountHandlers(), sponsorCfg.Logger,
+	)
+	qm.PublicUDPAddr = udp.LocalAddr().String()
+	require.NoError(t, qm.StartListener())
+	t.Cleanup(qm.Close)
+	sponsorSrv.AttachQUICManager(qm)
+
+	oldServerDER := append([]byte(nil), qm.TLSServer.Certificates[0].Certificate[0]...)
+	oldClientDER := append([]byte(nil), qm.TLSClient.Certificates[0].Certificate[0]...)
+
+	sponsorSrv.RotateCAAndResignPeers()
+
+	qmAfter := sponsorSrv.QUICManager()
+	require.NotNil(t, qmAfter)
+	require.NotEmpty(t, qmAfter.TLSServer.Certificates)
+	require.NotEmpty(t, qmAfter.TLSClient.Certificates)
+
+	httpServerDER := sponsorSrv.ServerTLSConfig().Certificates[0].Certificate[0]
+	httpClientDER := sponsorSrv.ClientTLSConfig().Certificates[0].Certificate[0]
+
+	require.Equal(t, httpServerDER, qmAfter.TLSServer.Certificates[0].Certificate[0],
+		"QUIC server TLS must match rotated HTTP server TLS")
+	require.Equal(t, httpClientDER, qmAfter.TLSClient.Certificates[0].Certificate[0],
+		"QUIC client TLS must match rotated HTTP client TLS")
+	require.NotEqual(t, oldServerDER, qmAfter.TLSServer.Certificates[0].Certificate[0])
+	require.NotEqual(t, oldClientDER, qmAfter.TLSClient.Certificates[0].Certificate[0])
 }

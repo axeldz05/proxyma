@@ -43,8 +43,13 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	if notification.File.Deleted {
+		se.ProcessRemoteDeletion(notification.File)
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
+		return
+	}
 	updated := se.vfs.Upsert(notification.File)
-	if updated && !notification.File.Deleted && se.IsSubscribed(notification.File.Name) {
+	if updated && se.IsSubscribed(notification.File.Name) {
 		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
 
 		if !hasBlob {
@@ -61,7 +66,11 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
-	requestedHash := r.URL.Path[len("/download/"):]
+	requestedHash := r.URL.Path[len(protocol.PathDownloadPrefix):]
+	if !storage.IsValidCASHash(requestedHash) {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid blob hash")
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {

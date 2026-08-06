@@ -341,45 +341,87 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		return nil, fmt.Errorf("failed to parse hole punch response: %w", err)
 	}
 
-	// Start pinging in background
 	rUDPAddr, err := net.ResolveUDPAddr("udp", remoteUDP)
 	if err != nil {
 		return nil, err
 	}
 
-	pingPayload := HolePunchPingPayload(qm.LocalID)
+	punchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 
-	// Send pings and wait for a ping from them
-	timeout := time.After(8 * time.Second)
-	pingTicker := time.NewTicker(150 * time.Millisecond)
-	defer pingTicker.Stop()
+	if err := qm.waitForHolePunch(punchCtx, peerID, rUDPAddr, true); err != nil {
+		return nil, err
+	}
+	if qm.Logger != nil {
+		qm.Logger.Info("UDP Hole Punching SUCCESS!", "peer", peerID)
+	}
+	return qm.establishSessionAfterPunch(punchCtx, peerID, rUDPAddr)
+}
 
-	successCh := make(chan bool, 1)
+// RespondToHolePunch runs the callee-side punch: ping burst, wait for peer, dial if localID < peerID.
+func (qm *QUICManager) RespondToHolePunch(ctx context.Context, peerID, remoteUDP string) {
+	rUDPAddr, err := net.ResolveUDPAddr("udp", remoteUDP)
+	if err != nil {
+		return
+	}
+	punchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 
+	// Arm PingCh reader before bursting so early peer pings are not dropped.
+	errCh := make(chan error, 1)
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timeout:
-				return
-			case <-pingTicker.C:
-				_, _ = qm.PacketConn.WriteTo(pingPayload, rUDPAddr)
-			}
-		}
+		errCh <- qm.waitForHolePunch(punchCtx, peerID, rUDPAddr, false)
 	}()
+	go BurstPings(qm.PacketConn, rUDPAddr, qm.LocalID, 20, 150*time.Millisecond)
+
+	if err := <-errCh; err != nil {
+		if qm.Logger != nil {
+			qm.Logger.Debug("Hole punch respond timed out", "peer", peerID, "error", err)
+		}
+		return
+	}
+	if qm.LocalID >= peerID {
+		// Higher ID waits; initiator (lower) dials.
+		return
+	}
+	if _, err := qm.establishSessionAfterPunch(punchCtx, peerID, rUDPAddr); err != nil && qm.Logger != nil {
+		qm.Logger.Warn("Failed to dial QUIC after hole punch respond", "peer", peerID, "error", err)
+	}
+}
+
+// waitForHolePunch exchanges UDP pings until peerID is heard (or ctx done).
+// When sendPings is true, also tick local pings (initiator path).
+func (qm *QUICManager) waitForHolePunch(ctx context.Context, peerID string, rUDPAddr *net.UDPAddr, sendPings bool) error {
+	pingPayload := HolePunchPingPayload(qm.LocalID)
+	successCh := make(chan struct{}, 1)
+
+	if sendPings {
+		pingTicker := time.NewTicker(150 * time.Millisecond)
+		defer pingTicker.Stop()
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-pingTicker.C:
+					_, _ = qm.PacketConn.WriteTo(pingPayload, rUDPAddr)
+				}
+			}
+		}()
+	}
 
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				return
-			case <-timeout:
 				return
 			case sender := <-qm.PacketConn.PingCh:
 				if sender == peerID {
 					BurstPings(qm.PacketConn, rUDPAddr, qm.LocalID, 3, 0)
-					successCh <- true
+					select {
+					case successCh <- struct{}{}:
+					default:
+					}
 					return
 				}
 			}
@@ -388,17 +430,14 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timeout:
-		return nil, fmt.Errorf("hole punching timeout to %s", peerID)
+		return fmt.Errorf("hole punching timeout to %s: %w", peerID, ctx.Err())
 	case <-successCh:
-		if qm.Logger != nil {
-			qm.Logger.Info("UDP Hole Punching SUCCESS!", "peer", peerID)
-		}
+		return nil
 	}
+}
 
-	// Establish QUIC session
-	// Dialer is the one with the lower lexicographical ID
+// establishSessionAfterPunch dials when localID is lower; otherwise waits for an inbound session.
+func (qm *QUICManager) establishSessionAfterPunch(ctx context.Context, peerID string, rUDPAddr *net.UDPAddr) (*quic.Conn, error) {
 	if qm.LocalID < peerID {
 		if qm.Logger != nil {
 			qm.Logger.Debug("Dialing QUIC session as caller", "peer", peerID)
@@ -422,27 +461,44 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		go qm.serveIncomingStreams(qconn, &tlsState)
 
 		return qconn, nil
-	} else {
-		if qm.Logger != nil {
-			qm.Logger.Debug("Waiting for incoming QUIC session as callee", "peer", peerID)
-		}
-		// Wait for the accepted connection to appear in our Sessions map
-		pollTimer := time.NewTicker(50 * time.Millisecond)
-		defer pollTimer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-timeout:
-				return nil, fmt.Errorf("timeout waiting for incoming QUIC session from %s", peerID)
-			case <-pollTimer.C:
-				sess, exists := qm.GetSession(peerID)
-				if exists {
-					return sess, nil
-				}
+	}
+
+	if qm.Logger != nil {
+		qm.Logger.Debug("Waiting for incoming QUIC session as callee", "peer", peerID)
+	}
+	pollTimer := time.NewTicker(50 * time.Millisecond)
+	defer pollTimer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for incoming QUIC session from %s: %w", peerID, ctx.Err())
+		case <-pollTimer.C:
+			sess, exists := qm.GetSession(peerID)
+			if exists {
+				return sess, nil
 			}
 		}
 	}
+}
+
+// ReloadTLS refreshes QUIC TLS material from the live HTTP configs and drops sessions (L2).
+func (qm *QUICManager) ReloadTLS(clientTLS, serverTLS *tls.Config) {
+	if clientTLS != nil {
+		cl := clientTLS.Clone()
+		cl.NextProtos = []string{"proxyma-p2p"}
+		qm.TLSClient = cl
+	}
+	if serverTLS != nil {
+		srv := serverTLS.Clone()
+		srv.NextProtos = []string{"proxyma-p2p"}
+		qm.TLSServer = srv
+	}
+	qm.SessionsMu.Lock()
+	for id, sess := range qm.Sessions {
+		_ = sess.CloseWithError(0, "tls rotated")
+		delete(qm.Sessions, id)
+	}
+	qm.SessionsMu.Unlock()
 }
 
 type quicResponseWriter struct {
