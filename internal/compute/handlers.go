@@ -29,18 +29,12 @@ func (s *ComputeEngine) HandleServiceBid(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	estimated, canAccept := s.estimateTaskCost(query)
+	bid, canAccept := s.BuildServiceBid(query)
 	if !canAccept {
 		rejectBid()
 		return
 	}
-	bid := protocol.ServiceBid{
-		NodeID:          s.nodeID,
-		NodeAddr:        s.nodeAddr,
-		Schema:          schema,
-		EstimatedMillis: estimated,
-		CanAccept:       true,
-	}
+	bid.Schema = schema
 
 	utils.RespondJSON(w, http.StatusOK, bid)
 }

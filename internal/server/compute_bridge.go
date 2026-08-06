@@ -12,15 +12,9 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	var bids []protocol.ServiceBid
 
 	if schema, ok := s.Compute.GetService(query.Service); ok {
-		estimated, canAccept := s.Compute.EstimateTaskCost(query)
-		if canAccept {
-			bids = append(bids, protocol.ServiceBid{
-				NodeID:          s.Config.ID,
-				NodeAddr:        s.Config.Address,
-				Schema:          schema,
-				CanAccept:       true,
-				EstimatedMillis: estimated,
-			})
+		if bid, canAccept := s.Compute.BuildServiceBid(query); canAccept {
+			bid.Schema = schema
+			bids = append(bids, bid)
 		}
 	}
 
@@ -47,24 +41,35 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 }
 
 // selectBestServiceBid picks a bid by SortStrategy. Empty strategy defaults to StrategyFastest
-// (lowest EstimatedMillis) so local-first bids[0] sticky selection is never used.
+// (lowest EstimatedMillis). Ties break by NodeID ascending for determinism.
 func selectBestServiceBid(bids []protocol.ServiceBid, strategy string) protocol.ServiceBid {
 	best := bids[0]
-	switch strategy {
-	case protocol.StrategyCheapest, protocol.StrategyLowPower, protocol.StrategyFastest, "":
-		for _, bid := range bids[1:] {
-			if bid.EstimatedMillis < best.EstimatedMillis {
-				best = bid
-			}
-		}
-	default:
-		for _, bid := range bids[1:] {
-			if bid.EstimatedMillis < best.EstimatedMillis {
-				best = bid
-			}
+	bestScore := bidStrategyScore(best, strategy)
+	for _, bid := range bids[1:] {
+		score := bidStrategyScore(bid, strategy)
+		if score < bestScore || (score == bestScore && bid.NodeID < best.NodeID) {
+			best = bid
+			bestScore = score
 		}
 	}
 	return best
+}
+
+func bidStrategyScore(bid protocol.ServiceBid, strategy string) int64 {
+	switch strategy {
+	case protocol.StrategyCheapest:
+		if bid.CostUnits > 0 {
+			return bid.CostUnits
+		}
+		return bid.EstimatedMillis
+	case protocol.StrategyLowPower:
+		if bid.PowerScore > 0 {
+			return bid.PowerScore
+		}
+		return int64(bid.CPULoad * 1000)
+	default: // StrategyFastest or ""
+		return bid.EstimatedMillis
+	}
 }
 
 func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error) error {

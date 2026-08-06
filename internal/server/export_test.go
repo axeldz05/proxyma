@@ -84,3 +84,8 @@ func (s *Server) SetPublicUDPAddr(addr string) {
 func (s *Server) SetHTTPHandler(h http.Handler) {
 	s.handler = h
 }
+
+// SelectBestServiceBid exposes selectBestServiceBid for external test packages.
+func SelectBestServiceBid(bids []protocol.ServiceBid, strategy string) protocol.ServiceBid {
+	return selectBestServiceBid(bids, strategy)
+}

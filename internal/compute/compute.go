@@ -415,6 +415,27 @@ func (ce *ComputeEngine) EstimateTaskCost(query protocol.DiscoveryQuery) (int64,
 	return ce.estimateTaskCost(query)
 }
 
+// BuildServiceBid returns a full local ServiceBid including live resource scores (L2).
+func (ce *ComputeEngine) BuildServiceBid(query protocol.DiscoveryQuery) (protocol.ServiceBid, bool) {
+	estimated, canAccept := ce.estimateTaskCost(query)
+	if !canAccept {
+		return protocol.ServiceBid{CanAccept: false}, false
+	}
+	cpuLoad, memPressure := hostResourceSampler()
+	costUnits := estimated + int64(cpuLoad*200) + int64(memPressure*200)
+	powerScore := int64(cpuLoad*1000) + int64(memPressure*100)
+	return protocol.ServiceBid{
+		NodeID:          ce.nodeID,
+		NodeAddr:        ce.nodeAddr,
+		EstimatedMillis: estimated,
+		CPULoad:         cpuLoad,
+		MemPressure:     memPressure,
+		CostUnits:       costUnits,
+		PowerScore:      powerScore,
+		CanAccept:       true,
+	}, true
+}
+
 func (ce *ComputeEngine) estimateTaskCost(query protocol.DiscoveryQuery) (int64, bool) {
 	currentTasks := len(ce.taskQueue)
 	busyWorkers := ce.activeWorkers.Load()

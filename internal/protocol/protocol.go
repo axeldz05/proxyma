@@ -462,6 +462,10 @@ type ServiceBid struct {
 	NodeAddr        string        `json:"node_addr"`
 	Schema          ServiceSchema `json:"schema"`
 	EstimatedMillis int64         `json:"estimated_millis"`
+	CPULoad         float64       `json:"cpu_load,omitempty"`
+	MemPressure     float64       `json:"mem_pressure,omitempty"`
+	CostUnits       int64         `json:"cost_units,omitempty"`
+	PowerScore      int64         `json:"power_score,omitempty"`
 	CanAccept       bool          `json:"can_accept"`
 }
 
