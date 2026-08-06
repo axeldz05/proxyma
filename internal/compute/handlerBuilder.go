@@ -302,8 +302,3 @@ func BuildHTTPBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 func BuildHTTPServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
 	return BuildGRPCServerStreamHandler(endpointURL, timeout)
 }
-
-// BuildWebRTCHandler creates a handler for WebRTC connections.
-func BuildWebRTCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return notImplementedHandler("BuildWebRTCHandler")
-}

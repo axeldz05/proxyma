@@ -161,6 +161,11 @@ func BuildHandler(serviceType protocol.ServiceType, exec string) (ServiceHandler
 			return BuildHTTPServerStreamHandler(exec, 30*time.Second), nil
 		}
 		return nil, fmt.Errorf("server_stream requires http(s) exec URL, got %q", exec)
+	case protocol.ServiceTypeWebRTC:
+		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
+			return BuildWebRTCHandler(exec, 30*time.Second), nil
+		}
+		return nil, fmt.Errorf("webrtc requires http(s) signaling URL, got %q", exec)
 	default:
 		return nil, fmt.Errorf("unknown service type: %s", serviceType)
 	}

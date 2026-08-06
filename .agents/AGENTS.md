@@ -106,7 +106,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Hole-punch | `BurstPings` / `HolePunchPingPayload` / `ParseHolePunchPing` / `RespondToHolePunch` / `QUICManager.ReloadTLS` |
 | JSON files | `ReadJSONFile` / `WriteJSONFile` |
 | Service bid cost | `Compute.EstimateTaskCost` / `BuildServiceBid` / `selectBestServiceBid` (`CostUnits` / `PowerScore`) |
-| HTTP stream handlers | `BuildGRPCBidiHandler` / `BuildGRPCServerStreamHandler` via `BuildHandler` (`server_stream` + aliases) |
+| HTTP stream handlers | `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler` via `BuildHandler` |
+| WebRTC DataChannel | `BuildWebRTCHandler` / `newHostOnlyPeerConnection` (`Type=webrtc`, HTTP signaling offer→answer) |
 
 ---
 
@@ -131,4 +132,4 @@ See [`.cursorrules.md`](../.cursorrules.md) skills table (`architecture-and-refa
 
 ## Roadmap (Context Only)
 
-BadgerDB; Raft; gRPC/WebRTC streaming — do not implement unless asked.
+BadgerDB; Raft; gRPC real / screen share — do not implement unless asked. WebRTC DataChannel (`Type=webrtc`) exists via `BuildWebRTCHandler`.

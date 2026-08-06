@@ -97,6 +97,7 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 		{protocol.ServiceTypeHTTPServerStream, true},
 		{protocol.ServiceTypeGRPCServerStream, true},
 		{protocol.ServiceTypeHTTPBidi, true},
+		{protocol.ServiceTypeWebRTC, true},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.typ), func(t *testing.T) {

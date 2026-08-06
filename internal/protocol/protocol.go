@@ -133,11 +133,12 @@ const (
 	ServiceTypeHTTPServerStream ServiceType = "http_server_stream"
 	ServiceTypeGRPCServerStream ServiceType = "grpc_server_stream" // legacy alias → server_stream
 	ServiceTypeHTTPBidi         ServiceType = "http_bidi"          // HTTP NDJSON bidi (preferred name)
+	ServiceTypeWebRTC           ServiceType = "webrtc"             // WebRTC DataChannel JSON stream
 )
 
 func (t ServiceType) IsStreaming() bool {
 	n := t.Normalize()
-	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi || n == ServiceTypeServerStream
+	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi || n == ServiceTypeServerStream || n == ServiceTypeWebRTC
 }
 
 // Normalize maps streaming aliases to a canonical type.

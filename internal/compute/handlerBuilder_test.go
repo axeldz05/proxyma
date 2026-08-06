@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"proxyma/internal/protocol"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -252,6 +254,64 @@ func TestBidiHandlerRoundTripsNDJSONChunks(t *testing.T) {
 	TestBuildGRPCBidiHandler_Success(t)
 }
 
+func TestWebRTCHandlerExchangesPayloadOverDataChannel(t *testing.T) {
+	t.Parallel()
+
+	ts := startWebRTCEchoAnswerer(t)
+
+	handler, err := BuildHandler(protocol.ServiceTypeWebRTC, ts.URL)
+	require.NoError(t, err)
+	require.NotNil(t, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	in := make(chan map[string]any, 2)
+	out := make(chan map[string]any, 8)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handler.ExecuteStream(ctx, in, out)
+	}()
+
+	want := []map[string]any{
+		{"n": float64(1), "msg": "ping"},
+		{"n": float64(2), "msg": "pong"},
+	}
+	for _, msg := range want {
+		in <- msg
+	}
+	close(in)
+
+	var got []map[string]any
+	deadline := time.After(3 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				require.Len(t, got, len(want), "out closed early")
+				goto drained
+			}
+			got = append(got, chunk)
+		case err := <-errCh:
+			require.NoError(t, err, "handler ended before chunks")
+			require.NotContains(t, fmt.Sprint(err), "not yet implemented")
+			t.Fatal("handler finished without delivering chunks")
+		case <-deadline:
+			t.Fatalf("timeout waiting for DataChannel chunks, got %d", len(got))
+		}
+	}
+drained:
+	require.Equal(t, want, got)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		require.NotContains(t, fmt.Sprint(err), "not yet implemented")
+	case <-time.After(3 * time.Second):
+		t.Fatal("WebRTC handler did not terminate cleanly")
+	}
+}
+
 func TestBuildHandlerTypeAliasesMatchHTTPStreamSemantics(t *testing.T) {
 	t.Parallel()
 
@@ -319,4 +379,77 @@ func TestBuildHandlerTypeAliasesMatchHTTPStreamSemantics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// startWebRTCEchoAnswerer is an in-process signaling mock: POST offer SDP → answer SDP;
+// DataChannel JSON messages are echoed back. ICE host-only (no STUN).
+func startWebRTCEchoAnswerer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	var mu sync.Mutex
+	var pcs []*webrtc.PeerConnection
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, pc := range pcs {
+			_ = pc.Close()
+		}
+	})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var offer webrtc.SessionDescription
+		if err := json.Unmarshal(body, &offer); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if offer.Type != webrtc.SDPTypeOffer {
+			http.Error(w, "expected offer", http.StatusBadRequest)
+			return
+		}
+
+		pc, err := newHostOnlyPeerConnection()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		mu.Lock()
+		pcs = append(pcs, pc)
+		mu.Unlock()
+
+		pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+				_ = dc.SendText(string(msg.Data))
+			})
+		})
+
+		if err := pc.SetRemoteDescription(offer); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		answer, err := pc.CreateAnswer(nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		gatherDone := webrtc.GatheringCompletePromise(pc)
+		if err := pc.SetLocalDescription(answer); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		<-gatherDone
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(pc.LocalDescription())
+	}))
+	t.Cleanup(ts.Close)
+	return ts
 }
