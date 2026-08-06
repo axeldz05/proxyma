@@ -2,6 +2,7 @@
 .env
 .agents/*
 skills-lock.json
+docs/audit/
 tests/e2e/logs
 *log
 *.keystore
