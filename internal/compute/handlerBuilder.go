@@ -223,9 +223,69 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 	}
 }
 
-// BuildGRPCServerStreamHandler creates a handler for Server-Streaming.
+// BuildGRPCServerStreamHandler creates a handler for HTTP NDJSON server-streaming.
+// POSTs JSON payload (or {} if empty) and pumps the NDJSON response body into out.
 func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return notImplementedHandler("BuildGRPCServerStreamHandler")
+	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
+		if out == nil {
+			return nil, fmt.Errorf("server stream requires an output channel")
+		}
+		defer close(out)
+
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		bodyPayload := payload
+		if bodyPayload == nil {
+			bodyPayload = map[string]any{}
+		}
+		if in != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case msg, ok := <-in:
+				if ok && msg != nil {
+					bodyPayload = msg
+				}
+			default:
+			}
+		}
+
+		bodyBytes, err := json.Marshal(bodyPayload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal server-stream payload: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create server-stream request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/x-ndjson")
+
+		clientTimeout := time.Duration(0)
+		if timeout > 0 {
+			clientTimeout = timeout
+		}
+		client := p2p.NewHTTPClient(nil, clientTimeout)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("server-stream request failed: %w", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if !utils.HTTPSuccess(resp.StatusCode) {
+			bodyStr, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("remote server-stream returned status %d: %s", resp.StatusCode, string(bodyStr))
+		}
+
+		if err := utils.PumpJSONDecode(ctx, resp.Body, out); err != nil {
+			return nil, fmt.Errorf("failed to decode server-stream chunk: %w", err)
+		}
+		return nil, nil
+	}
 }
 
 // BuildWebRTCHandler creates a handler for WebRTC connections.

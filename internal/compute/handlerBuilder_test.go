@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"proxyma/internal/protocol"
 	"testing"
 	"time"
 
@@ -188,4 +190,64 @@ func TestBuildUnaryHandler_RejectsStreaming(t *testing.T) {
 	}
 	_, ok := <-out
 	require.False(t, ok, "out channel must be closed")
+}
+
+func TestBuildHandlerWiresServerStreamType(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		enc := json.NewEncoder(w)
+		for i := 1; i <= 3; i++ {
+			require.NoError(t, enc.Encode(map[string]any{"n": float64(i)}))
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	handler, err := BuildHandler(protocol.ServiceTypeServerStream, ts.URL)
+	require.NoError(t, err)
+	require.NotNil(t, handler)
+
+	in := make(chan map[string]any)
+	close(in)
+	out := make(chan map[string]any, 8)
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- handler.ExecuteStream(context.Background(), in, out)
+	}()
+
+	var chunks []map[string]any
+	timeout := time.After(2 * time.Second)
+	for len(chunks) < 3 {
+		select {
+		case res, ok := <-out:
+			if !ok {
+				goto drained
+			}
+			chunks = append(chunks, res)
+		case <-timeout:
+			t.Fatalf("timeout waiting for NDJSON chunks, got %d", len(chunks))
+		}
+	}
+drained:
+	require.GreaterOrEqual(t, len(chunks), 3)
+	require.Equal(t, float64(1), chunks[0]["n"])
+	select {
+	case err := <-errChan:
+		require.NoError(t, err)
+		require.NotContains(t, fmt.Sprint(err), "not yet implemented")
+	case <-time.After(2 * time.Second):
+		t.Fatal("server-stream handler did not finish")
+	}
+
+	// Alias http_server_stream must wire the same way
+	alias, err := BuildHandler(protocol.ServiceTypeHTTPServerStream, ts.URL)
+	require.NoError(t, err)
+	require.NotNil(t, alias)
+}
+
+func TestBidiHandlerRoundTripsNDJSONChunks(t *testing.T) {
+	t.Parallel()
+	TestBuildGRPCBidiHandler_Success(t)
 }

@@ -122,27 +122,32 @@ type UnixResponse struct {
 type ServiceType string
 
 const (
-	ServiceTypeExec       ServiceType = "exec"
-	ServiceTypeScript     ServiceType = "script"
-	ServiceTypeGRPC       ServiceType = "grpc"
-	ServiceTypeGRPCBidi   ServiceType = "grpc_bidi"
-	ServiceTypeBidiGRPC   ServiceType = "bidi_grpc"
-	ServiceTypeBidi       ServiceType = "bidi"
-	ServiceTypeBidiStream ServiceType = "bidi_stream"
+	ServiceTypeExec             ServiceType = "exec"
+	ServiceTypeScript           ServiceType = "script"
+	ServiceTypeGRPC             ServiceType = "grpc"
+	ServiceTypeGRPCBidi         ServiceType = "grpc_bidi"
+	ServiceTypeBidiGRPC         ServiceType = "bidi_grpc"
+	ServiceTypeBidi             ServiceType = "bidi"
+	ServiceTypeBidiStream       ServiceType = "bidi_stream"
+	ServiceTypeServerStream     ServiceType = "server_stream"
+	ServiceTypeHTTPServerStream ServiceType = "http_server_stream"
+	ServiceTypeGRPCServerStream ServiceType = "grpc_server_stream" // legacy alias → server_stream
 )
 
 func (t ServiceType) IsStreaming() bool {
 	n := t.Normalize()
-	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi
+	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi || n == ServiceTypeServerStream
 }
 
 // Normalize maps streaming aliases to a canonical type.
-// Canonical streaming types: grpc_bidi (HTTP bidi) and legacy aliases collapse to grpc_bidi
-// except plain "bidi" which stays as ServiceTypeBidi for script-based streams.
+// Canonical streaming types: grpc_bidi (HTTP bidi), server_stream (HTTP server-stream),
+// and plain "bidi" (script-based streams).
 func (t ServiceType) Normalize() ServiceType {
 	switch t {
 	case ServiceTypeBidiGRPC, ServiceTypeBidiStream:
 		return ServiceTypeGRPCBidi
+	case ServiceTypeHTTPServerStream, ServiceTypeGRPCServerStream:
+		return ServiceTypeServerStream
 	default:
 		return t
 	}

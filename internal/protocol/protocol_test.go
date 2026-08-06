@@ -93,6 +93,9 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 		{protocol.ServiceTypeBidi, true},
 		{protocol.ServiceTypeBidiStream, true}, // normalizes to grpc_bidi
 		{protocol.ServiceTypeBidiGRPC, true},
+		{protocol.ServiceTypeServerStream, true},
+		{protocol.ServiceTypeHTTPServerStream, true},
+		{protocol.ServiceTypeGRPCServerStream, true},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.typ), func(t *testing.T) {
@@ -102,6 +105,8 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 	}
 	require.Equal(t, protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeBidiStream.Normalize())
 	require.Equal(t, protocol.ServiceTypeBidi, protocol.ServiceTypeBidi.Normalize())
+	require.Equal(t, protocol.ServiceTypeServerStream, protocol.ServiceTypeHTTPServerStream.Normalize())
+	require.Equal(t, protocol.ServiceTypeServerStream, protocol.ServiceTypeGRPCServerStream.Normalize())
 }
 
 func TestMissingRequired(t *testing.T) {
