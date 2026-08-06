@@ -83,10 +83,14 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 	}
 }
 
-func (s *Server) LocalServiceRun(serviceName string, payloadStr string) (protocol.ServiceTaskResponse, error) {
+func (s *Server) LocalServiceRun(serviceName string, payloadStr string, sortStrategy ...string) (protocol.ServiceTaskResponse, error) {
 	payload := parseServicePayload(payloadStr)
+	strategy := ""
+	if len(sortStrategy) > 0 {
+		strategy = sortStrategy[0]
+	}
 
-	targetPeerID, err := s.resolveServiceBidTarget(serviceName)
+	targetPeerID, err := s.resolveServiceBidTarget(serviceName, strategy)
 	if err != nil {
 		return protocol.ServiceTaskResponse{}, fmt.Errorf("failed to discover service: %w", err)
 	}
@@ -132,7 +136,7 @@ func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, ch
 
 	handler, exists := s.Compute.GetHandler(serviceName)
 	if !exists {
-		targetPeerID, err := s.resolveServiceBidTarget(serviceName)
+		targetPeerID, err := s.resolveServiceBidTarget(serviceName, "")
 		if err != nil || targetPeerID == "" {
 			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster: %v", serviceName, err)
 		}

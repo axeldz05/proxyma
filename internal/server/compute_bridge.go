@@ -36,7 +36,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		return "", "", protocol.ServiceSchema{}, fmt.Errorf("no nodes available for service '%s'", query.Service)
 	}
 
-	bestBid := selectBestServiceBid(bids, query.SortStrategy)
+	bestBid := selectBestServiceBid(bids, protocol.NormalizeSortStrategy(query.SortStrategy))
 	return bestBid.NodeID, bestBid.NodeAddr, bestBid.Schema, nil
 }
 

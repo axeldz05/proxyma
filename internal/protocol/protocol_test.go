@@ -109,6 +109,16 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 	require.Equal(t, protocol.ServiceTypeServerStream, protocol.ServiceTypeGRPCServerStream.Normalize())
 }
 
+func TestNormalizeSortStrategy(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "", protocol.NormalizeSortStrategy(""))
+	require.Equal(t, protocol.StrategyFastest, protocol.NormalizeSortStrategy("fastest"))
+	require.Equal(t, protocol.StrategyCheapest, protocol.NormalizeSortStrategy("cheapest"))
+	require.Equal(t, protocol.StrategyLowPower, protocol.NormalizeSortStrategy("low_power"))
+	require.Equal(t, protocol.StrategyLowPower, protocol.NormalizeSortStrategy("low-power"))
+	require.Equal(t, protocol.StrategyCheapest, protocol.NormalizeSortStrategy(protocol.StrategyCheapest))
+}
+
 func TestMissingRequired(t *testing.T) {
 	t.Parallel()
 	schema := protocol.ServiceSchema{

@@ -234,7 +234,7 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 				return retMsg("Streaming completed.")
 			}
 
-			return proxyma_bind.RunService(serviceName, payloadJSON)
+			return proxyma_bind.RunService(serviceName, payloadJSON, args["strategy"])
 
 		case "status":
 			taskID := args["task_id"]

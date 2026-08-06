@@ -77,6 +77,49 @@ func TestLocalServiceRunFailsWhenServiceUnknown(t *testing.T) {
 	require.Contains(t, err.Error(), "failed to discover service")
 }
 
+func TestLocalServiceRunHonorsSortStrategy(t *testing.T) {
+	t.Parallel()
+
+	var gotStrategy string
+	var chosenPeer string
+	mock := &testutil.MockPeerClient{
+		OnFetchServiceBid: func(ctx context.Context, peerID string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
+			gotStrategy = q.SortStrategy
+			switch peerID {
+			case "cheap-peer":
+				return protocol.ServiceBid{
+					NodeID: "cheap-peer", NodeAddr: "https://cheap.invalid",
+					EstimatedMillis: 500, CostUnits: 10, PowerScore: 900, CanAccept: true,
+					Schema: protocol.ServiceSchema{Name: "echo"},
+				}, nil
+			case "fast-peer":
+				return protocol.ServiceBid{
+					NodeID: "fast-peer", NodeAddr: "https://fast.invalid",
+					EstimatedMillis: 50, CostUnits: 900, PowerScore: 100, CanAccept: true,
+					Schema: protocol.ServiceSchema{Name: "echo"},
+				}, nil
+			default:
+				return protocol.ServiceBid{}, fmt.Errorf("unknown peer")
+			}
+		},
+		OnSubmitTask: func(ctx context.Context, peerID string, req protocol.TaskRequest) error {
+			chosenPeer = peerID
+			return fmt.Errorf("stop-after-bid")
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "strategy-run"), mock)
+	sv.AddPeer("cheap-peer", protocol.AddressRecord{Addresses: []string{"https://cheap.invalid"}})
+	sv.AddPeer("fast-peer", protocol.AddressRecord{Addresses: []string{"https://fast.invalid"}})
+	sv.SetPeerOnline("cheap-peer", true)
+	sv.SetPeerOnline("fast-peer", true)
+
+	_, err := sv.LocalServiceRun("echo", `{"msg":"hi"}`, "cheapest")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stop-after-bid")
+	require.Equal(t, protocol.StrategyCheapest, gotStrategy)
+	require.Equal(t, "cheap-peer", chosenPeer)
+}
+
 func TestServiceBidPrefersPeerWhenLocalCostHigher(t *testing.T) {
 	t.Parallel()
 

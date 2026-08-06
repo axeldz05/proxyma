@@ -214,12 +214,18 @@ func RemoveService(name string) string {
 }
 
 // RunService runs a task and waits up to 30s.
-func RunService(name string, payloadJson string) string {
+// Optional sortStrategy: fastest|cheapest|low_power (or canonical proxyma/strategy/* URNs).
+func RunService(name string, payloadJson string, sortStrategy ...string) string {
+	strategy := ""
+	if len(sortStrategy) > 0 {
+		strategy = sortStrategy[0]
+	}
 	return dispatchUnixOrLocal("service_run", map[string]string{
-		"service": name,
-		"payload": payloadJson,
+		"service":  name,
+		"payload":  payloadJson,
+		"strategy": strategy,
 	}, func(s *server.Server) (any, error) {
-		return s.LocalServiceRun(name, payloadJson)
+		return s.LocalServiceRun(name, payloadJson, strategy)
 	})
 }
 

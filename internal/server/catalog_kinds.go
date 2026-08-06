@@ -51,10 +51,13 @@ func (s *Server) lookupCachedServiceSchema(serviceName string) (protocol.Service
 
 // resolveServiceBidTarget returns the peer that should run serviceName via cluster bid (L2).
 // Pipelines always target self. Does not check local handlers (Stream uses GetHandler first).
-func (s *Server) resolveServiceBidTarget(serviceName string) (peerID string, err error) {
+func (s *Server) resolveServiceBidTarget(serviceName, sortStrategy string) (peerID string, err error) {
 	if _, isPipeline := s.Compute.GetPipeline(serviceName); isPipeline {
 		return s.Config.ID, nil
 	}
-	peerID, _, _, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{Service: serviceName})
+	peerID, _, _, err = s.RequestServiceToCluster(protocol.DiscoveryQuery{
+		Service:      serviceName,
+		SortStrategy: protocol.NormalizeSortStrategy(sortStrategy),
+	})
 	return peerID, err
 }

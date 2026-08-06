@@ -490,6 +490,24 @@ const (
 	StrategyLowPower = "proxyma/strategy/low_power"
 )
 
+// NormalizeSortStrategy maps short CLI names and legacy aliases to canonical strategy URNs.
+// Empty input stays empty (selectBestServiceBid defaults to fastest).
+func NormalizeSortStrategy(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", StrategyFastest, "fastest":
+		if s == "" {
+			return ""
+		}
+		return StrategyFastest
+	case StrategyCheapest, "cheapest":
+		return StrategyCheapest
+	case StrategyLowPower, "low_power", "low-power", "lowpower":
+		return StrategyLowPower
+	default:
+		return s
+	}
+}
+
 type PeerNotification struct {
 	File   IndexEntry `json:"file"`
 	Source string     `json:"source"`

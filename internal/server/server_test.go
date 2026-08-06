@@ -1452,9 +1452,10 @@ func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
 	require.Contains(t, telemetryResp, "cpu_limit")
 	require.Contains(t, telemetryResp, "memory_limit")
 
-	// 3. Verify LocalBandwidthStats used by local Unix socket calls
+	// 3. Verify LocalBandwidthStats used by local Unix socket calls.
+	// GET /telemetry itself is counted by wrapWithBandwidthCounting on MountHandlers.
 	stats := sponsor.LocalBandwidthStats()
-	require.Equal(t, int64(1024), stats.TotalSent)
+	require.Greater(t, stats.TotalSent, int64(1024), "telemetry response bytes counted by bandwidth wrap")
 	require.Equal(t, int64(2048), stats.TotalReceived)
 }
 

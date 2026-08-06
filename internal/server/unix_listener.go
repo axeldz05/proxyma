@@ -151,7 +151,7 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			return
 
 		case "service_run":
-			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"])
+			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"], req.Args["strategy"])
 
 		case "service_status":
 			taskID := req.Args["task_id"]

@@ -244,6 +244,7 @@ var Registry = []DomainDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to run"},
 					{Name: "inputs", Type: "string", Required: false, Description: "Service inputs in 'key1=val1,key2=val2' format or JSON object"},
 					{Name: "payload", Type: "string", Required: false, Description: "Legacy alias for service inputs in JSON format"},
+					{Name: "strategy", Type: "string", Required: false, Description: "Bid sort strategy: fastest, cheapest, or low_power"},
 				},
 			},
 			{
