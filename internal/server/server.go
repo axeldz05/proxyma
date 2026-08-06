@@ -157,7 +157,6 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	go s.listenUnixSocket()
 
-	mux := s.wrapWithBandwidthCounting(s.handler)
 	portStr, _ := s.configTCPPort()
 	addr := "0.0.0.0:" + portStr
 
@@ -169,7 +168,7 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 
 	hs := &http.Server{
 		Addr:      addr,
-		Handler:   mux,
+		Handler:   s.handler, // MountHandlers already wraps bandwidth + mTLS
 		TLSConfig: serverTLS,
 		ErrorLog:  log.New(&tlsErrorWriter{server: s}, "", 0),
 	}
@@ -319,6 +318,13 @@ func (w *countingResponseWriter) Write(b []byte) (int, error) {
 		w.onWrite(n)
 	}
 	return n, err
+}
+
+// Flush preserves http.Flusher from the underlying writer (NDJSON /services/stream).
+func (w *countingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) wrapWithBandwidthCounting(next http.Handler) http.Handler {
