@@ -267,6 +267,7 @@ func (s *Server) notifyPipeline(ctx context.Context, peerID string, schema proto
 	err := s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
 	if err != nil {
 		s.Config.Logger.Debug("Failed to notify peer about schema update", "peerID", peerID, "pipelineID", schema.ID, "error", err)
+		s.enqueueOutbox(peerID, "pipeline", schema.ID+"|"+action, payload)
 	}
 	return err
 }

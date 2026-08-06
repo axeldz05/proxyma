@@ -138,6 +138,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 	for range cfg.Workers {
 		go s.downloadWorker()
 	}
+	s.startOutboxWorker()
 
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)

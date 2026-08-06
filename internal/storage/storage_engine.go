@@ -31,7 +31,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 	}
 
 	if err = db.Update(func(tx *bolt.Tx) error {
-		buckets := []string{"subscriptions", "service_subscriptions", "peers", "pipeline_schemas", "vfs_index"}
+		buckets := []string{"subscriptions", "service_subscriptions", "notify_outbox", "peers", "pipeline_schemas", "vfs_index"}
 		for _, bName := range buckets {
 			if _, err := tx.CreateBucketIfNotExists([]byte(bName)); err != nil {
 				logger.Error("Failed to create bucket", "bucket", bName, "error", err)
@@ -389,4 +389,49 @@ func (se *StorageEngine) DeletePipelineSchema(id string) error {
 
 func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
 	return boltLoadMapJSON[protocol.PipelineSchema](se.subscriptions, "pipeline_schemas")
+}
+
+// PutOutboxRaw upserts a durable notify outbox entry (raw JSON bytes).
+func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
+	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("notify_outbox"))
+		if b == nil {
+			return fmt.Errorf("notify_outbox bucket not found")
+		}
+		return b.Put([]byte(id), data)
+	})
+}
+
+func (se *StorageEngine) DeleteOutboxEntry(id string) error {
+	return se.boltDeleteKeyed("notify_outbox", id)
+}
+
+func (se *StorageEngine) CountOutboxEntries() (int, error) {
+	var n int
+	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("notify_outbox"))
+		if b == nil {
+			return nil
+		}
+		n = b.Stats().KeyN
+		return nil
+	})
+	return n, err
+}
+
+func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
+	out := make(map[string][]byte)
+	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("notify_outbox"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			cp := make([]byte, len(v))
+			copy(cp, v)
+			out[string(k)] = cp
+			return nil
+		})
+	})
+	return out, err
 }

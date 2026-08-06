@@ -217,6 +217,11 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		err := s.peerClient.Notify(ctx, peerID, payload)
 		if err != nil {
 			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
+			dedupe := fileInfo.Name + "|" + fileInfo.Hash + "|" + fmt.Sprintf("%d", fileInfo.Version)
+			if fileInfo.Deleted {
+				dedupe += "|del"
+			}
+			s.enqueueOutbox(peerID, "vfs", dedupe, payload)
 		}
 		return err
 	})

@@ -137,6 +137,7 @@ func (s *Server) notifyService(ctx context.Context, peerID string, schema protoc
 	err := s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
 	if err != nil {
 		s.Config.Logger.Debug("Failed to notify peer about service update", "peerID", peerID, "service", schema.Name, "error", err)
+		s.enqueueOutbox(peerID, "service", schema.Name+"|"+action, payload)
 	}
 	return err
 }
