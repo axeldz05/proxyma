@@ -18,13 +18,16 @@ Cada `ActionDetail` declara:
 ```
 Registry (domain.action + UnixAction + SuccessMessage)
   → Cobra: VisibleRegistry("cli")
-  → CLI: NormalizeActionArgs → ValidateActionArgs → cliEscapes[key] OR InvokeDomainAction
-  → Bind: NormalizeActionArgs → ValidateActionArgs → CallUnixUnary / unix IPC
+  → CLI: NormalizeActionArgs → ValidateActionArgs → cliEscapes[key] OR InvokeDomainActionPrepared
+  → Bind L3 (JNI/wrappers): NormalizeActionArgs → ValidateActionArgs → InvokeDomainActionPrepared
+  → Bind L2 Prepared: offlineHooks? → CallUnixUnary / unix IPC
   → Daemon: unixHandlers[UnixAction]
 ```
+Android (cuando exista UI): mismas piezas — `VisibleRegistry` + forms/`Parameters` + `ProjectRows` + **`InvokeDomainAction`**; wrappers tipados opcionales; **no** switch hardcodeado por `domain.action` en Compose.
+
 Payload KV/JSON: `uischema.NormalizePayloadJSON` (SSOT; CLI `ParseInputsToJSON` es thin wrapper).
 
-Añadir acción admin unary = **1 fila Registry + 1 `register(...)` en unix_handlers.go**. Cero líneas en CLI salvo escape UX. Tests: `TestUnixHandlersMatchRegistry`, `TestVisibleActionsEscapeXorUnix`.
+Añadir acción admin unary = **1 fila Registry + 1 `register(...)` en unix_handlers.go**. Cero líneas en CLI salvo escape UX. Brazo offline adicional = **1 entrada en `offlineHooks`** (bind). Tests: `TestUnixHandlersMatchRegistry`, `TestVisibleActionsEscapeXorUnix`.
 
 ---
 
@@ -159,6 +162,8 @@ Mapea la declaración `uischema` a la línea de comandos ejecutable en Go:
 
 ### B. Adaptador Android (Jetpack Compose)
 
+**Contrato interpreter (prioridad):** pantallas caminan `VisibleRegistry(surface)` + invocan **`InvokeDomainAction`**; tablas vía `ProjectRows` / `FormatBytes`. No duplicar el Registry en switches Compose por `domain.action`. Wrappers tipados (`UploadFile`, …) son L3 opcionales para JNI.
+
 Mapea el esquema a componentes de UI móviles táctiles:
 
 1. **Parámetros a Composables**:
@@ -169,7 +174,7 @@ Mapea el esquema a componentes de UI móviles táctiles:
    - `type: "int"` -> `OutlinedTextField` con `keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)`.
 
 2. **Renderizado de Salidas**:
-   - `outputType: "table"` -> `LazyColumn` con tarjetas (`Card`) por cada fila, mostrando chips de color según el formato (Verde para `"status"` activo, Gris/Rojo para inactivo).
+   - `outputType: "table"` -> `LazyColumn` / filas proyectadas con `ProjectRows` (chips de color según formato `"status"`).
 
 ### C. Adaptador Desktop (GUI / Windows / Forms)
 

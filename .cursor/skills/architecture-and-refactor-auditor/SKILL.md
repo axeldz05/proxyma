@@ -24,12 +24,12 @@ Directrices de arquitectura, límites de paquetes y mapa de helpers SSOT actuale
 
 ### 1. CLI — `cmd/proxyma`
 * `root.go` — Cobra from `uischema.VisibleRegistry("cli")`; help via `NormalizeActionArgs`.
-* `cli_actions.go` — `executeActionLocal` → Normalize→Validate → Invoke + `cliEscapes`.
+* `cli_actions.go` — `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`**.
 * `service_help.go` — help/schema; `ParseInputsToJSON` → `NormalizePayloadJSON`; `sampleValue`.
 * `helpers.go`, `run.go`, `init.go`.
 
 ### 2. Bind — `cmd/proxyma-bind`
-* `bind.go` / `invoke.go` — L1 unix + L3 **`InvokeDomainAction`** / `NormalizeActionArgs`.
+* `bind.go` / `invoke.go` — L1 unix + L3 **`InvokeDomainAction`** / L2 **`InvokeDomainActionPrepared`** / `NormalizeActionArgs` / **`offlineHooks`**.
 * `service.go` — wrappers thin sobre Invoke; `ParameterDetail` = `uischema.ParameterDetail`.
 * `storage.go`, `peers.go`, `telemetry.go`, `cluster.go` — `InvokeDomainAction` one-liners.
 
@@ -86,7 +86,8 @@ Si al cambiar una implementación o agregar una variante hay que tocar **más de
 | Admin domain.action + unix names | `shared/uischema.Registry` + `UnixAction` |
 | Admin arg validation / projection | `uischema.ValidateActionArgs` / `NormalizePayloadJSON` / `ProjectRows` / `FormatBytes` / `BandwidthStatsRows` |
 | Daemon unix dispatch | `server.unix_handlers.go` |
-| CLI action dispatch | `cmd/proxyma` `executeActionLocal` (Normalize→Validate) + `cliEscapes` |
+| CLI action dispatch | `cmd/proxyma` `executeActionLocal` (Normalize→Validate) → Prepared / `cliEscapes` |
+| Bind offline fallbacks | `offlineHooks` in `invoke.go` (compute L2) |
 | Socket path | `protocol.UnixSockPath` |
 | Invite TTL | `protocol.DefaultInviteMinutes` |
 | Dial / punch / handler timeouts | `protocol.DialTimeout*` / `HolePunch*` / `HandlerDial*` |

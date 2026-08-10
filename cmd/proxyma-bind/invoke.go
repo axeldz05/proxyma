@@ -13,7 +13,7 @@ import (
 	"proxyma/shared/uischema"
 )
 
-// InvokeDomainAction is the generic L3 interpreter: Registry → UnixAction → CallUnixUnary / unix IPC.
+// InvokeDomainAction is the generic L3 interpreter: Registry → Normalize → Validate → Prepared.
 // No per-action localFn; daemon logic lives only in server.unixHandlers.
 func InvokeDomainAction(domain, action string, args map[string]string) string {
 	detail, ok := uischema.FindAction(domain, action)
@@ -32,26 +32,12 @@ func InvokeDomainAction(domain, action string, args map[string]string) string {
 	if err != nil {
 		return BindErrorJSON(err)
 	}
-
-	offline := offlineHookFor(domain, action, norm)
-	var raw string
-	if offline != nil {
-		raw = dispatchUnixLocalOrOffline(detail.UnixAction, norm, func(s *server.Server) (any, error) {
-			return server.CallUnixUnary(s, detail.UnixAction, norm)
-		}, offline)
-	} else {
-		raw = dispatchUnixOrLocal(detail.UnixAction, norm, func(s *server.Server) (any, error) {
-			return server.CallUnixUnary(s, detail.UnixAction, norm)
-		})
-	}
-	if IsBindError(raw) {
-		return raw
-	}
-	return formatActionResult(detail, norm, raw)
+	return InvokeDomainActionPrepared(domain, action, norm)
 }
 
-// InvokeDomainActionOffline is InvokeDomainAction with an explicit offline fallback arm.
-func InvokeDomainActionOffline(domain, action string, args map[string]string, offline func() (any, error)) string {
+// InvokeDomainActionPrepared is L2: assumes args already passed Normalize→Validate
+// (or are otherwise trusted). Used by CLI after its own prep to avoid a double pass.
+func InvokeDomainActionPrepared(domain, action string, args map[string]string) string {
 	detail, ok := uischema.FindAction(domain, action)
 	if !ok {
 		return BindErrorJSON(fmt.Errorf("unknown action %s.%s", domain, action))
@@ -60,63 +46,65 @@ func InvokeDomainActionOffline(domain, action string, args map[string]string, of
 		return BindErrorJSON(fmt.Errorf("no unix action for %s.%s", domain, action))
 	}
 
-	norm, err := NormalizeActionArgs(domain, action, args)
-	if err != nil {
-		return BindErrorJSON(err)
+	offline := offlineHookFor(domain, action, args)
+	var raw string
+	if offline != nil {
+		raw = dispatchUnixLocalOrOffline(detail.UnixAction, args, func(s *server.Server) (any, error) {
+			return server.CallUnixUnary(s, detail.UnixAction, args)
+		}, offline)
+	} else {
+		raw = dispatchUnixOrLocal(detail.UnixAction, args, func(s *server.Server) (any, error) {
+			return server.CallUnixUnary(s, detail.UnixAction, args)
+		})
 	}
-	norm, err = uischema.ValidateActionArgs(detail, norm)
-	if err != nil {
-		return BindErrorJSON(err)
-	}
-
-	raw := dispatchUnixLocalOrOffline(detail.UnixAction, norm, func(s *server.Server) (any, error) {
-		return server.CallUnixUnary(s, detail.UnixAction, norm)
-	}, offline)
 	if IsBindError(raw) {
 		return raw
 	}
-	return formatActionResult(detail, norm, raw)
+	return formatActionResult(detail, args, raw)
+}
+
+// offlineHooks are headless fallbacks when neither in-process Server nor unix socket is available.
+// Keys are "domain.action". Bodies call the same compute L2 as LocalService* (no *Server / no notify).
+var offlineHooks = map[string]func(args map[string]string) (any, error){
+	"service.add": func(args map[string]string) (any, error) {
+		serviceName, localService, buildErr := compute.BuildLocalServiceFromArgs(
+			args["name"], args["type"], args["exec"], args["desc"],
+			args["param"], args["no-required"], args["schema-file"],
+		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
+			return nil, fmt.Errorf("error saving services file: %w", saveErr)
+		}
+		args["name"] = serviceName
+		return nil, nil
+	},
+	"service.remove": func(args map[string]string) (any, error) {
+		if delErr := compute.DeleteLocalService(appStorage, args["name"]); delErr != nil {
+			return nil, delErr
+		}
+		return nil, nil
+	},
+	"service.detail": func(args map[string]string) (any, error) {
+		svcs, err := compute.LoadServicesMap(appStorage)
+		if err != nil {
+			return nil, err
+		}
+		svc, ok := svcs[args["name"]]
+		if !ok {
+			return nil, fmt.Errorf("service %q not found offline", args["name"])
+		}
+		return protocol.NormalizeServiceSchema(args["name"], svc.Schema, svc.Type), nil
+	},
 }
 
 func offlineHookFor(domain, action string, args map[string]string) func() (any, error) {
-	switch domain + "." + action {
-	case "service.add":
-		return func() (any, error) {
-			serviceName, localService, buildErr := compute.BuildLocalServiceFromArgs(
-				args["name"], args["type"], args["exec"], args["desc"],
-				args["param"], args["no-required"], args["schema-file"],
-			)
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
-				return nil, fmt.Errorf("error saving services file: %w", saveErr)
-			}
-			args["name"] = serviceName
-			return nil, nil
-		}
-	case "service.remove":
-		return func() (any, error) {
-			if delErr := compute.DeleteLocalService(appStorage, args["name"]); delErr != nil {
-				return nil, delErr
-			}
-			return nil, nil
-		}
-	case "service.detail":
-		return func() (any, error) {
-			svcs, err := compute.LoadServicesMap(appStorage)
-			if err != nil {
-				return nil, err
-			}
-			svc, ok := svcs[args["name"]]
-			if !ok {
-				return nil, fmt.Errorf("service %q not found offline", args["name"])
-			}
-			return protocol.NormalizeServiceSchema(args["name"], svc.Schema, svc.Type), nil
-		}
-	default:
+	h, ok := offlineHooks[domain+"."+action]
+	if !ok {
 		return nil
 	}
+	return func() (any, error) { return h(args) }
 }
 
 func formatActionResult(detail uischema.ActionDetail, args map[string]string, raw string) string {
@@ -212,4 +200,3 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
-

@@ -161,5 +161,5 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 	if detail.UnixAction == "" {
 		return retErr(fmt.Sprintf("no CLI handler for '%s'", detail.Key()))
 	}
-	return proxyma_bind.InvokeDomainAction(domain, action, norm)
+	return proxyma_bind.InvokeDomainActionPrepared(domain, action, norm)
 }

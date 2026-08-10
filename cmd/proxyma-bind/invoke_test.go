@@ -2,6 +2,7 @@ package proxyma_bind
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"proxyma/internal/server"
@@ -78,5 +79,40 @@ func TestUnaryUnixActionsHaveHandlers(t *testing.T) {
 		if !server.HasUnixUnary(ua) {
 			t.Errorf("unix action %q (%s) missing unary handler", ua, key)
 		}
+	}
+}
+
+func TestOfflineHooksLookup(t *testing.T) {
+	for _, key := range []string{"service.add", "service.remove", "service.detail"} {
+		if _, ok := offlineHooks[key]; !ok {
+			t.Errorf("missing offline hook %q", key)
+		}
+	}
+	if offlineHookFor("storage", "list", nil) != nil {
+		t.Fatal("storage.list must not have offline arm")
+	}
+	if offlineHookFor("service", "add", map[string]string{}) == nil {
+		t.Fatal("service.add must resolve offline arm")
+	}
+}
+
+func TestInvokeDomainActionPreparedSkipsRevalidate(t *testing.T) {
+	// Prepared does not call ValidateActionArgs — missing required args reach dispatch
+	// and fail as bind/daemon errors, not as validation errors from uischema.
+	raw := InvokeDomainActionPrepared("service", "remove", map[string]string{})
+	if !IsBindError(raw) {
+		t.Fatalf("expected bind error without name, got %s", raw)
+	}
+	if ParseBindError(raw) == "" {
+		t.Fatal("expected non-empty bind error")
+	}
+	// Full L3 path surfaces validation before dispatch.
+	raw2 := InvokeDomainAction("service", "remove", map[string]string{})
+	if !IsBindError(raw2) {
+		t.Fatalf("expected validation error, got %s", raw2)
+	}
+	msg := strings.ToLower(ParseBindError(raw2))
+	if !strings.Contains(msg, "required") && !strings.Contains(msg, "name") {
+		t.Fatalf("expected required/name validation, got %q", msg)
 	}
 }

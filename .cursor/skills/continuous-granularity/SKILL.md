@@ -31,15 +31,15 @@ Level 1: Low-level primitives   (e.g. DialUnix, WriteUnixRequest, SavePhysicalBl
 | Tier | API |
 |------|-----|
 | L1 | `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
-| L2 | `sendUnixSocketCommand`; `server.CallUnixUnary` |
-| L3 | **`InvokeDomainAction`** / `NormalizeActionArgs` / `uischema.NormalizePayloadJSON`; `dispatchUnixOrLocal`; stream via `StreamService` |
+| L2 | `sendUnixSocketCommand`; `server.CallUnixUnary`; **`InvokeDomainActionPrepared`**; **`offlineHooks`** |
+| L3 | **`InvokeDomainAction`** (Normalize→Validate→Prepared); `NormalizeActionArgs` / `uischema.NormalizePayloadJSON`; `dispatchUnixOrLocal`; stream via `StreamService` |
 
 ### Admin UI actions (`shared/uischema`)
 | Tier | API |
 |------|-----|
 | L1 | `ActionDetail` / `FindAction` / `UnixActionFor` / `ApplyDefaults` / `MissingRequired` / `SuccessMessage` / `NormalizePayloadJSON` |
-| L2 | Daemon `unixHandlers` + `CallUnixUnary` |
-| L3 | CLI `executeActionLocal` → Invoke + `cliEscapes`; Cobra from `VisibleRegistry("cli")` |
+| L2 | Daemon `unixHandlers` + `CallUnixUnary`; bind `offlineHooks` (headless compute L2) |
+| L3 | CLI `executeActionLocal` → Prepared + `cliEscapes`; Cobra from `VisibleRegistry("cli")`; Android Compose walks Registry + Invoke |
 
 ### Services
 | Tier | API |

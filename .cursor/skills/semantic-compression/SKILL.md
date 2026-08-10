@@ -38,11 +38,12 @@ After compression, altering that behavior should touch **one** SSOT (plus thin c
 | Download blob + store | `server.fetchBlobFromPeer` |
 | Local path → CAS + VFS upsert | `storage.StageLocalFile` |
 | Unix socket dial/write/read/NDJSON | `cmd/proxyma-bind`: `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
-| Unary unix-or-local dispatch | `dispatchUnixOrLocal` / **`InvokeDomainAction`** (CallUnixUnary) |
+| Unary unix-or-local dispatch | `dispatchUnixOrLocal` / **`InvokeDomainAction`** / **`InvokeDomainActionPrepared`** (CallUnixUnary) |
 | Admin action names + unix IPC strings | `shared/uischema.Registry` (`UnixAction`, `FindAction`, `MustUnixAction`) |
 | Admin arg validate / payload JSON / projection | `ValidateActionArgs` / `NormalizePayloadJSON` / `ProjectRows` / `FormatBytes` |
 | Daemon unix dispatch table | `internal/server/unix_handlers.go` (`unixHandlers` / `CallUnixUnary`) |
-| CLI action dispatch | `executeActionLocal` → Normalize→Validate → `InvokeDomainAction` + `cliEscapes` |
+| Bind offline fallbacks | `offlineHooks` map in `invoke.go` (compute L2; not in `unixHandlers`) |
+| CLI action dispatch | `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`** |
 | Unix socket path | `protocol.SockFileName` / `protocol.UnixSockPath` |
 | Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` (`pipeline_validate.go`) |
 | Bolt bucket names | `internal/storage/buckets.go` (`allBuckets`) |

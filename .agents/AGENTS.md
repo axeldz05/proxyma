@@ -39,12 +39,13 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### CLI — `cmd/proxyma/`
 * `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`; tables via `uischema.ProjectRows`.
-* `cli_actions.go` — `executeActionLocal` → `NormalizeActionArgs` → `ValidateActionArgs` + `InvokeDomainAction` + `cliEscapes`.
+* `cli_actions.go` — `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`**.
 * `cli_render.go` / `cli_open.go` — `uischema.FormatBytes` wrappers / editor+open.
 * `service_help.go` — `ParseInputsToJSON` → `uischema.NormalizePayloadJSON`.
 
 ### Bindings — `cmd/proxyma-bind/`
-* L1 IPC + **`InvokeDomainAction`** / `NormalizeActionArgs` / **`ValidateActionArgs`** / **`uischema.NormalizePayloadJSON`** / `dispatchUnixOrLocal` / `dispatchUnixStreamOrLocal`.
+* L1 IPC + L3 **`InvokeDomainAction`** / L2 **`InvokeDomainActionPrepared`** / `NormalizeActionArgs` / **`ValidateActionArgs`** / **`uischema.NormalizePayloadJSON`** / `dispatchUnixOrLocal` / `dispatchUnixStreamOrLocal`.
+* **`offlineHooks`** map in `invoke.go` (service.add/remove/detail → compute L2); not inside `unixHandlers`.
 * Socket via **`protocol.UnixSockPath`**; `ParameterDetail` = `uischema.ParameterDetail`.
 * Execution SSOT: `server.CallUnixUnary` (same bodies as unix listener).
 * `LocalServiceDetail` via bind schema paths; `BindErrorJSON` / `IsBindError` (StartNode/ChangeStorage too).
@@ -73,7 +74,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
-* Android: `fetchServiceDetail` / `loadServiceDetail` / `loadServiceDetailsMap` / `loadRunSpecs` / `formParameterFrom` / `taskStatusColor`; `getResultPath` → bind `ResolveTaskResultPath`; trust bind `uiHint`.
+* Android-as-interpreter (when UI returns): `VisibleRegistry` + **`InvokeDomainAction`** + `ProjectRows`; typed JNI wrappers optional; no hardcoded admin `domain.action` screens. Trust bind `uiHint`.
 
 ### Examples — `services-examples/`
 * Lab services: `sensor.telemetry` (server_stream), `music.resolve`/`convert`/`stream`, `remote.screen`/`input`, `media.resize`/`watermark`, `clipboard.sync`, `shell.attach`.
@@ -116,8 +117,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` |
 | Bolt bucket names | `storage` `allBuckets` / `bucket*` / `vfsIndexBucket` |
 | Admin UI actions | `uischema.Registry` / `UnixAction` / `FindAction` / `VisibleRegistry` / `SuccessMessage` |
-| Unix/CLI dispatch | `server.CallUnixUnary` / `InvokeDomainAction` / `cliEscapes` |
-| Unix IPC | Dial/Write/Read/Scan + dispatch* / `DispatchDomainAction` / `dispatchUnixStreamOrLocal` |
+| Unix/CLI dispatch | `server.CallUnixUnary` / `InvokeDomainAction` / `InvokeDomainActionPrepared` / `offlineHooks` / `cliEscapes` |
+| Unix IPC | Dial/Write/Read/Scan + `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal` |
 | Bind errors | `BindErrorJSON` / `ParseBindError` / `IsBindError` |
 | Cert / CA hash / PEM write | `WriteNodePEMs` / `signLeaf` / `LeafDNSNames` / `CAHashFromPEM` / `ReadCAPEM` / `ResolveNodeCertPaths` / `TLSConfigTrustCAHash` / `CSRCommonName` |
 | QUIC addr | `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr` |
