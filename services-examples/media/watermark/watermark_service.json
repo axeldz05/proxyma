@@ -1,0 +1,22 @@
+{
+    "type": "script",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/media/watermark/main.py",
+    "schema": {
+        "name": "media.watermark",
+        "description": "Draw a text watermark on an image",
+        "parameters": {
+            "input_path": {
+                "type": "file",
+                "required": true,
+                "uiHint": "image_picker"
+            },
+            "text": {"type": "string", "required": false},
+            "output_path": {"type": "string", "required": false}
+        },
+        "outputs": {
+            "status": {"type": "string"},
+            "output_path": {"type": "file"},
+            "message": {"type": "string"}
+        }
+    }
+}

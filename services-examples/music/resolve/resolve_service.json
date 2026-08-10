@@ -1,0 +1,35 @@
+{
+    "type": "script",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/music/resolve/main.py",
+    "schema": {
+        "name": "music.resolve",
+        "description": "Resolve a library track to a local audio path (auto = highest quality)",
+        "parameters": {
+            "track_id": {
+                "type": "string",
+                "required": true,
+                "description": "Track folder name under the music library"
+            },
+            "format": {
+                "type": "string",
+                "required": false,
+                "description": "auto|flac|wav|mp3|… — missing target still returns best source for convert",
+                "uiHint": "dropdown",
+                "options": ["auto", "flac", "wav", "mp3", "ogg"]
+            },
+            "library_path": {
+                "type": "string",
+                "required": false,
+                "description": "Override library root (default fixtures/library)"
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"},
+            "audio_path": {"type": "file"},
+            "source_format": {"type": "string"},
+            "requested_format": {"type": "string"},
+            "track_id": {"type": "string"},
+            "needs_convert": {"type": "bool"}
+        }
+    }
+}

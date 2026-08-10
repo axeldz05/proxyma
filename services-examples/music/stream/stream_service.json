@@ -1,0 +1,29 @@
+{
+    "type": "server_stream",
+    "exec": "http://127.0.0.1:19102/",
+    "schema": {
+        "name": "music.stream",
+        "type": "server_stream",
+        "description": "Stream prepared audio as NDJSON base64 chunks",
+        "parameters": {
+            "audio_path": {
+                "type": "file",
+                "required": true,
+                "uiHint": "file_picker",
+                "description": "Local or staged path from music-prepare-pipeline"
+            },
+            "chunk_size": {
+                "type": "int",
+                "required": false,
+                "description": "Bytes per NDJSON chunk (default 4096)"
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"}
+        },
+        "ui": {
+            "type": "web_app",
+            "widget_type": "stream_player"
+        }
+    }
+}

@@ -1,0 +1,52 @@
+{
+    "id": "music-prepare-pipeline",
+    "version": 1,
+    "steps": [
+        {
+            "id": "step_resolve",
+            "service": "music.resolve"
+        },
+        {
+            "id": "step_convert",
+            "service": "music.convert"
+        }
+    ],
+    "connections": [
+        {
+            "from_step": "$initial",
+            "from_port": "track_id",
+            "to_step": "step_resolve",
+            "to_port": "track_id"
+        },
+        {
+            "from_step": "$initial",
+            "from_port": "format",
+            "to_step": "step_resolve",
+            "to_port": "format"
+        },
+        {
+            "from_step": "$initial",
+            "from_port": "library_path",
+            "to_step": "step_resolve",
+            "to_port": "library_path"
+        },
+        {
+            "from_step": "step_resolve",
+            "from_port": "audio_path",
+            "to_step": "step_convert",
+            "to_port": "audio_path"
+        },
+        {
+            "from_step": "step_resolve",
+            "from_port": "source_format",
+            "to_step": "step_convert",
+            "to_port": "source_format"
+        },
+        {
+            "from_step": "step_resolve",
+            "from_port": "requested_format",
+            "to_step": "step_convert",
+            "to_port": "requested_format"
+        }
+    ]
+}

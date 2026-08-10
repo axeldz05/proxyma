@@ -1,0 +1,28 @@
+{
+    "type": "screen",
+    "exec": "fake",
+    "schema": {
+        "name": "remote.screen",
+        "type": "screen",
+        "description": "Lab remote screen share (fake JPEG frames). Pair with remote.input via session_id.",
+        "parameters": {
+            "session_id": {
+                "type": "string",
+                "required": false,
+                "description": "Shared session id with remote.input"
+            },
+            "frames": {
+                "type": "int",
+                "required": false,
+                "description": "Limit number of frames (omit = until cancel)"
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"}
+        },
+        "ui": {
+            "type": "web_app",
+            "widget_type": "stream_player"
+        }
+    }
+}

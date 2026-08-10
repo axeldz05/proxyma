@@ -1,0 +1,19 @@
+{
+    "type": "bidi_stream",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/remote/input/main.py",
+    "schema": {
+        "name": "remote.input",
+        "type": "bidi_stream",
+        "description": "Lab remote input channel (echo). Share session_id with remote.screen.",
+        "parameters": {
+            "session_id": {
+                "type": "string",
+                "required": false,
+                "description": "Must match remote.screen session"
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"}
+        }
+    }
+}

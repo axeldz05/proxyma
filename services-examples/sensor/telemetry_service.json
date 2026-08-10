@@ -1,0 +1,33 @@
+{
+    "type": "server_stream",
+    "exec": "http://127.0.0.1:19101/",
+    "schema": {
+        "name": "sensor.telemetry",
+        "type": "server_stream",
+        "description": "Lab NDJSON telemetry stream (CPU, temp, fake GPS)",
+        "parameters": {
+            "sensor_id": {
+                "type": "string",
+                "required": false,
+                "description": "Logical sensor id"
+            },
+            "ticks": {
+                "type": "int",
+                "required": false,
+                "description": "Number of ticks (0 or omit = until cancel)"
+            },
+            "interval_ms": {
+                "type": "int",
+                "required": false,
+                "description": "Delay between ticks in milliseconds"
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"}
+        },
+        "ui": {
+            "type": "web_app",
+            "widget_type": "stream_player"
+        }
+    }
+}

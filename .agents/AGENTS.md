@@ -70,6 +70,12 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
 * Android: `fetchServiceDetail` / `loadServiceDetail` / `loadServiceDetailsMap` / `loadRunSpecs` / `formParameterFrom` / `taskStatusColor`; `getResultPath` → bind `ResolveTaskResultPath`; trust bind `uiHint`.
 
+### Examples — `services-examples/`
+* Lab services: `sensor.telemetry` (server_stream), `music.resolve`/`convert`/`stream`, `remote.screen`/`input`, `media.resize`/`watermark`, `clipboard.sync`, `shell.attach`.
+* Pipelines: `music_prepare_pipeline.json` (`resolve→convert`), `media/thumbnail_pipeline.json` (`resize→watermark`).
+* `start_upstreams.sh` for HTTP NDJSON upstreams (ports 19101/19102); `scripts/bootstrap_dev.sh` registers them.
+* Music unit tests: `music/test_music.py`. See `services-examples/README.md`.
+
 ---
 
 ## What Already Exists (Do Not Reinvent)

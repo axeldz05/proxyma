@@ -1,0 +1,46 @@
+{
+    "id": "media-thumbnail-pipeline",
+    "version": 1,
+    "steps": [
+        {
+            "id": "step_resize",
+            "service": "media.resize"
+        },
+        {
+            "id": "step_watermark",
+            "service": "media.watermark"
+        }
+    ],
+    "connections": [
+        {
+            "from_step": "$initial",
+            "from_port": "input_path",
+            "to_step": "step_resize",
+            "to_port": "input_path"
+        },
+        {
+            "from_step": "$initial",
+            "from_port": "width",
+            "to_step": "step_resize",
+            "to_port": "width"
+        },
+        {
+            "from_step": "$initial",
+            "from_port": "height",
+            "to_step": "step_resize",
+            "to_port": "height"
+        },
+        {
+            "from_step": "step_resize",
+            "from_port": "output_path",
+            "to_step": "step_watermark",
+            "to_port": "input_path"
+        },
+        {
+            "from_step": "$initial",
+            "from_port": "text",
+            "to_step": "step_watermark",
+            "to_port": "text"
+        }
+    ]
+}

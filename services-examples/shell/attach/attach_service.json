@@ -1,0 +1,18 @@
+{
+    "type": "bidi_stream",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/shell/attach/main.py",
+    "schema": {
+        "name": "shell.attach",
+        "type": "bidi_stream",
+        "description": "Lab remote shell (allowlisted builtins only — no real PTY exec)",
+        "parameters": {
+            "session_id": {
+                "type": "string",
+                "required": false
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"}
+        }
+    }
+}

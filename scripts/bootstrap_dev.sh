@@ -51,6 +51,16 @@ if [ ! -S "$STORAGE_DIR/proxyma.sock" ]; then
     exit 1
 fi
 
+# Ensure music fixtures exist
+if [[ ! -d "$SERVICES_DIR/music/fixtures/library/demo-hi" ]]; then
+    echo "Generating music fixtures..."
+    python3 "$SERVICES_DIR/music/fixtures/gen_fixtures.py" || true
+fi
+
+# HTTP upstreams for server_stream examples
+echo "Starting example stream upstreams..."
+bash "$SERVICES_DIR/start_upstreams.sh" || true
+
 # Register services from services-examples
 echo "Registering services..."
 "$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/ocr/ocr_service.json" --storage "$STORAGE_DIR"
@@ -58,6 +68,20 @@ echo "Registering services..."
 "$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/obsidian/obsidian_service.json" --storage "$STORAGE_DIR"
 "$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/editor/editor_service.json" --storage "$STORAGE_DIR"
 "$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/collab_editor/collab_editor_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/sensor/telemetry_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/music/resolve/resolve_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/music/convert/convert_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/music/stream/stream_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/remote/screen/screen_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/remote/input/input_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/media/resize/resize_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/media/watermark/watermark_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/clipboard/clipboard_service.json" --storage "$STORAGE_DIR"
+"$STORAGE_DIR/proxyma" service add --name "$SERVICES_DIR/shell/attach/attach_service.json" --storage "$STORAGE_DIR"
+
+echo "Registering example pipelines..."
+"$STORAGE_DIR/proxyma" service add_pipeline --id music-prepare-pipeline --schema-file "$SERVICES_DIR/music/music_prepare_pipeline.json" --storage "$STORAGE_DIR" || true
+"$STORAGE_DIR/proxyma" service add_pipeline --id media-thumbnail-pipeline --schema-file "$SERVICES_DIR/media/thumbnail_pipeline.json" --storage "$STORAGE_DIR" || true
 
 # Pre-populate random files
 echo "Pre-populating VFS with sample files..."

@@ -1,0 +1,37 @@
+{
+    "type": "script",
+    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/music/convert/main.py",
+    "schema": {
+        "name": "music.convert",
+        "description": "Idempotent audio convert (pass-through when format matches or auto)",
+        "parameters": {
+            "audio_path": {
+                "type": "file",
+                "required": true,
+                "uiHint": "file_picker"
+            },
+            "source_format": {
+                "type": "string",
+                "required": false
+            },
+            "requested_format": {
+                "type": "string",
+                "required": false,
+                "uiHint": "dropdown",
+                "options": ["auto", "flac", "wav", "mp3", "ogg"]
+            },
+            "out_dir": {
+                "type": "string",
+                "required": false
+            }
+        },
+        "outputs": {
+            "status": {"type": "string"},
+            "audio_path": {"type": "file"},
+            "source_format": {"type": "string"},
+            "requested_format": {"type": "string"},
+            "converted": {"type": "bool"},
+            "message": {"type": "string"}
+        }
+    }
+}
