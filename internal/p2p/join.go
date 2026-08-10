@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"proxyma/internal/protocol"
 	"strings"
-	"time"
 )
 
 // JoinCluster performs the network pairing process to join a cluster.
@@ -39,7 +38,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	tr := &http.Transport{
 		TLSClientConfig: TLSConfigTrustCAHash(payload.CAHash),
 	}
-	client := NewHTTPClient(tr, 3*time.Second)
+	client := NewHTTPClient(tr, protocol.DialTimeoutJoin)
 
 	reqBody := protocol.JoinRequest{
 		Secret:  secret,

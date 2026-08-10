@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
@@ -150,24 +149,24 @@ func BuildHandler(serviceType protocol.ServiceType, exec string) (ServiceHandler
 	case protocol.ServiceTypeScript, protocol.ServiceTypeExec:
 		return BuildScriptHandler(exec), nil
 	case protocol.ServiceTypeGRPC:
-		return BuildGRPCHandler(exec, 10*time.Second), nil
+		return BuildGRPCHandler(exec, protocol.HandlerDialUnary), nil
 	case protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeBidi:
 		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildHTTPBidiHandler(exec, 30*time.Second), nil
+			return BuildHTTPBidiHandler(exec, protocol.HandlerDialStream), nil
 		}
 		return BuildScriptHandler(exec), nil
 	case protocol.ServiceTypeServerStream:
 		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildHTTPServerStreamHandler(exec, 30*time.Second), nil
+			return BuildHTTPServerStreamHandler(exec, protocol.HandlerDialStream), nil
 		}
 		return nil, fmt.Errorf("server_stream requires http(s) exec URL, got %q", exec)
 	case protocol.ServiceTypeWebRTC:
 		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildWebRTCHandler(exec, 30*time.Second), nil
+			return BuildWebRTCHandler(exec, protocol.HandlerDialStream), nil
 		}
 		return nil, fmt.Errorf("webrtc requires http(s) signaling URL, got %q", exec)
 	case protocol.ServiceTypeScreen:
-		return BuildScreenHandler(exec, 30*time.Second), nil
+		return BuildScreenHandler(exec, protocol.HandlerDialStream), nil
 	default:
 		return nil, fmt.Errorf("unknown service type: %s", serviceType)
 	}

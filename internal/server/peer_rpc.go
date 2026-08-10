@@ -17,14 +17,12 @@ const (
 	PeerRPCBlob      = 30 * time.Second
 	PeerRPCBlobLong  = 2 * time.Minute
 	PeerRPCStream    = 10 * time.Minute
-	PeerRPCQUICWait  = 8 * time.Second
+	PeerRPCQUICWait  = protocol.HolePunchWait
 	PeerRPCRelayHold = 60 * time.Second // long-poll hold on relay
 	PeerRPCRelayTick = 15 * time.Second // client relay poll interval
-	PeerRPCProbe     = 2 * time.Second  // TCP dial for HandleProbe
+	PeerRPCProbe     = 2 * time.Second  // TCP dial for HandleProbe (≠ DialTimeoutRouteProbe)
 	PeerRPCSTUN      = 5 * time.Second  // STUN / NAT probe
 	TaskWaitTimeout  = protocol.RPCTimeoutTaskWait
-	// DefaultInviteMinutes is the SSOT default invite TTL.
-	DefaultInviteMinutes = 15
 )
 
 // callPeer runs fn against one peer and updates online/offline liveness (L2).

@@ -32,16 +32,20 @@ After compression, altering that behavior should touch **one** SSOT (plus thin c
 | `services.json` load/save/build/upsert/delete | `internal/compute/services_config.go` |
 | Handler from `ServiceType` + exec | `compute.BuildHandler` |
 | Peer fan-out + SetPeerOnline/Offline | `internal/server/peer_rpc.go` (`callPeer`, `forEachPeer`) |
-| Named peer RPC timeouts | `PeerRPCShort`, `PeerRPCDefault`, `PeerRPCBlob`, … |
+| Named peer RPC timeouts | `PeerRPCShort`, `PeerRPCDefault`, `PeerRPCBlob`, … (`PeerRPCQUICWait` = `protocol.HolePunchWait`) |
+| Dial / hole-punch / handler timeouts | `protocol.DialTimeout*` / `HolePunch*` / `HandlerDial*` |
 | `/relay/forward` marshal/POST/decode | `p2p.ForwardRelay` |
 | Download blob + store | `server.fetchBlobFromPeer` |
 | Local path → CAS + VFS upsert | `storage.StageLocalFile` |
 | Unix socket dial/write/read/NDJSON | `cmd/proxyma-bind`: `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
 | Unary unix-or-local dispatch | `dispatchUnixOrLocal` / **`InvokeDomainAction`** (CallUnixUnary) |
 | Admin action names + unix IPC strings | `shared/uischema.Registry` (`UnixAction`, `FindAction`, `MustUnixAction`) |
+| Admin arg validate / payload JSON / projection | `ValidateActionArgs` / `NormalizePayloadJSON` / `ProjectRows` / `FormatBytes` |
 | Daemon unix dispatch table | `internal/server/unix_handlers.go` (`unixHandlers` / `CallUnixUnary`) |
-| CLI action dispatch | `executeActionLocal` → `InvokeDomainAction` + `cliEscapes` |
+| CLI action dispatch | `executeActionLocal` → Normalize→Validate → `InvokeDomainAction` + `cliEscapes` |
 | Unix socket path | `protocol.SockFileName` / `protocol.UnixSockPath` |
+| Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` (`pipeline_validate.go`) |
+| Bolt bucket names | `internal/storage/buckets.go` (`allBuckets`) |
 | Admin param DTO | `uischema.ParameterDetail` (bind aliases; do not clone) |
 | Raw service schema vs Android DTO | `GetServiceSchema` vs `GetServiceDetails` |
 | Streaming type aliases | `ServiceType.Normalize()` / `IsStreaming()` |

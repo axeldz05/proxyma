@@ -123,6 +123,16 @@ func TestNormalizeSortStrategy(t *testing.T) {
 	require.Equal(t, protocol.StrategyLowPower, protocol.NormalizeSortStrategy("low_power"))
 	require.Equal(t, protocol.StrategyLowPower, protocol.NormalizeSortStrategy("low-power"))
 	require.Equal(t, protocol.StrategyCheapest, protocol.NormalizeSortStrategy(protocol.StrategyCheapest))
+	require.Equal(t, protocol.StrategyShortFastest, protocol.StrategyShortName("fastest"))
+	require.Equal(t, protocol.StrategyShortCheapest, protocol.StrategyShortName(protocol.StrategyCheapest))
+	require.Equal(t, []string{"fastest", "cheapest", "low_power"}, protocol.SortStrategyShortOptions())
+}
+
+func TestValidateValueOptions(t *testing.T) {
+	t.Parallel()
+	p := protocol.ServiceParameter{Type: protocol.ParamTypeString, Options: []string{"a", "b"}}
+	require.NoError(t, p.ValidateValue("mode", "a"))
+	require.Error(t, p.ValidateValue("mode", "c"))
 }
 
 func TestMatchServicePattern(t *testing.T) {
@@ -290,4 +300,12 @@ func TestRPCTimeouts(t *testing.T) {
 	require.Equal(t, 5*time.Second, protocol.RPCTimeoutTaskCallback)
 	require.Less(t, protocol.RPCTimeoutTaskCallback, protocol.RPCTimeoutSync)
 	require.Less(t, protocol.RPCTimeoutSync, protocol.RPCTimeoutTaskWait)
+
+	require.Equal(t, 3*time.Second, protocol.DialTimeoutJoin)
+	require.Equal(t, 3*time.Second, protocol.DialTimeoutRouteProbe)
+	require.Equal(t, 3*time.Second, protocol.HolePunchAttempt)
+	require.Equal(t, 8*time.Second, protocol.HolePunchWait)
+	require.Equal(t, 25*time.Second, protocol.PrewarmHolePunch)
+	require.Equal(t, 10*time.Second, protocol.HandlerDialUnary)
+	require.Equal(t, 30*time.Second, protocol.HandlerDialStream)
 }

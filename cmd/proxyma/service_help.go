@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/protocol"
+	"proxyma/shared/uischema"
 )
 
 // lookupServiceSchema sets storage and returns a ServiceSchema pointer.
@@ -24,51 +24,9 @@ func lookupServiceSchema(storagePath string, serviceName string) (*protocol.Serv
 	return &schema, nil
 }
 
-// ParseInputsToJSON converts key1=val1,key2=val2 key-value strings or JSON objects into a valid JSON string.
+// ParseInputsToJSON is a thin CLI alias for uischema.NormalizePayloadJSON (SSOT).
 func ParseInputsToJSON(inputsRaw string) string {
-	inputsRaw = strings.TrimSpace(inputsRaw)
-	if inputsRaw == "" {
-		return "{}"
-	}
-	if strings.HasPrefix(inputsRaw, "{") && strings.HasSuffix(inputsRaw, "}") {
-		return inputsRaw
-	}
-
-	payload := make(map[string]any)
-	pairs := strings.Split(inputsRaw, ",")
-	for _, pair := range pairs {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		k := strings.TrimSpace(parts[0])
-		vStr := strings.TrimSpace(parts[1])
-
-		if k == "" {
-			continue
-		}
-
-		if vStr == "true" {
-			payload[k] = true
-		} else if vStr == "false" {
-			payload[k] = false
-		} else if num, err := strconv.ParseFloat(vStr, 64); err == nil && !strings.Contains(vStr, " ") {
-			if float64(int64(num)) == num {
-				payload[k] = int64(num)
-			} else {
-				payload[k] = num
-			}
-		} else {
-			payload[k] = vStr
-		}
-	}
-
-	b, _ := json.Marshal(payload)
-	return string(b)
+	return uischema.NormalizePayloadJSON(inputsRaw)
 }
 
 // sampleValue synthesizes a representative sample for a parameter (L1).

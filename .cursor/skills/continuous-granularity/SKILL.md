@@ -32,12 +32,12 @@ Level 1: Low-level primitives   (e.g. DialUnix, WriteUnixRequest, SavePhysicalBl
 |------|-----|
 | L1 | `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
 | L2 | `sendUnixSocketCommand`; `server.CallUnixUnary` |
-| L3 | **`InvokeDomainAction`** / `NormalizeActionArgs`; `dispatchUnixOrLocal`; stream via `StreamService` |
+| L3 | **`InvokeDomainAction`** / `NormalizeActionArgs` / `uischema.NormalizePayloadJSON`; `dispatchUnixOrLocal`; stream via `StreamService` |
 
 ### Admin UI actions (`shared/uischema`)
 | Tier | API |
 |------|-----|
-| L1 | `ActionDetail` / `FindAction` / `UnixActionFor` / `ApplyDefaults` / `MissingRequired` / `SuccessMessage` |
+| L1 | `ActionDetail` / `FindAction` / `UnixActionFor` / `ApplyDefaults` / `MissingRequired` / `SuccessMessage` / `NormalizePayloadJSON` |
 | L2 | Daemon `unixHandlers` + `CallUnixUnary` |
 | L3 | CLI `executeActionLocal` → Invoke + `cliEscapes`; Cobra from `VisibleRegistry("cli")` |
 

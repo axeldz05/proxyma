@@ -112,7 +112,7 @@ func init() {
 			if err := s.LocalServiceSubscribe(args["name"], true); err != nil {
 				return nil, err
 			}
-			return fmt.Sprintf("Subscribed to service pattern %q", args["name"]), nil
+			return nil, nil
 		},
 	})
 	register("service", "unsubscribe", UnixActionHandler{
@@ -120,7 +120,7 @@ func init() {
 			if err := s.LocalServiceSubscribe(args["name"], false); err != nil {
 				return nil, err
 			}
-			return fmt.Sprintf("Unsubscribed from service pattern %q", args["name"]), nil
+			return nil, nil
 		},
 	})
 	register("service", "stream", UnixActionHandler{
@@ -155,7 +155,7 @@ func init() {
 
 	register("cluster", "invite", UnixActionHandler{
 		Unary: func(s *Server, _ map[string]string) (any, error) {
-			token, _, err := s.LocalInviteGenerate(DefaultInviteMinutes)
+			token, _, err := s.LocalInviteGenerate(protocol.DefaultInviteMinutes)
 			return token, err
 		},
 	})
@@ -166,7 +166,7 @@ func init() {
 	})
 	register("telemetry", "stats", UnixActionHandler{
 		Unary: func(s *Server, _ map[string]string) (any, error) {
-			return s.LocalBandwidthStats(), nil
+			return uischema.BandwidthStatsRows(s.LocalBandwidthStats()), nil
 		},
 	})
 	register("peers", "list", UnixActionHandler{

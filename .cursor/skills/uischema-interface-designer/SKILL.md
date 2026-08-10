@@ -18,10 +18,11 @@ Cada `ActionDetail` declara:
 ```
 Registry (domain.action + UnixAction + SuccessMessage)
   → Cobra: VisibleRegistry("cli")
-  → CLI: cliEscapes[key] OR InvokeDomainAction
-  → Bind: NormalizeActionArgs → CallUnixUnary / unix IPC
+  → CLI: NormalizeActionArgs → ValidateActionArgs → cliEscapes[key] OR InvokeDomainAction
+  → Bind: NormalizeActionArgs → ValidateActionArgs → CallUnixUnary / unix IPC
   → Daemon: unixHandlers[UnixAction]
 ```
+Payload KV/JSON: `uischema.NormalizePayloadJSON` (SSOT; CLI `ParseInputsToJSON` es thin wrapper).
 
 Añadir acción admin unary = **1 fila Registry + 1 `register(...)` en unix_handlers.go**. Cero líneas en CLI salvo escape UX. Tests: `TestUnixHandlersMatchRegistry`, `TestVisibleActionsEscapeXorUnix`.
 

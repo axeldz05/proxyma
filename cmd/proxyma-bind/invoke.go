@@ -28,6 +28,10 @@ func InvokeDomainAction(domain, action string, args map[string]string) string {
 	if err != nil {
 		return BindErrorJSON(err)
 	}
+	norm, err = uischema.ValidateActionArgs(detail, norm)
+	if err != nil {
+		return BindErrorJSON(err)
+	}
 
 	offline := offlineHookFor(domain, action, norm)
 	var raw string
@@ -60,6 +64,10 @@ func InvokeDomainActionOffline(domain, action string, args map[string]string, of
 	if err != nil {
 		return BindErrorJSON(err)
 	}
+	norm, err = uischema.ValidateActionArgs(detail, norm)
+	if err != nil {
+		return BindErrorJSON(err)
+	}
 
 	raw := dispatchUnixLocalOrOffline(detail.UnixAction, norm, func(s *server.Server) (any, error) {
 		return server.CallUnixUnary(s, detail.UnixAction, norm)
@@ -84,14 +92,15 @@ func offlineHookFor(domain, action string, args map[string]string) func() (any, 
 			if saveErr := compute.UpsertLocalService(appStorage, serviceName, localService); saveErr != nil {
 				return nil, fmt.Errorf("error saving services file: %w", saveErr)
 			}
-			return bindMessageJSON(fmt.Sprintf("Service '%s' added successfully. Restart the node to apply changes.", serviceName)), nil
+			args["name"] = serviceName
+			return nil, nil
 		}
 	case "service.remove":
 		return func() (any, error) {
 			if delErr := compute.DeleteLocalService(appStorage, args["name"]); delErr != nil {
 				return nil, delErr
 			}
-			return bindMessageJSON(fmt.Sprintf("Service '%s' removed successfully. Restart the node to apply changes.", args["name"])), nil
+			return nil, nil
 		}
 	case "service.detail":
 		return func() (any, error) {
@@ -159,11 +168,14 @@ func NormalizeActionArgs(domain, action string, args map[string]string) (map[str
 	case "service.run", "service.run_pipeline":
 		svc := firstNonEmpty(out["service"], out["name"], out["id"])
 		out["service"] = svc
+		if out["name"] == "" {
+			out["name"] = svc
+		}
 		payload := firstNonEmpty(out["payload"], out["inputs"], out["param"])
 		if out["input"] != "" && payload == "" {
 			payload = "input_path=" + out["input"]
 		}
-		out["payload"] = normalizePayloadJSON(payload)
+		out["payload"] = uischema.NormalizePayloadJSON(payload)
 	case "service.add_pipeline":
 		if out["schema"] == "" && out["schema-file"] != "" {
 			b, err := os.ReadFile(out["schema-file"])
@@ -201,29 +213,3 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-func normalizePayloadJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
-		return raw
-	}
-	obj := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		obj[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
-	}
-	if len(obj) == 0 {
-		return raw
-	}
-	b, _ := json.Marshal(obj)
-	return string(b)
-}

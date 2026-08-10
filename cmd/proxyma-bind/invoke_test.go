@@ -1,6 +1,7 @@
 package proxyma_bind
 
 import (
+	"encoding/json"
 	"testing"
 
 	"proxyma/internal/server"
@@ -20,7 +21,7 @@ func TestNormalizeActionArgsUpload(t *testing.T) {
 func TestNormalizeActionArgsRun(t *testing.T) {
 	out, err := NormalizeActionArgs("service", "run", map[string]string{
 		"name":   "clip",
-		"inputs": "a=1,b=2",
+		"inputs": "a=1,b=true",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -28,8 +29,43 @@ func TestNormalizeActionArgsRun(t *testing.T) {
 	if out["service"] != "clip" {
 		t.Fatalf("service=%q", out["service"])
 	}
-	if out["payload"] == "" || out["payload"][0] != '{' {
-		t.Fatalf("payload=%q", out["payload"])
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out["payload"]), &payload); err != nil {
+		t.Fatalf("payload=%q err=%v", out["payload"], err)
+	}
+	if payload["a"] != float64(1) || payload["b"] != true {
+		t.Fatalf("typed payload=%#v", payload)
+	}
+
+	out2, err := NormalizeActionArgs("service", "run", map[string]string{
+		"service": "svc",
+		"name":    "ignored",
+		"payload": `{"x":1}`,
+		"inputs":  "x=2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2["service"] != "svc" || out2["payload"] != `{"x":1}` {
+		t.Fatalf("priority service/payload: %#v", out2)
+	}
+
+	out3, err := NormalizeActionArgs("service", "run", map[string]string{
+		"id":    "from-id",
+		"input": "/tmp/f",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out3["service"] != "from-id" || out3["name"] != "from-id" {
+		t.Fatalf("id coalesce: %#v", out3)
+	}
+	var p3 map[string]any
+	if err := json.Unmarshal([]byte(out3["payload"]), &p3); err != nil {
+		t.Fatal(err)
+	}
+	if p3["input_path"] != "/tmp/f" {
+		t.Fatalf("input shorthand: %#v", p3)
 	}
 }
 

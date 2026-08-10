@@ -346,7 +346,7 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 		return nil, err
 	}
 
-	punchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	punchCtx, cancel := context.WithTimeout(ctx, protocol.HolePunchWait)
 	defer cancel()
 
 	if err := qm.waitForHolePunch(punchCtx, peerID, rUDPAddr, true); err != nil {
@@ -364,7 +364,7 @@ func (qm *QUICManager) RespondToHolePunch(ctx context.Context, peerID, remoteUDP
 	if err != nil {
 		return
 	}
-	punchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	punchCtx, cancel := context.WithTimeout(ctx, protocol.HolePunchWait)
 	defer cancel()
 
 	// Arm PingCh reader before bursting so early peer pings are not dropped.

@@ -28,7 +28,7 @@ func TestServiceSubscriptionReceivesAddAndRemoveNotify(t *testing.T) {
 			NodeID: nodeID,
 			Schema: protocol.ServiceSchema{Name: name, Description: desc},
 		})
-		req, _ := http.NewRequest(http.MethodPost, "/services/notify", bytes.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		sv.HandleServiceNotify(rec, req)
@@ -60,7 +60,7 @@ func TestServiceSubscriptionPatternMatch(t *testing.T) {
 		NodeID: "peer-c",
 		Schema: protocol.ServiceSchema{Name: "vision.detect", Description: "ok"},
 	})
-	req, _ := http.NewRequest(http.MethodPost, "/services/notify", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -71,7 +71,7 @@ func TestServiceSubscriptionPatternMatch(t *testing.T) {
 		NodeID: "peer-c",
 		Schema: protocol.ServiceSchema{Name: "audio.transcribe", Description: "no"},
 	})
-	req, _ = http.NewRequest(http.MethodPost, "/services/notify", bytes.NewReader(body))
+	req, _ = http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.NotContains(t, sv.GetClusterServices("peer-c"), "audio.transcribe")
@@ -88,7 +88,7 @@ func TestServiceNotifyWithoutSubscriptionAcceptsAll(t *testing.T) {
 		NodeID: "peer-x",
 		Schema: protocol.ServiceSchema{Name: "any-svc", Description: "legacy"},
 	})
-	req, _ := http.NewRequest(http.MethodPost, "/services/notify", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)

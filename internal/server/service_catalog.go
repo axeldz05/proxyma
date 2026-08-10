@@ -106,26 +106,26 @@ func (s *Server) applyServiceAction(name string, localService *protocol.LocalSer
 	}
 }
 
-func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile string) (string, error) {
+func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile string) (any, error) {
 	serviceName, localService, err := compute.BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired, schemaFile)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	schema, err := s.applyServiceAction(serviceName, &localService, protocol.ActionAdd)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	go s.NotifyService(schema, protocol.ActionAdd)
-	return fmt.Sprintf("Service '%s' added successfully.", serviceName), nil
+	return map[string]string{"message": fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
 }
 
-func (s *Server) LocalServiceRemove(name string) (string, error) {
+func (s *Server) LocalServiceRemove(name string) (any, error) {
 	schema, err := s.applyServiceAction(name, nil, protocol.ActionRemove)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	go s.NotifyService(schema, protocol.ActionRemove)
-	return fmt.Sprintf("Service '%s' removed successfully.", name), nil
+	return map[string]string{"message": fmt.Sprintf("Service '%s' removed successfully.", name)}, nil
 }
 
 func (s *Server) notifyService(ctx context.Context, peerID string, schema protocol.ServiceSchema, action string) error {

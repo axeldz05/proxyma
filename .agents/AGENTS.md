@@ -38,12 +38,13 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Repository Map (Current)
 
 ### CLI — `cmd/proxyma/`
-* `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`.
-* `cli_actions.go` — `executeActionLocal` → `InvokeDomainAction` + `cliEscapes`; `ApplyDefaults`/`MissingRequired` from uischema.
-* `cli_render.go` / `cli_open.go` — formatting / editor+open.
+* `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`; tables via `uischema.ProjectRows`.
+* `cli_actions.go` — `executeActionLocal` → `NormalizeActionArgs` → `ValidateActionArgs` + `InvokeDomainAction` + `cliEscapes`.
+* `cli_render.go` / `cli_open.go` — `uischema.FormatBytes` wrappers / editor+open.
+* `service_help.go` — `ParseInputsToJSON` → `uischema.NormalizePayloadJSON`.
 
 ### Bindings — `cmd/proxyma-bind/`
-* L1 IPC + **`InvokeDomainAction`** / `NormalizeActionArgs` / `dispatchUnixOrLocal` / `dispatchUnixStreamOrLocal`.
+* L1 IPC + **`InvokeDomainAction`** / `NormalizeActionArgs` / **`ValidateActionArgs`** / **`uischema.NormalizePayloadJSON`** / `dispatchUnixOrLocal` / `dispatchUnixStreamOrLocal`.
 * Socket via **`protocol.UnixSockPath`**; `ParameterDetail` = `uischema.ParameterDetail`.
 * Execution SSOT: `server.CallUnixUnary` (same bodies as unix listener).
 * `LocalServiceDetail` via bind schema paths; `BindErrorJSON` / `IsBindError` (StartNode/ChangeStorage too).
@@ -67,8 +68,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ### Storage / Compute / Protocol
 * `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
-* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, `DefaultTCPPort`, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
-* **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, `DispatchDomainAction` in bind). Compute `ServiceSchema` remains a separate contract.
+* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
+* **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**). Compute `ServiceSchema` remains a separate contract.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
@@ -92,7 +93,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Schema resolve | `LocalServiceDetail` / `LookupServiceSchema` / `GetServiceSchema` |
 | Schema normalize | `NormalizeServiceSchema` / `DescribeParameter` / `ActionAdd` |
 | UI hint | `InferUIHint` / `EffectiveUIHint` / `IsFilePickerHint` / `IsImagePickerHint` |
-| Missing required | `MissingRequired` |
+| Missing required / admin validate | `protocol.MissingRequired` / `uischema.ValidateActionArgs` |
+| Table projection / bytes | `uischema.ProjectRows` / `FormatBytes` / `BandwidthStatsRows` |
+| Payload JSON / arg normalize | `uischema.NormalizePayloadJSON` / `NormalizeActionArgs` |
+| Invite TTL | `protocol.DefaultInviteMinutes` |
 | Result path | `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` |
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
 | Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` |
@@ -106,7 +110,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | VFS local ops | `LocalVFSUpload` / `ResolveLocalBlob` / `StageLocalFile` / `StageAndRewrite` |
 | VFS URI | `protocol.VFSURI` / `ParseVFSURI` / `IsStageableLocalPath` |
 | HTTP paths / relay | `protocol.Path*` / `NewRelayRequest` / `RequestPathWithQuery` / `MaxRelayBodyBytes` |
-| RPC timeouts | `protocol.RPCTimeout*` / `PeerRPC*` |
+| RPC / dial / handler timeouts | `protocol.RPCTimeout*` / `DialTimeout*` / `HolePunch*` / `HandlerDial*` / `PeerRPC*` |
 | Default TCP port | `protocol.DefaultTCPPort` |
 | Unix sock path | `protocol.SockFileName` / `UnixSockPath` |
 | Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` |
@@ -133,7 +137,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Key Workflows
 
 ### Pairing
-1. `LocalInviteGenerate` → `(token, expires)` + `DefaultInviteMinutes`.
+1. `LocalInviteGenerate` → `(token, expires)` + `protocol.DefaultInviteMinutes`.
 2. Join CSR → `/cluster/join` (or `ForwardRelay`).
 3. `mTLSGuard` on inter-node HTTP (`peerCNFromRequest`).
 

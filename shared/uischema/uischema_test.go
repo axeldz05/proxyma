@@ -2,6 +2,8 @@ package uischema
 
 import (
 	"testing"
+
+	"proxyma/internal/protocol"
 )
 
 func TestFindActionAndUnixActionFor(t *testing.T) {
@@ -52,5 +54,31 @@ func TestVisibleRegistryHidesInternal(t *testing.T) {
 func TestMustUnixAction(t *testing.T) {
 	if MustUnixAction("peers", "list") != "peers" {
 		t.Fatal("unexpected peers.list unix action")
+	}
+}
+
+func TestValidateActionArgs(t *testing.T) {
+	a, ok := FindAction("service", "run")
+	if !ok {
+		t.Fatal("expected service.run")
+	}
+	_, err := ValidateActionArgs(a, map[string]string{})
+	if err == nil {
+		t.Fatal("expected missing required")
+	}
+	out, err := ValidateActionArgs(a, map[string]string{"name": "ocr", "strategy": "fastest"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out["name"] != "ocr" {
+		t.Fatalf("name=%q", out["name"])
+	}
+	_, err = ValidateActionArgs(a, map[string]string{"name": "ocr", "strategy": "bogus"})
+	if err == nil {
+		t.Fatal("expected invalid strategy")
+	}
+	_, err = ValidateActionArgs(a, map[string]string{"name": "ocr", "strategy": protocol.StrategyCheapest})
+	if err != nil {
+		t.Fatalf("URN strategy should be accepted via normalize: %v", err)
 	}
 }

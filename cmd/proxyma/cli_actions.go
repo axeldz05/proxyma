@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/protocol"
@@ -12,37 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 )
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func resolveServiceName(args map[string]string) string {
-	return firstNonEmpty(args["name"], args["service"])
-}
-
-func resolvePayloadRaw(args map[string]string) string {
-	if raw := firstNonEmpty(args["inputs"], args["payload"], args["param"]); raw != "" {
-		return raw
-	}
-	if args["input"] != "" {
-		return "input_path=" + args["input"]
-	}
-	return ""
-}
-
-func resolveServiceNameFromFlags(c *cobra.Command) string {
-	return resolveServiceName(flagArgsMap(c, "name", "service"))
-}
-
-func resolvePayloadFromFlags(c *cobra.Command) string {
-	return resolvePayloadRaw(flagArgsMap(c, "inputs", "payload", "param"))
-}
 
 func flagArgsMap(c *cobra.Command, keys ...string) map[string]string {
 	m := make(map[string]string, len(keys))
@@ -92,33 +59,13 @@ var cliEscapes = map[string]cliActionHandler{
 		return retErr(errStr)
 	},
 
-	"telemetry.stats": func(_ map[string]string) string {
-		statsJson := proxyma_bind.GetBandwidthStatsJson()
-		if proxyma_bind.IsBindError(statsJson) {
-			return statsJson
-		}
-		var stats protocol.BandwidthStats
-		if err := json.Unmarshal([]byte(statsJson), &stats); err != nil {
-			return retErr(fmt.Sprintf("failed to parse stats: %v", err))
-		}
-		type StatPair struct {
-			Metric string `json:"metric"`
-			Value  string `json:"value"`
-		}
-		pairs := []StatPair{
-			{Metric: "Download Speed", Value: formatRate(float64(stats.DownloadSpeed))},
-			{Metric: "Upload Speed", Value: formatRate(float64(stats.UploadSpeed))},
-			{Metric: "Total Received", Value: formatBytes(stats.TotalReceived)},
-			{Metric: "Total Sent", Value: formatBytes(stats.TotalSent)},
-		}
-		b, _ := json.Marshal(pairs)
-		return string(b)
-	},
-
 	"service.run": func(args map[string]string) string {
-		serviceName := resolveServiceName(args)
-		inputsRaw := resolvePayloadRaw(args)
-		payloadJSON := ParseInputsToJSON(inputsRaw)
+		norm, err := proxyma_bind.NormalizeActionArgs("service", "run", args)
+		if err != nil {
+			return retErr(err.Error())
+		}
+		serviceName := norm["service"]
+		payloadJSON := norm["payload"]
 
 		schema, _ := lookupServiceSchema(cliStorage, serviceName)
 		if schema != nil && schema.UI != nil && schema.UI.Type == "web_app" {
@@ -199,16 +146,20 @@ func executeActionLocal(domain string, action string, args map[string]string) st
 	if !ok {
 		return retErr(fmt.Sprintf("unknown action '%s' for domain '%s'", action, domain))
 	}
-	args = uischema.ApplyDefaults(detail, args)
-	if missing := uischema.MissingRequired(detail, args); len(missing) > 0 {
-		return retErr(fmt.Sprintf("missing required parameter(s): %s", strings.Join(missing, ", ")))
+	norm, err := proxyma_bind.NormalizeActionArgs(domain, action, args)
+	if err != nil {
+		return retErr(err.Error())
+	}
+	norm, err = uischema.ValidateActionArgs(detail, norm)
+	if err != nil {
+		return retErr(err.Error())
 	}
 
 	if esc, ok := cliEscapes[detail.Key()]; ok {
-		return esc(args)
+		return esc(norm)
 	}
 	if detail.UnixAction == "" {
 		return retErr(fmt.Sprintf("no CLI handler for '%s'", detail.Key()))
 	}
-	return proxyma_bind.InvokeDomainAction(domain, action, args)
+	return proxyma_bind.InvokeDomainAction(domain, action, norm)
 }

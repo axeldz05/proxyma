@@ -34,7 +34,7 @@ func TestPeerAdditionAndConnectivity(t *testing.T) {
 	// Add peer via HTTP endpoint
 	addReq := protocol.AddPeerRequest{ID: sv2.Config.ID, Address: protocol.AddressRecord{Addresses: []string{sv2.Config.Address}}}
 	body, _ := json.Marshal(addReq)
-	req, err := http.NewRequest("POST", sv1.Config.Address+"/peers/add", bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", sv1.Config.Address+protocol.PathPeersAdd, bytes.NewBuffer(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := sv1.Client().Do(req)
@@ -118,7 +118,7 @@ func TestDownloadEndpointUsesHash(t *testing.T) {
 	fileContent := "Hello!!"
 	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
 
-	downloadURL := fmt.Sprintf("%s/download/%s", sv.Config.Address, expectedHash)
+	downloadURL := sv.Config.Address + protocol.PathDownloadPrefix + expectedHash
 	reqDL, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
 
@@ -146,7 +146,7 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 
 	sv.Storage.Upsert(fakeFile)
 
-	req, err := http.NewRequest("GET", sv.Config.Address+"/manifest", nil)
+	req, err := http.NewRequest("GET", sv.Config.Address+protocol.PathManifest, nil)
 	require.NoError(t, err)
 
 	resp, err := sv.Client().Do(req)
@@ -237,7 +237,7 @@ func TestANodeReceivesSatisfactoryAnswerFromServiceRequest(t *testing.T) {
 		TaskID:  taskID,
 		Service: "ocr",
 		Payload: filledInputs,
-		ReplyTo: svDemandingService.Config.Address + "/services/callback",
+		ReplyTo: svDemandingService.Config.Address + protocol.PathServicesCallback,
 	}
 
 	err = svDemandingService.DispatchTask(targetPeerAddr, reqPayload)
@@ -420,14 +420,14 @@ func TestUnauthorizedAccessIsRejectedAndPairingIsAllowed(t *testing.T) {
 	}
 
 	t.Run("Protected routes reject naked clients", func(t *testing.T) {
-		resp, err := clientWithoutCert.Get(sv.Config.Address + "/peers")
+		resp, err := clientWithoutCert.Get(sv.Config.Address + protocol.PathPeers)
 		require.NoError(t, err, "TLS handshake should be successful because of the VerifyClientCertIfGiven")
 		defer func() { _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusForbidden, resp.StatusCode, "The middleware should reject the access with the status 403 Forbidden")
 	})
 
 	t.Run("Pairing route allows naked clients", func(t *testing.T) {
-		resp, err := clientWithoutCert.Get(sv.Config.Address + "/cluster/join")
+		resp, err := clientWithoutCert.Get(sv.Config.Address + protocol.PathClusterJoin)
 		require.NoError(t, err)
 		defer func() { _ = resp.Body.Close() }()
 		require.NotEqual(t, http.StatusForbidden, resp.StatusCode, "The middleware mTLSGuard should let the petition through to the pairing endpoint")
@@ -479,7 +479,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	sv := NewServer(t, testutil.DefaultConfig(t, "sponsor"), nil)
 	reqBody := protocol.InviteRequest{ValidForMinutes: 15}
 	bodyBytes, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequest("POST", sv.Config.Address+protocol.PathPeersInvite, bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	resp, err := sv.Client().Do(req)
 	require.NoError(t, err)
@@ -506,7 +506,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 		badJoinReq := protocol.JoinRequest{Secret: "false-token-123", CSR: "dummy-csr", Address: validAddress}
 		badBody, _ := json.Marshal(badJoinReq)
 
-		respBad, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(badBody))
+		respBad, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(badBody))
 		require.NoError(t, err)
 		defer func() { _ = respBad.Body.Close() }()
 
@@ -517,13 +517,13 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: validAddress}
 		goodBody, _ := json.Marshal(goodJoinReq)
 
-		respGood, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
+		respGood, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(goodBody))
 		require.NoError(t, err)
 		defer func() { _ = respGood.Body.Close() }()
 
 		require.Equal(t, http.StatusBadRequest, respGood.StatusCode, "Token accepted, fails on invalid CSR")
 
-		respReused, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(goodBody))
+		respReused, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(goodBody))
 		require.NoError(t, err)
 		defer func() { _ = respReused.Body.Close() }()
 
@@ -636,7 +636,7 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	// Generate a real invite
 	reqBody := protocol.InviteRequest{ValidForMinutes: 15}
 	bodyBytes, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", sv.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequest("POST", sv.Config.Address+protocol.PathPeersInvite, bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	resp, err := sv.Client().Do(req)
 	require.NoError(t, err)
@@ -665,14 +665,14 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	joinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: dummyNode.URL}
 	joinBody, _ := json.Marshal(joinReq)
 
-	respJoin, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(joinBody))
+	respJoin, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(joinBody))
 	require.NoError(t, err)
 	defer func() { _ = respJoin.Body.Close() }()
 
 	require.Equal(t, http.StatusUnauthorized, respJoin.StatusCode, "Expired token should return 401 Unauthorized")
 
 	// The token should have been consumed (deleted), so using it again should also be rejected
-	respReused, err := nakedClient.Post(sv.Config.Address+"/cluster/join", "application/json", bytes.NewBuffer(joinBody))
+	respReused, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(joinBody))
 	require.NoError(t, err)
 	defer func() { _ = respReused.Body.Close() }()
 
@@ -749,19 +749,19 @@ func TestHTTPErrorResponses(t *testing.T) {
 		{
 			name:           "subscribe without name",
 			method:         http.MethodPost,
-			path:           "/subscribe",
+			path:           protocol.PathSubscribe,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "delete without name",
 			method:         http.MethodDelete,
-			path:           "/file",
+			path:           protocol.PathFile,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "upload without file part",
 			method:         http.MethodPost,
-			path:           "/upload",
+			path:           protocol.PathUpload,
 			body:           invalidMultipartWithoutFile(t),
 			contentType:    "multipart/form-data; boundary=xxx",
 			expectedStatus: http.StatusBadRequest,
@@ -769,7 +769,7 @@ func TestHTTPErrorResponses(t *testing.T) {
 		{
 			name:           "notify with invalid JSON",
 			method:         http.MethodPost,
-			path:           "/notify",
+			path:           protocol.PathNotify,
 			body:           strings.NewReader("{invalid}"),
 			contentType:    "application/json",
 			expectedStatus: http.StatusBadRequest,
@@ -843,7 +843,7 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(notification)
-	req, _ := http.NewRequest(http.MethodPost, srv.Config.Address+"/services/notify", bytes.NewBuffer(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathServicesNotify, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 
 	// Create a recorder
@@ -859,7 +859,7 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	// Test remove
 	notification.Action = "remove"
 	bodyBytes, _ = json.Marshal(notification)
-	req, _ = http.NewRequest(http.MethodPost, srv.Config.Address+"/services/notify", bytes.NewBuffer(bodyBytes))
+	req, _ = http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathServicesNotify, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 
 	recorder = httptest.NewRecorder()
@@ -884,7 +884,7 @@ func TestAnnounceCapturesPublicIP(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(announceReq)
-	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersAnnounce, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 
 	// CN must match body ID; issue leaf under sponsor CA for the announcing node.
@@ -926,7 +926,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 		},
 	}
 	body1, _ := json.Marshal(req1)
-	httpReq1, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body1))
+	httpReq1, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersAnnounce, bytes.NewBuffer(body1))
 	httpReq1.Header.Set("Content-Type", "application/json")
 	resp1, err := client.Do(httpReq1)
 	require.NoError(t, err)
@@ -947,7 +947,7 @@ func TestNodeIPChangeUpdatesPeers(t *testing.T) {
 		},
 	}
 	body2, _ := json.Marshal(req2)
-	httpReq2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/announce", bytes.NewBuffer(body2))
+	httpReq2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersAnnounce, bytes.NewBuffer(body2))
 	httpReq2.Header.Set("Content-Type", "application/json")
 	resp2, err := client.Do(httpReq2)
 	require.NoError(t, err)
@@ -1032,7 +1032,7 @@ func TestOfflineNotificationAndSelfHealing(t *testing.T) {
 
 	offlineReq := protocol.PeerIDRequest{ID: srv2.Config.ID}
 	body, _ := json.Marshal(offlineReq)
-	req, err := http.NewRequest("POST", srv1.Config.Address+"/peers/offline", bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", srv1.Config.Address+protocol.PathPeersOffline, bytes.NewBuffer(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	client := mtlsClientForPeer(t, srv1, srv2.Config.ID)
@@ -1088,7 +1088,7 @@ func TestProbeEndpoint(t *testing.T) {
 		Address: parsed.Host,
 	}
 	bodyBytes, _ := json.Marshal(probeReq)
-	resp, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes))
+	resp, err := srv.Client().Post(srv.Config.Address+protocol.PathPeersProbe, "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -1101,7 +1101,7 @@ func TestProbeEndpoint(t *testing.T) {
 		Address: "127.0.0.1:9999",
 	}
 	bodyBytes2, _ := json.Marshal(probeReq2)
-	resp2, err := srv.Client().Post(srv.Config.Address+"/peers/probe", "application/json", bytes.NewBuffer(bodyBytes2))
+	resp2, err := srv.Client().Post(srv.Config.Address+protocol.PathPeersProbe, "application/json", bytes.NewBuffer(bodyBytes2))
 	require.NoError(t, err)
 	defer func() { _ = resp2.Body.Close() }()
 
@@ -1246,7 +1246,7 @@ func TestAnnounceEndpointEnforcesMTLS(t *testing.T) {
 		},
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
-	resp, err := client.Post(srv.Config.Address+"/peers/announce", "application/json", bytes.NewBuffer(bodyBytes))
+	resp, err := client.Post(srv.Config.Address+protocol.PathPeersAnnounce, "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -1260,7 +1260,7 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 
 	// 1. Generate an invite
 	bodyBytes, _ := json.Marshal(map[string]interface{}{"role": "node"})
-	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersInvite, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := sponsor.Client().Do(req)
 	require.NoError(t, err)
@@ -1281,7 +1281,7 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 	require.True(t, validBeforeExpire, "Invite token should be valid before expiration")
 
 	// 2. Generate another invite and force it to be expired
-	req2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/peers/invite", bytes.NewBuffer(bodyBytes))
+	req2, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathPeersInvite, bytes.NewBuffer(bodyBytes))
 	req2.Header.Set("Content-Type", "application/json")
 	resp2, err := sponsor.Client().Do(req2)
 	require.NoError(t, err)
@@ -1418,11 +1418,11 @@ func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
 	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-telemetry"), nil)
 
 	// 1. Record some bandwidth activity
-	sponsor.Bandwidth.RecordBytesSent(1024, "/download/somehash")
-	sponsor.Bandwidth.RecordBytesReceived(2048, "/upload")
+	sponsor.Bandwidth.RecordBytesSent(1024, protocol.PathDownloadPrefix+"somehash")
+	sponsor.Bandwidth.RecordBytesReceived(2048, protocol.PathUpload)
 
 	// Verify categories are populated
-	categorySent := sponsor.Bandwidth.CategorizePath("/download/somehash")
+	categorySent := sponsor.Bandwidth.CategorizePath(protocol.PathDownloadPrefix+"somehash")
 	require.Equal(t, "vfs:somehash", categorySent)
 
 	upSpeed, downSpeed := sponsor.GetCurrentBandwidth()
@@ -1438,7 +1438,7 @@ func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
 	require.Equal(t, 1024.0/5.0, vfsSentSpeed)
 
 	// 2. Query the HTTP /telemetry endpoint
-	req, _ := http.NewRequest(http.MethodGet, sponsor.Config.Address+"/telemetry", nil)
+	req, _ := http.NewRequest(http.MethodGet, sponsor.Config.Address+protocol.PathTelemetry, nil)
 	resp, err := sponsor.Client().Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()

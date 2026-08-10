@@ -63,10 +63,10 @@ func init() {
 			if actionCopy.Domain == "service" && actionCopy.Name == "run" {
 				origHelpFunc := actionCmd.HelpFunc()
 				actionCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-					svcName := resolveServiceNameFromFlags(c)
-					if svcName != "" {
-						payloadVal := resolvePayloadFromFlags(c)
-						handled, _ := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadVal, actionCopy.Name, true)
+					flagMap := flagArgsMap(c, "name", "service", "inputs", "payload", "param", "input")
+					norm, _ := proxyma_bind.NormalizeActionArgs("service", "run", flagMap)
+					if svcName := norm["service"]; svcName != "" {
+						handled, _ := ValidateAndPrintServiceHelp(cliStorage, svcName, norm["payload"], actionCopy.Name, true)
 						if handled {
 							return
 						}
@@ -95,9 +95,8 @@ func init() {
 				}
 
 				if actionCopy.Domain == "service" && actionCopy.Name == "run" {
-					svcName := resolveServiceName(argsMap)
-					payloadRaw := resolvePayloadRaw(argsMap)
-					handled, err := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadRaw, actionCopy.Name, false)
+					norm, _ := proxyma_bind.NormalizeActionArgs("service", "run", argsMap)
+					handled, err := ValidateAndPrintServiceHelp(cliStorage, norm["service"], norm["payload"], actionCopy.Name, false)
 					if handled && err != nil {
 						return err
 					}
@@ -161,56 +160,7 @@ func init() {
 					}
 					_, _ = fmt.Fprintln(w, strings.Join(headers, "\t"))
 
-					for _, item := range list {
-						var rowFields []string
-						for _, col := range actionCopy.Columns {
-							var formatted string
-							if col.FieldSelector == "." {
-								// Whole item string fallback
-								formatted = fmt.Sprintf("%v", item)
-							} else {
-								val := item[col.FieldSelector]
-								if val == nil {
-									val = ""
-								}
-								if slice, ok := val.([]any); ok {
-									formatted = fmt.Sprintf("%d", len(slice))
-								} else {
-									formatted = fmt.Sprintf("%v", val)
-								}
-
-								switch col.Format {
-								case "bytes":
-									var bytesVal int64
-									if fv, ok := val.(float64); ok {
-										bytesVal = int64(fv)
-									} else if iv, ok := val.(int64); ok {
-										bytesVal = iv
-									}
-									formatted = formatBytes(bytesVal)
-								case "boolean":
-									if bv, ok := val.(bool); ok {
-										formatted = fmt.Sprintf("%t", bv)
-									}
-								case "status":
-									switch col.FieldSelector {
-									case "deleted":
-										if bv, ok := val.(bool); ok && bv {
-											formatted = "Deleted"
-										} else {
-											formatted = "Active"
-										}
-									case "online":
-										if bv, ok := val.(bool); ok && bv {
-											formatted = "ONLINE"
-										} else {
-											formatted = "OFFLINE"
-										}
-									}
-								}
-							}
-							rowFields = append(rowFields, formatted)
-						}
+					for _, rowFields := range uischema.ProjectRows(actionCopy.Columns, list) {
 						_, _ = fmt.Fprintln(w, strings.Join(rowFields, "\t"))
 					}
 					_ = w.Flush()

@@ -3,7 +3,6 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -45,7 +44,7 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 	err = writer.Close()
 	require.NoError(t, err, "Failed to close multipart writer")
 
-	reqUp, err := http.NewRequest("POST", sv.Config.Address+"/upload", &requestBody)
+	reqUp, err := http.NewRequest("POST", sv.Config.Address+protocol.PathUpload, &requestBody)
 	require.NoError(t, err)
 	reqUp.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -59,7 +58,7 @@ func UploadFileSimulated(t *testing.T, sv *TestServer, fileName, content string)
 
 func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileContent string, targetServer *TestServer) {
 	t.Helper()
-	downloadURL := fmt.Sprintf("%s/download/%s", targetServer.Config.Address, expectedHash)
+	downloadURL := targetServer.Config.Address + protocol.PathDownloadPrefix + expectedHash
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	require.NoError(t, err)
 
@@ -80,7 +79,7 @@ func assertRemoteHashToBeTheSameAs(t *testing.T, expectedHash string, fileConten
 
 func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
 	t.Helper()
-	reqDel, err := http.NewRequest("DELETE", sv.Config.Address+"/file?name="+fileName, nil)
+	reqDel, err := http.NewRequest("DELETE", sv.Config.Address+protocol.PathFile+"?name="+fileName, nil)
 	require.NoError(t, err)
 
 	respDel, err := sv.Client().Do(reqDel)
@@ -92,7 +91,7 @@ func DeleteFileSimulated(t *testing.T, sv *TestServer, fileName string) {
 
 func GetPeersSimulated(t *testing.T, sv *TestServer) string {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/peers", nil)
+	req := httptest.NewRequest("GET", protocol.PathPeers, nil)
 	w := httptest.NewRecorder()
 	sv.GetPeers(w, req)
 	resp := w.Result()
@@ -116,7 +115,7 @@ func invalidMultipartWithoutFile(t *testing.T) io.Reader {
 
 func RequestManifestSimulated(t *testing.T, sv *TestServer) map[string]protocol.IndexEntry {
 	t.Helper()
-	req, err := http.NewRequest("GET", sv.Config.Address+"/manifest", nil)
+	req, err := http.NewRequest("GET", sv.Config.Address+protocol.PathManifest, nil)
 	require.NoError(t, err)
 	resp, err := sv.Client().Do(req)
 	require.NoError(t, err)

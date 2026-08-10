@@ -65,27 +65,21 @@ func (r *ServiceRegistry) ValidatePayload(serviceName string, payload map[string
 	if !exists {
 		return fmt.Errorf("validation failed: service '%s' is not supported by this node", serviceName)
 	}
-
+	if missing := protocol.MissingRequired(schema, payload); len(missing) > 0 {
+		return fmt.Errorf("missing required parameter: '%s'", missing[0])
+	}
 	for paramName, paramRule := range schema.Parameters {
 		inputValue, inputProvided := payload[paramName]
-		if paramRule.Required && !inputProvided {
-			return fmt.Errorf("missing required parameter: '%s'", paramName)
-		}
 		if !inputProvided {
 			continue
 		}
-		if err := validateType(paramName, inputValue, paramRule.Type); err != nil {
+		if err := paramRule.ValidateValue(paramName, inputValue); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 func (r *ServiceRegistry) ValidateRequest(req protocol.TaskRequest) error {
 	return r.ValidatePayload(req.Service, req.Payload)
-}
-
-func validateType(paramName string, value any, expectedType string) error {
-	return protocol.ServiceParameter{Type: expectedType}.ValidateValue(paramName, value)
 }

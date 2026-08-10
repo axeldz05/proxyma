@@ -183,7 +183,7 @@ var Registry = []DomainDetail{
 			{
 				Name:        "invite",
 				Title:       "Generate Invite",
-				Description: "Generate an invite token valid for 15 minutes",
+				Description: fmt.Sprintf("Generate an invite token valid for %d minutes", protocol.DefaultInviteMinutes),
 				OutputType:  "text",
 				UnixAction:  "invite_generate",
 			},
@@ -244,11 +244,12 @@ var Registry = []DomainDetail{
 				},
 			},
 			{
-				Name:        "add",
-				Title:       "Add Service",
-				Description: "Add a new service to the local node",
-				OutputType:  "text",
-				UnixAction:  "service_add",
+				Name:           "add",
+				Title:          "Add Service",
+				Description:    "Add a new service to the local node",
+				OutputType:     "text",
+				UnixAction:     "service_add",
+				SuccessMessage: "Service '{{name}}' added successfully. Restart the node to apply changes.",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or JSON file path"},
 					{Name: "type", Type: "string", Required: false, Description: "Service type (exec, grpc)", UIHint: "text", DefaultValue: "exec"},
@@ -260,29 +261,32 @@ var Registry = []DomainDetail{
 				},
 			},
 			{
-				Name:        "remove",
-				Title:       "Remove Service",
-				Description: "Remove a service from the local node",
-				OutputType:  "text",
-				UnixAction:  "service_remove",
-				Parameters:  []ParameterDetail{svcNameParam},
+				Name:           "remove",
+				Title:          "Remove Service",
+				Description:    "Remove a service from the local node",
+				OutputType:     "text",
+				UnixAction:     "service_remove",
+				SuccessMessage: "Service '{{name}}' removed successfully. Restart the node to apply changes.",
+				Parameters:     []ParameterDetail{svcNameParam},
 			},
 			{
-				Name:        "subscribe",
-				Title:       "Subscribe Service",
-				Description: "Subscribe to remote service notifies by name or pattern (e.g. vision.*)",
-				OutputType:  "text",
-				UnixAction:  "service_subscribe",
+				Name:           "subscribe",
+				Title:          "Subscribe Service",
+				Description:    "Subscribe to remote service notifies by name or pattern (e.g. vision.*)",
+				OutputType:     "text",
+				UnixAction:     "service_subscribe",
+				SuccessMessage: "Subscribed to service pattern '{{name}}'.",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern (suffix * / .*)"},
 				},
 			},
 			{
-				Name:        "unsubscribe",
-				Title:       "Unsubscribe Service",
-				Description: "Stop filtering interest for a service name or pattern",
-				OutputType:  "text",
-				UnixAction:  "service_unsubscribe",
+				Name:           "unsubscribe",
+				Title:          "Unsubscribe Service",
+				Description:    "Stop filtering interest for a service name or pattern",
+				OutputType:     "text",
+				UnixAction:     "service_unsubscribe",
+				SuccessMessage: "Unsubscribed from service pattern '{{name}}'.",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern to drop"},
 				},
@@ -297,7 +301,7 @@ var Registry = []DomainDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to run"},
 					{Name: "inputs", Type: "string", Required: false, Description: "Service inputs in 'key1=val1,key2=val2' format or JSON object"},
 					{Name: "payload", Type: "string", Required: false, Description: "Legacy alias for service inputs in JSON format"},
-					{Name: "strategy", Type: "string", Required: false, Description: "Bid sort strategy: fastest, cheapest, or low_power"},
+					{Name: "strategy", Type: "string", Required: false, Description: "Bid sort strategy", UIHint: "dropdown", Options: protocol.SortStrategyShortOptions()},
 				},
 			},
 			{
@@ -555,6 +559,88 @@ func MissingRequired(action ActionDetail, args map[string]string) []string {
 		}
 	}
 	return missing
+}
+
+// ValidateActionArgs applies defaults, checks required params, types, and Options membership.
+// Returns the args map after defaults (safe to use for dispatch).
+func ValidateActionArgs(action ActionDetail, args map[string]string) (map[string]string, error) {
+	args = ApplyDefaults(action, args)
+	if missing := MissingRequired(action, args); len(missing) > 0 {
+		return nil, fmt.Errorf("missing required parameter(s): %s", strings.Join(missing, ", "))
+	}
+	for _, p := range action.Parameters {
+		v := strings.TrimSpace(args[p.Name])
+		if v == "" {
+			continue
+		}
+		if err := validateAdminParam(p, v); err != nil {
+			return nil, err
+		}
+	}
+	return args, nil
+}
+
+func validateAdminParam(p ParameterDetail, v string) error {
+	switch p.Type {
+	case "bool":
+		if v != "true" && v != "false" && v != "1" && v != "0" {
+			return fmt.Errorf("invalid type for parameter '%s': expected bool", p.Name)
+		}
+	case "int":
+		if !intStringOK(v) {
+			return fmt.Errorf("invalid type for parameter '%s': expected int", p.Name)
+		}
+	case "string", "file", "":
+		// ok
+	default:
+		// Unknown admin types treated as string (forward-compatible).
+	}
+	if len(p.Options) == 0 {
+		return nil
+	}
+	if optionAllowed(p.Name, p.Options, v) {
+		return nil
+	}
+	return fmt.Errorf("invalid value for parameter '%s': %q not in options %v", p.Name, v, p.Options)
+}
+
+func intStringOK(v string) bool {
+	if v == "" {
+		return false
+	}
+	i := 0
+	if v[0] == '+' || v[0] == '-' {
+		if len(v) == 1 {
+			return false
+		}
+		i = 1
+	}
+	for ; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func optionAllowed(paramName string, options []string, value string) bool {
+	for _, o := range options {
+		if o == value {
+			return true
+		}
+	}
+	if paramName == "strategy" {
+		short := protocol.StrategyShortName(value)
+		if short == "" {
+			return false
+		}
+		for _, o := range options {
+			if o == short {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FormatSuccessMessage expands SuccessMessage placeholders {{key}} from args and {{result}}.

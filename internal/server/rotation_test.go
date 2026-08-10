@@ -129,7 +129,7 @@ func TestClusterCARotation(t *testing.T) {
 		body, err := json.Marshal(payload)
 		require.NoError(t, err)
 
-		req, err := http.NewRequest("POST", peer2Srv.Config.Address+"/cluster/rotate", bytes.NewReader(body))
+		req, err := http.NewRequest("POST", peer2Srv.Config.Address+protocol.PathClusterRotate, bytes.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 

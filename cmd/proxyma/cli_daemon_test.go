@@ -29,11 +29,11 @@ func TestTelemetryStatsDaemonCmd(t *testing.T) {
 
 	l := startMockUnixSocket(t, tempDir, func(req protocol.UnixRequest) (any, error) {
 		require.Equal(t, "bandwidth", req.Action)
-		return protocol.BandwidthStats{
-			UploadSpeed:   10,
-			DownloadSpeed: 20,
-			TotalSent:     100,
-			TotalReceived: 200,
+		return []map[string]any{
+			{"metric": "Download Speed", "value": "20 B/s"},
+			{"metric": "Upload Speed", "value": "10 B/s"},
+			{"metric": "Total Received", "value": "200 B"},
+			{"metric": "Total Sent", "value": "100 B"},
 		}, nil
 	})
 	defer func() { _ = l.Close() }()

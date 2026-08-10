@@ -63,7 +63,7 @@ func (r *P2PRoundTripper) prewarmConnection(peerID string, record protocol.Addre
 	}
 
 	r.logDebug("Pre-warming direct QUIC connection to peer", "peerID", peerID)
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), protocol.PrewarmHolePunch)
 	defer cancel()
 
 	_, err := r.QM.InitiateHolePunch(ctx, peerID, record.Addresses, func(targetPeer, action string, payload []byte) ([]byte, error) {
@@ -175,7 +175,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 			// TCP probe fail-fast on dead IPs without binding the HTTP body to a
 			// short request context (that aborted large blob downloads).
 			probeAddr := net.JoinHostPort(host, port)
-			if conn, dialErr := net.DialTimeout("tcp", probeAddr, 3*time.Second); dialErr != nil {
+			if conn, dialErr := net.DialTimeout("tcp", probeAddr, protocol.DialTimeoutRouteProbe); dialErr != nil {
 				lastErr = dialErr
 				continue
 			} else {
@@ -294,11 +294,11 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(clone *http.Request, req *http.Re
 		return r.sendRelayMessage(clone.Context(), sponsorAddr, targetPeer, path, body)
 	}
 
-	holePunchTimeout := 3 * time.Second
+	holePunchTimeout := protocol.HolePunchAttempt
 	if deadline, ok := clone.Context().Deadline(); ok {
 		timeLeft := time.Until(deadline)
 		if timeLeft > 1000*time.Millisecond {
-			holePunchTimeout = min(timeLeft-1000*time.Millisecond, 3*time.Second)
+			holePunchTimeout = min(timeLeft-1000*time.Millisecond, protocol.HolePunchAttempt)
 		} else {
 			holePunchTimeout = 0
 		}

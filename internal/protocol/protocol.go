@@ -62,6 +62,9 @@ const (
 // DefaultTCPPort is the SSOT fallback listen/advertise TCP port when Config.Address has none.
 const DefaultTCPPort = "8080"
 
+// DefaultInviteMinutes is the SSOT default invite TTL.
+const DefaultInviteMinutes = 15
+
 // SockFileName is the daemon unix socket basename under StoragePath (SSOT).
 const SockFileName = "proxyma.sock"
 
@@ -326,7 +329,7 @@ func ParseDefaultInt(defaultValue string) int {
 	return val
 }
 
-// ValidateValue checks that value matches the expected schema type (L1).
+// ValidateValue checks that value matches the expected schema type and Options (L1).
 func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 	switch p.Type {
 	case ParamTypeString, ParamTypeFile:
@@ -340,7 +343,7 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 	case ParamTypeInt:
 		switch v := value.(type) {
 		case int, int32, int64:
-			return nil
+			// ok
 		case float64:
 			if v != float64(int64(v)) {
 				return fmt.Errorf("invalid type for parameter '%s': expected int, got float", paramName)
@@ -351,12 +354,24 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 	case ParamTypeFloat:
 		switch value.(type) {
 		case float32, float64, int, int32, int64:
-			return nil
+			// ok
 		default:
 			return fmt.Errorf("invalid type for parameter '%s': expected float", paramName)
 		}
 	default:
 		return fmt.Errorf("unknown schema type '%s' for parameter '%s'", p.Type, paramName)
+	}
+	if len(p.Options) > 0 {
+		s, ok := value.(string)
+		if !ok {
+			s = fmt.Sprint(value)
+		}
+		for _, o := range p.Options {
+			if o == s {
+				return nil
+			}
+		}
+		return fmt.Errorf("invalid value for parameter '%s': %q not in options %v", paramName, s, p.Options)
 	}
 	return nil
 }
@@ -500,20 +515,44 @@ const (
 	StrategyFastest  = "proxyma/strategy/fastest"
 	StrategyCheapest = "proxyma/strategy/cheapest"
 	StrategyLowPower = "proxyma/strategy/low_power"
+
+	StrategyShortFastest  = "fastest"
+	StrategyShortCheapest = "cheapest"
+	StrategyShortLowPower = "low_power"
 )
+
+// SortStrategyShortOptions is the SSOT list of CLI/UI strategy option values.
+func SortStrategyShortOptions() []string {
+	return []string{StrategyShortFastest, StrategyShortCheapest, StrategyShortLowPower}
+}
+
+// StrategyShortName maps a canonical URN (or short/alias) to the short CLI name.
+// Unknown values return empty string.
+func StrategyShortName(s string) string {
+	switch NormalizeSortStrategy(s) {
+	case StrategyFastest:
+		return StrategyShortFastest
+	case StrategyCheapest:
+		return StrategyShortCheapest
+	case StrategyLowPower:
+		return StrategyShortLowPower
+	default:
+		return ""
+	}
+}
 
 // NormalizeSortStrategy maps short CLI names and legacy aliases to canonical strategy URNs.
 // Empty input stays empty (selectBestServiceBid defaults to fastest).
 func NormalizeSortStrategy(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", StrategyFastest, "fastest":
+	case "", StrategyFastest, StrategyShortFastest:
 		if s == "" {
 			return ""
 		}
 		return StrategyFastest
-	case StrategyCheapest, "cheapest":
+	case StrategyCheapest, StrategyShortCheapest:
 		return StrategyCheapest
-	case StrategyLowPower, "low_power", "low-power", "lowpower":
+	case StrategyLowPower, StrategyShortLowPower, "low-power", "lowpower":
 		return StrategyLowPower
 	default:
 		return s

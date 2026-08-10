@@ -46,7 +46,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	}
 
 	// 2. Start a long poll from "target-node" using its specific mTLS client
-	pollReq, _ := http.NewRequest(http.MethodGet, sponsor.Config.Address+"/relay/poll?id=target-node", nil)
+	pollReq, _ := http.NewRequest(http.MethodGet, sponsor.Config.Address+protocol.PathRelayPoll+"?id=target-node", nil)
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer pollCancel()
 	pollReq = pollReq.WithContext(pollCtx)
@@ -70,7 +70,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(relayReq)
 
-	fwdReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/relay/forward", bytes.NewBuffer(bodyBytes))
+	fwdReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathRelayForward, bytes.NewBuffer(bodyBytes))
 	fwdReq.Header.Set("Content-Type", "application/json")
 
 	fwdResultCh := make(chan *http.Response)
@@ -100,7 +100,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	}
 	resBytes, _ := json.Marshal(relayRes)
 
-	replyReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+"/relay/reply", bytes.NewBuffer(resBytes))
+	replyReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathRelayReply, bytes.NewBuffer(resBytes))
 	replyReq.Header.Set("Content-Type", "application/json")
 	replyResp, err := targetClient.Do(replyReq)
 	require.NoError(t, err)

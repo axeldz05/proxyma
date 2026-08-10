@@ -11,7 +11,7 @@ type LocalService = protocol.LocalService
 // LocalInviteGenerate creates an invite token and returns it with its expiry (SSOT).
 func (s *Server) LocalInviteGenerate(validForMinutes int) (token string, expires time.Time, err error) {
 	if validForMinutes <= 0 {
-		validForMinutes = DefaultInviteMinutes
+		validForMinutes = protocol.DefaultInviteMinutes
 	}
 	smartToken, secretHex, err := p2p.GenerateSmartToken(s.Config.Address, s.Config.CAPath, s.Config.ID, s.Config.BootstrapNode)
 	if err != nil {

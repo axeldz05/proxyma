@@ -82,7 +82,7 @@ func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 func TestHTTPPeerClientFetchManifest(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/manifest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathManifest, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"file1.txt":{"name":"file1.txt","hash":"abc123","version":1,"size":42}}`))
 	})
@@ -102,8 +102,8 @@ func TestHTTPPeerClientDownloadBlob(t *testing.T) {
 	expectedContent := "binary blob content here"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
-		hash := r.URL.Path[len("/download/"):]
+	mux.HandleFunc(protocol.PathDownloadPrefix, func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Path[len(protocol.PathDownloadPrefix):]
 		if hash != "abc123" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -129,7 +129,7 @@ func TestHTTPPeerClientNotify(t *testing.T) {
 	notifyCalled := make(chan struct{}, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/notify", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathNotify, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		err := json.NewDecoder(r.Body).Decode(&received)
 		require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestHTTPPeerClientNotifyServiceUpdate(t *testing.T) {
 	notifyCalled := make(chan struct{}, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/services/notify", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathServicesNotify, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		err := json.NewDecoder(r.Body).Decode(&received)
 		require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestHTTPPeerClientAnnounce(t *testing.T) {
 	t.Parallel()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/peers/announce", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathPeersAnnounce, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 
 		var req protocol.AddPeerRequest
@@ -227,7 +227,7 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 	addPeerCalled := make(chan struct{}, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/peers/add", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathPeersAdd, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		var req protocol.AddPeerRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
@@ -258,7 +258,7 @@ func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
 	// This mock server handles both /services/submit and /services/callback
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/services/submit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathServicesSubmit, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		var taskReq protocol.TaskRequest
 		err := json.NewDecoder(r.Body).Decode(&taskReq)
@@ -271,7 +271,7 @@ func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
 	})
 
 	callbackReceived := make(chan protocol.ServiceTaskResponse, 1)
-	mux.HandleFunc("/services/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(protocol.PathServicesCallback, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		var resp protocol.ServiceTaskResponse
 		err := json.NewDecoder(r.Body).Decode(&resp)
@@ -288,7 +288,7 @@ func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
 		TaskID:  "task-001",
 		Service: "ocr",
 		Payload: map[string]any{"image": "hash-abc"},
-		ReplyTo: addr + "/services/callback",
+		ReplyTo: addr + protocol.PathServicesCallback,
 	}
 	err := client.SubmitTask(ctx, addr, taskReq)
 	require.NoError(t, err)
@@ -300,7 +300,7 @@ func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {
 		Status:  "completed",
 		Outputs: map[string]any{"text": "Hello world"},
 	}
-	err = client.SendTaskResponse(ctx, addr+"/services/callback", taskResp)
+	err = client.SendTaskResponse(ctx, addr+protocol.PathServicesCallback, taskResp)
 	require.NoError(t, err)
 
 	select {

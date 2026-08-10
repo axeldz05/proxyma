@@ -17,7 +17,7 @@ func TestBandwidthTrackerRecordsAndCategorizes(t *testing.T) {
 	bt.RecordBytesSent(1000, protocol.PathUpload)
 	bt.RecordBytesReceived(500, protocol.PathDownloadPrefix+"abc123")
 	bt.RecordBytesSent(200, protocol.ServicesPrefix+"bid?service=ocr")
-	bt.RecordBytesReceived(50, "/peers/announce")
+	bt.RecordBytesReceived(50, protocol.PathPeersAnnounce)
 
 	sent, recv := bt.GetTotalBandwidth()
 	require.Equal(t, int64(1200), sent)
@@ -48,7 +48,7 @@ func TestBandwidthCategorizePath(t *testing.T) {
 		{protocol.ServicesPrefix + "submit", "service:submit"},
 		{protocol.ServicesPrefix + "bid?service=ocr", "service:ocr"},
 		{protocol.ServicesPrefix + "run?name=pipe", "service:pipe"},
-		{"/peers/announce", "other"},
+		{protocol.PathPeersAnnounce, "other"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.want+"_"+tc.path, func(t *testing.T) {

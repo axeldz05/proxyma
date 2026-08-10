@@ -75,7 +75,7 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ValidForMinutes <= 0 {
-		req.ValidForMinutes = DefaultInviteMinutes
+		req.ValidForMinutes = protocol.DefaultInviteMinutes
 	}
 	smartToken, expiration, err := s.LocalInviteGenerate(req.ValidForMinutes)
 	if err != nil {

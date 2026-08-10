@@ -60,7 +60,7 @@ func TestP2PRoundTripperRelayFallback(t *testing.T) {
 	// 1. Setup a real HTTP server that pretends to be the SPONSOR
 	var fwdReceived bool
 	sponsorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/relay/forward" {
+		if r.URL.Path == protocol.PathRelayForward {
 			fwdReceived = true
 
 			// Simulate a successful relay response
@@ -187,5 +187,5 @@ func TestRelayFallbackPreservesURLQuery(t *testing.T) {
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	require.Equal(t, "/services/stream?service=ocr", forwarded.Path)
+	require.Equal(t, protocol.PathServicesStream+"?service=ocr", forwarded.Path)
 }
