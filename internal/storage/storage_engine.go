@@ -31,8 +31,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 	}
 
 	if err = db.Update(func(tx *bolt.Tx) error {
-		buckets := []string{"subscriptions", "service_subscriptions", "notify_outbox", "peers", "pipeline_schemas", "vfs_index"}
-		for _, bName := range buckets {
+		for _, bName := range allBuckets {
 			if _, err := tx.CreateBucketIfNotExists([]byte(bName)); err != nil {
 				logger.Error("Failed to create bucket", "bucket", bName, "error", err)
 				return err
@@ -79,9 +78,9 @@ func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
 func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
 		if isSubscribed {
-			return boltPutFlag(tx, "subscriptions", fileName)
+			return boltPutFlag(tx, bucketSubscriptions, fileName)
 		}
-		return boltDelete(tx, "subscriptions", fileName)
+		return boltDelete(tx, bucketSubscriptions, fileName)
 	})
 	if err != nil {
 		se.logger.Error("Failed to update subscription in DB", "file", fileName, "error", err)
@@ -91,7 +90,7 @@ func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 func (se *StorageEngine) IsSubscribed(fileName string) bool {
 	var subscribed bool
 	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
-		subscribed = boltHasKey(tx, "subscriptions", fileName)
+		subscribed = boltHasKey(tx, bucketSubscriptions, fileName)
 		return nil
 	})
 	return subscribed
@@ -104,9 +103,9 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 	}
 	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
 		if subscribed {
-			return boltPutFlag(tx, "service_subscriptions", pattern)
+			return boltPutFlag(tx, bucketServiceSubs, pattern)
 		}
-		return boltDelete(tx, "service_subscriptions", pattern)
+		return boltDelete(tx, bucketServiceSubs, pattern)
 	})
 	if err != nil {
 		se.logger.Error("Failed to update service subscription", "pattern", pattern, "error", err)
@@ -117,7 +116,7 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 func (se *StorageEngine) HasServiceSubscriptions() bool {
 	var n int
 	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("service_subscriptions"))
+		b := tx.Bucket([]byte(bucketServiceSubs))
 		if b == nil {
 			return nil
 		}
@@ -135,7 +134,7 @@ func (se *StorageEngine) IsServiceSubscribed(name string) bool {
 	}
 	matched := false
 	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("service_subscriptions"))
+		b := tx.Bucket([]byte(bucketServiceSubs))
 		if b == nil {
 			return nil
 		}
@@ -361,15 +360,15 @@ func (se *StorageEngine) boltDeleteKeyed(bucket, key string) error {
 }
 
 func (se *StorageEngine) SavePeer(peerID string, record protocol.AddressRecord) error {
-	return se.boltPutKeyed("peers", peerID, record)
+	return se.boltPutKeyed(bucketPeers, peerID, record)
 }
 
 func (se *StorageEngine) DeletePeer(peerID string) error {
-	return se.boltDeleteKeyed("peers", peerID)
+	return se.boltDeleteKeyed(bucketPeers, peerID)
 }
 
 func (se *StorageEngine) LoadPeers() (map[string]protocol.AddressRecord, error) {
-	return boltLoadMapJSON[protocol.AddressRecord](se.subscriptions, "peers")
+	return boltLoadMapJSON[protocol.AddressRecord](se.subscriptions, bucketPeers)
 }
 
 func (se *StorageEngine) Close() error {
@@ -380,21 +379,21 @@ func (se *StorageEngine) Close() error {
 }
 
 func (se *StorageEngine) SavePipelineSchema(schema protocol.PipelineSchema) error {
-	return se.boltPutKeyed("pipeline_schemas", schema.ID, schema)
+	return se.boltPutKeyed(bucketPipelineSchemas, schema.ID, schema)
 }
 
 func (se *StorageEngine) DeletePipelineSchema(id string) error {
-	return se.boltDeleteKeyed("pipeline_schemas", id)
+	return se.boltDeleteKeyed(bucketPipelineSchemas, id)
 }
 
 func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
-	return boltLoadMapJSON[protocol.PipelineSchema](se.subscriptions, "pipeline_schemas")
+	return boltLoadMapJSON[protocol.PipelineSchema](se.subscriptions, bucketPipelineSchemas)
 }
 
 // PutOutboxRaw upserts a durable notify outbox entry (raw JSON bytes).
 func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
 	return se.subscriptions.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("notify_outbox"))
+		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return fmt.Errorf("notify_outbox bucket not found")
 		}
@@ -403,13 +402,13 @@ func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
 }
 
 func (se *StorageEngine) DeleteOutboxEntry(id string) error {
-	return se.boltDeleteKeyed("notify_outbox", id)
+	return se.boltDeleteKeyed(bucketNotifyOutbox, id)
 }
 
 func (se *StorageEngine) CountOutboxEntries() (int, error) {
 	var n int
 	err := se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("notify_outbox"))
+		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return nil
 		}
@@ -422,7 +421,7 @@ func (se *StorageEngine) CountOutboxEntries() (int, error) {
 func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	err := se.subscriptions.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("notify_outbox"))
+		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return nil
 		}

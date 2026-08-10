@@ -1,6 +1,6 @@
 {
     "type": "script",
-    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/music/resolve/main.py",
+    "exec": "uv run --project __SERVICES_DIR__ python __SERVICES_DIR__/music/resolve/main.py",
     "schema": {
         "name": "music.resolve",
         "description": "Resolve a library track to a local audio path (auto = highest quality)",

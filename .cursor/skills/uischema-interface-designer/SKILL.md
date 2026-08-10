@@ -5,7 +5,25 @@ description: Diseñador de sistemas UI/UX y contratos declarativos de datos en P
 
 # UISchema Interface Designer - Proxyma
 
-Esta skill define la especificación estándar del contrato declarativo **`uischema`** en Proxyma ([shared/uischema/uischema.go](file:///home/drusila/Projects/proxyma/shared/uischema/uischema.go)) y proporciona las reglas de transformación para renderizar dinámicamente cualquier servicio, pipeline o acción del sistema en múltiples interfaces (CLI, Android, Desktop).
+Esta skill define la especificación estándar del contrato declarativo **`uischema`** en Proxyma ([shared/uischema/uischema.go](file:///home/drusila/Projects/proxyma/shared/uischema/uischema.go)) y proporciona las reglas de transformación para renderizar dinámicamente cualquier acción admin del nodo en múltiples interfaces (CLI, Android, Desktop).
+
+**SSOT scope:** admin domains/actions (storage, peers, cluster, telemetry, service-management). Compute labs (`clipboard.sync`, etc.) usan `protocol.ServiceSchema` / `services.json` — contrato paralelo, no mezclar.
+
+Cada `ActionDetail` declara:
+* `UnixAction` — string IPC del demonio (vacío = solo local, p.ej. `cluster.join`, `edit_pipeline`)
+* `Hidden` — acciones IPC internas (`service.detail`, `service.stream`, `validate_pipeline`) excluidas de CLI/Android export
+* `Surfaces` — opcional; restringe superficies UI
+
+**Flujo de dispatch (interpreter genérico):**
+```
+Registry (domain.action + UnixAction + SuccessMessage)
+  → Cobra: VisibleRegistry("cli")
+  → CLI: cliEscapes[key] OR InvokeDomainAction
+  → Bind: NormalizeActionArgs → CallUnixUnary / unix IPC
+  → Daemon: unixHandlers[UnixAction]
+```
+
+Añadir acción admin unary = **1 fila Registry + 1 `register(...)` en unix_handlers.go**. Cero líneas en CLI salvo escape UX. Tests: `TestUnixHandlersMatchRegistry`, `TestVisibleActionsEscapeXorUnix`.
 
 ---
 
@@ -165,3 +183,9 @@ Mapea el esquema a controles gráficos nativos de escritorio:
    - `outputType: "table"` -> `DataGrid` ordenable por cabecera de columna con ajuste automático de ancho.
 
 ---
+
+## 4. Alineación con `protocol.ServiceParameter`
+
+Los servicios de compute usan `ServiceParameter.ui_hint` (`file_picker` / `image_picker`) en el schema del servicio. Bind expone eso en `ParameterDetail.uiHint` hacia Android. **No** reintroducir heurísticas por nombre de parámetro en Compose si el hint ya viene del schema.
+
+Tras cambiar uischema o convenciones de hints: actualizar `.cursorrules.md`, `.agents/AGENTS.md` y esta skill.

@@ -1,6 +1,6 @@
 {
     "type": "exec",
-    "exec": "/home/drusila/Projects/proxyma/services-examples/editor/proxyma-editor",
+    "exec": "__SERVICES_DIR__/editor/proxyma-editor",
     "schema": {
         "name": "pipeline/editor",
         "description": "Interactive TUI Pipeline Schema Editor",

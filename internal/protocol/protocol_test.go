@@ -78,6 +78,8 @@ func TestCoerceDefault(t *testing.T) {
 	require.Equal(t, true, protocol.ServiceParameter{Type: protocol.ParamTypeBool, Default: "true"}.CoerceDefault("x"))
 	require.Equal(t, 42, protocol.ServiceParameter{Type: protocol.ParamTypeInt, Default: "42"}.CoerceDefault("x"))
 	require.Equal(t, protocol.DefaultTCPPort, "8080")
+	require.Equal(t, protocol.SockFileName, "proxyma.sock")
+	require.Equal(t, protocol.UnixSockPath("/data"), "/data/proxyma.sock")
 }
 
 func TestServiceTypeIsStreaming(t *testing.T) {

@@ -29,8 +29,8 @@ func init() {
 	defaultStorage := getDefaultStorage()
 	rootCmd.PersistentFlags().StringVar(&cliStorage, "storage", defaultStorage, "Path to the local node's directory")
 
-	// Dynamically register Cobra commands from SSOT Registry
-	for _, domain := range uischema.Registry {
+	// Dynamically register Cobra commands from SSOT Registry (visible CLI actions only)
+	for _, domain := range uischema.VisibleRegistry("cli") {
 		domainCopy := domain
 		domainCmd := &cobra.Command{
 			Use:   domainCopy.Name,
@@ -60,7 +60,7 @@ func init() {
 				}
 			}
 
-			if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
+			if actionCopy.Domain == "service" && actionCopy.Name == "run" {
 				origHelpFunc := actionCmd.HelpFunc()
 				actionCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
 					svcName := resolveServiceNameFromFlags(c)
@@ -94,7 +94,7 @@ func init() {
 					}
 				}
 
-				if actionCopy.Domain == "service" && (actionCopy.Name == "run" || actionCopy.Name == "stream" || actionCopy.Name == "run_file") {
+				if actionCopy.Domain == "service" && actionCopy.Name == "run" {
 					svcName := resolveServiceName(argsMap)
 					payloadRaw := resolvePayloadRaw(argsMap)
 					handled, err := ValidateAndPrintServiceHelp(cliStorage, svcName, payloadRaw, actionCopy.Name, false)

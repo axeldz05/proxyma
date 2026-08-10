@@ -62,6 +62,14 @@ const (
 // DefaultTCPPort is the SSOT fallback listen/advertise TCP port when Config.Address has none.
 const DefaultTCPPort = "8080"
 
+// SockFileName is the daemon unix socket basename under StoragePath (SSOT).
+const SockFileName = "proxyma.sock"
+
+// UnixSockPath returns the absolute path to the daemon unix socket.
+func UnixSockPath(storagePath string) string {
+	return filepath.Join(storagePath, SockFileName)
+}
+
 type PipelineNotification struct {
 	Schema PipelineSchema `json:"schema"`
 	Action string         `json:"action"` // ActionAdd / ActionRemove

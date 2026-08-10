@@ -2,6 +2,8 @@ package uischema
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"proxyma/internal/protocol"
 )
@@ -33,6 +35,15 @@ type ActionDetail struct {
 	Parameters  []ParameterDetail `json:"parameters"`
 	OutputType  string            `json:"outputType"` // "table", "text", "json", "stream"
 	Columns     []TableColumn     `json:"columns,omitempty"`
+	// UnixAction is the daemon IPC action string (SSOT). Empty = local-only (no unix).
+	UnixAction string `json:"unixAction,omitempty"`
+	// SuccessMessage is used when outputType is "text" and the handler returns nil/empty.
+	// Supports {{param}} placeholders from args and {{result}} from a string return value.
+	SuccessMessage string `json:"successMessage,omitempty"`
+	// Hidden excludes the action from CLI/Android UI export while keeping it in the SSOT for IPC.
+	Hidden bool `json:"hidden,omitempty"`
+	// Surfaces restricts UI surfaces when non-empty (e.g. "cli", "android"). Empty = all visible surfaces.
+	Surfaces []string `json:"surfaces,omitempty"`
 }
 
 // DomainDetail groups actions under a specific category/domain
@@ -69,6 +80,7 @@ var Registry = []DomainDetail{
 				Title:       "List Files",
 				Description: "List all files in the virtual file system snapshot",
 				OutputType:  "table",
+				UnixAction:  "vfs_list",
 				Columns: []TableColumn{
 					{Header: "NAME", FieldSelector: "name", Format: "string"},
 					{Header: "VERSION", FieldSelector: "version", Format: "string"},
@@ -80,56 +92,69 @@ var Registry = []DomainDetail{
 				},
 			},
 			{
-				Name:        "upload",
-				Title:       "Upload File",
-				Description: "Upload a local file into the VFS registry",
-				OutputType:  "text",
+				Name:           "upload",
+				Title:          "Upload File",
+				Description:    "Upload a local file into the VFS registry",
+				OutputType:     "text",
+				UnixAction:     "vfs_upload",
+				SuccessMessage: "File '{{name}}' uploaded successfully to VFS.",
 				Parameters: []ParameterDetail{
 					{Name: "path", Type: "string", Required: true, Description: "Absolute or relative path to the local file", UIHint: "file_picker"},
 					{Name: "name", Type: "string", Required: false, Description: "Optional destination filename inside VFS"},
 				},
 			},
 			{
-				Name:        "subscribe",
-				Title:       "Subscribe to File",
-				Description: "Subscribe to download updates for a VFS file",
-				OutputType:  "text",
-				Parameters:  []ParameterDetail{vfsNameParam},
+				Name:           "subscribe",
+				Title:          "Subscribe to File",
+				Description:    "Subscribe to download updates for a VFS file",
+				OutputType:     "text",
+				UnixAction:     "vfs_subscribe",
+				SuccessMessage: "Subscribed to file '{{name}}'. Synchronization triggered.",
+				Parameters:     []ParameterDetail{vfsNameParam},
 			},
 			{
-				Name:        "unsubscribe",
-				Title:       "Unsubscribe from File",
-				Description: "Unsubscribe from updates for a VFS file",
-				OutputType:  "text",
-				Parameters:  []ParameterDetail{vfsNameParam},
+				Name:           "unsubscribe",
+				Title:          "Unsubscribe from File",
+				Description:    "Unsubscribe from updates for a VFS file",
+				OutputType:     "text",
+				UnixAction:     "vfs_unsubscribe",
+				SuccessMessage: "Unsubscribed from file '{{name}}'.",
+				Parameters:     []ParameterDetail{vfsNameParam},
 			},
 			{
-				Name:        "delete",
-				Title:       "Delete File",
-				Description: "Mark a file as deleted in the VFS registry",
-				OutputType:  "text",
-				Parameters:  []ParameterDetail{vfsNameParam},
+				Name:           "delete",
+				Title:          "Delete File",
+				Description:    "Mark a file as deleted in the VFS registry",
+				OutputType:     "text",
+				UnixAction:     "vfs_delete",
+				SuccessMessage: "File '{{name}}' marked as deleted in VFS registry.",
+				Parameters:     []ParameterDetail{vfsNameParam},
 			},
 			{
-				Name:        "purge",
-				Title:       "Purge Cache",
-				Description: "Purge the local physical cache of a VFS file",
-				OutputType:  "text",
-				Parameters:  []ParameterDetail{vfsNameParam},
+				Name:           "purge",
+				Title:          "Purge Cache",
+				Description:    "Purge the local physical cache of a VFS file",
+				OutputType:     "text",
+				UnixAction:     "vfs_purge",
+				SuccessMessage: "Physical cache for file '{{name}}' purged from disk.",
+				Parameters:     []ParameterDetail{vfsNameParam},
 			},
 			{
 				Name:        "open",
 				Title:       "Open File",
 				Description: "Download on-demand if missing and open or view a VFS file",
 				OutputType:  "text",
+				UnixAction:  "vfs_fetch",
 				Parameters:  []ParameterDetail{vfsNameParam},
 			},
 			{
-				Name:        "sync",
-				Title:       "Sync VFS",
-				Description: "Trigger VFS synchronization sequence",
-				OutputType:  "text",
-				},
+				Name:           "sync",
+				Title:          "Sync VFS",
+				Description:    "Trigger VFS synchronization sequence",
+				OutputType:     "text",
+				UnixAction:     "sync",
+				SuccessMessage: "Synchronization triggered successfully.",
+			},
 		},
 	},
 	{
@@ -141,6 +166,7 @@ var Registry = []DomainDetail{
 				Title:       "List Peers",
 				Description: "View connected cluster peers and status",
 				OutputType:  "table",
+				UnixAction:  "peers",
 				Columns: []TableColumn{
 					{Header: "PEER ID", FieldSelector: "id", Format: "string"},
 					{Header: "ADDRESS", FieldSelector: "address", Format: "string"},
@@ -159,6 +185,7 @@ var Registry = []DomainDetail{
 				Title:       "Generate Invite",
 				Description: "Generate an invite token valid for 15 minutes",
 				OutputType:  "text",
+				UnixAction:  "invite_generate",
 			},
 			{
 				Name:        "join",
@@ -182,6 +209,7 @@ var Registry = []DomainDetail{
 				Title:       "System Logs",
 				Description: "Get the centralized system logs",
 				OutputType:  "table",
+				UnixAction:  "logs",
 				Columns: []TableColumn{
 					{Header: "TIME", FieldSelector: "timestamp", Format: "string"},
 					{Header: "LEVEL", FieldSelector: "level", Format: "string"},
@@ -193,6 +221,7 @@ var Registry = []DomainDetail{
 				Title:       "Bandwidth Stats",
 				Description: "View real-time bandwidth speeds and totals",
 				OutputType:  "table",
+				UnixAction:  "bandwidth",
 				Columns: []TableColumn{
 					{Header: "METRIC", FieldSelector: "metric", Format: "string"},
 					{Header: "VALUE", FieldSelector: "value", Format: "string"},
@@ -209,6 +238,7 @@ var Registry = []DomainDetail{
 				Title:       "Discover Services",
 				Description: "Query active services in the cluster",
 				OutputType:  "table",
+				UnixAction:  "service_discover",
 				Columns: []TableColumn{
 					{Header: "SERVICE NAME", FieldSelector: ".", Format: "string"},
 				},
@@ -218,6 +248,7 @@ var Registry = []DomainDetail{
 				Title:       "Add Service",
 				Description: "Add a new service to the local node",
 				OutputType:  "text",
+				UnixAction:  "service_add",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or JSON file path"},
 					{Name: "type", Type: "string", Required: false, Description: "Service type (exec, grpc)", UIHint: "text", DefaultValue: "exec"},
@@ -233,6 +264,7 @@ var Registry = []DomainDetail{
 				Title:       "Remove Service",
 				Description: "Remove a service from the local node",
 				OutputType:  "text",
+				UnixAction:  "service_remove",
 				Parameters:  []ParameterDetail{svcNameParam},
 			},
 			{
@@ -240,6 +272,7 @@ var Registry = []DomainDetail{
 				Title:       "Subscribe Service",
 				Description: "Subscribe to remote service notifies by name or pattern (e.g. vision.*)",
 				OutputType:  "text",
+				UnixAction:  "service_subscribe",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern (suffix * / .*)"},
 				},
@@ -249,6 +282,7 @@ var Registry = []DomainDetail{
 				Title:       "Unsubscribe Service",
 				Description: "Stop filtering interest for a service name or pattern",
 				OutputType:  "text",
+				UnixAction:  "service_unsubscribe",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name or pattern to drop"},
 				},
@@ -258,6 +292,7 @@ var Registry = []DomainDetail{
 				Title:       "Run Service",
 				Description: "Execute a compute service (unary, streaming, or file transformation)",
 				OutputType:  "json",
+				UnixAction:  "service_run",
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to run"},
 					{Name: "inputs", Type: "string", Required: false, Description: "Service inputs in 'key1=val1,key2=val2' format or JSON object"},
@@ -266,29 +301,69 @@ var Registry = []DomainDetail{
 				},
 			},
 			{
+				Name:        "stream",
+				Title:       "Stream Service",
+				Description: "Execute a streaming compute service (IPC)",
+				OutputType:  "stream",
+				UnixAction:  "service_stream",
+				Hidden:      true,
+				Parameters: []ParameterDetail{
+					{Name: "name", Type: "string", Required: true, Description: "Service name to stream"},
+					{Name: "payload", Type: "string", Required: false, Description: "Service inputs JSON"},
+				},
+			},
+			{
+				Name:        "detail",
+				Title:       "Service Detail",
+				Description: "Resolve raw ServiceSchema for a service (IPC)",
+				OutputType:  "json",
+				UnixAction:  "service_detail",
+				Hidden:      true,
+				Parameters: []ParameterDetail{
+					{Name: "name", Type: "string", Required: true, Description: "Service name"},
+				},
+			},
+			{
 				Name:        "status",
 				Title:       "Task Status",
 				Description: "Query status of a specific task execution",
 				OutputType:  "json",
+				UnixAction:  "service_status",
 				Parameters: []ParameterDetail{
 					{Name: "task_id", Type: "string", Required: false, Description: "ID of the task to query"},
 				},
 			},
 			{
-				Name:        "add_pipeline",
-				Title:       "Add Pipeline",
-				Description: "Add a service pipeline schema to the cluster",
-				OutputType:  "text",
+				Name:           "add_pipeline",
+				Title:          "Add Pipeline",
+				Description:    "Add a service pipeline schema to the cluster",
+				OutputType:     "text",
+				UnixAction:     "pipeline_add",
+				SuccessMessage: "Pipeline added successfully",
 				Parameters: []ParameterDetail{
 					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
 					{Name: "schema-file", Type: "string", Required: true, Description: "Path to JSON file containing the pipeline schema", UIHint: "file_picker"},
 				},
 			},
 			{
-				Name:        "remove_pipeline",
-				Title:       "Remove Pipeline",
-				Description: "Remove a pipeline schema from the cluster",
-				OutputType:  "text",
+				Name:           "validate_pipeline",
+				Title:          "Validate Pipeline",
+				Description:    "Validate a pipeline schema JSON without saving (IPC)",
+				OutputType:     "text",
+				UnixAction:     "pipeline_validate",
+				Hidden:         true,
+				SuccessMessage: "Pipeline schema is valid",
+				Parameters: []ParameterDetail{
+					{Name: "schema", Type: "string", Required: true, Description: "Pipeline schema JSON"},
+				},
+			},
+			{
+				Name:           "remove_pipeline",
+				Title:          "Remove Pipeline",
+				Description:    "Remove a pipeline schema from the cluster",
+				OutputType:     "text",
+				UnixAction:     "pipeline_remove",
+				SuccessMessage: "Pipeline removed successfully",
 				Parameters: []ParameterDetail{
 					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
 				},
@@ -298,6 +373,7 @@ var Registry = []DomainDetail{
 				Title:       "Get Pipeline Schema",
 				Description: "Retrieve a pipeline schema JSON by ID",
 				OutputType:  "json",
+				UnixAction:  "pipeline_get",
 				Parameters: []ParameterDetail{
 					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
 				},
@@ -307,6 +383,7 @@ var Registry = []DomainDetail{
 				Title:       "Clone Pipeline Schema",
 				Description: "Clone and customize a pipeline schema for local target node execution",
 				OutputType:  "text",
+				UnixAction:  "pipeline_clone",
 				Parameters: []ParameterDetail{
 					{Name: "id", Type: "string", Required: true, Description: "Existing pipeline identifier to clone"},
 					{Name: "new_id", Type: "string", Required: false, Description: "New ID for cloned pipeline"},
@@ -318,6 +395,7 @@ var Registry = []DomainDetail{
 				Title:       "List Pipelines",
 				Description: "List all registered pipeline schemas",
 				OutputType:  "table",
+				UnixAction:  "pipeline_list",
 				Columns: []TableColumn{
 					{Header: "PIPELINE ID", FieldSelector: "id", Format: "string"},
 					{Header: "VERSION", FieldSelector: "version", Format: "string"},
@@ -329,6 +407,7 @@ var Registry = []DomainDetail{
 				Title:       "Run Pipeline",
 				Description: "Execute a pipeline across the cluster",
 				OutputType:  "json",
+				UnixAction:  "service_run",
 				Parameters: []ParameterDetail{
 					{Name: "id", Type: "string", Required: true, Description: "Pipeline ID to run"},
 					{Name: "payload", Type: "string", Required: false, Description: "Initial input parameters payload in JSON format"},
@@ -357,15 +436,153 @@ func init() {
 	}
 }
 
-// GetRegistryJSON returns the complete UI Schema registry in JSON format.
+// Key returns "domain.action" for an ActionDetail.
+func (a ActionDetail) Key() string {
+	return a.Domain + "." + a.Name
+}
+
+// VisibleOn reports whether the action should appear on a UI surface.
+func (a ActionDetail) VisibleOn(surface string) bool {
+	if a.Hidden {
+		return false
+	}
+	if len(a.Surfaces) == 0 {
+		return true
+	}
+	for _, s := range a.Surfaces {
+		if s == surface {
+			return true
+		}
+	}
+	return false
+}
+
+// FindAction looks up an action by domain and name.
+func FindAction(domain, name string) (ActionDetail, bool) {
+	for _, d := range Registry {
+		if d.Name != domain {
+			continue
+		}
+		for _, a := range d.Actions {
+			if a.Name == name {
+				return a, true
+			}
+		}
+	}
+	return ActionDetail{}, false
+}
+
+// UnixActionFor returns the unix IPC action string for domain.action.
+func UnixActionFor(domain, name string) (string, bool) {
+	a, ok := FindAction(domain, name)
+	if !ok || a.UnixAction == "" {
+		return "", false
+	}
+	return a.UnixAction, true
+}
+
+// MustUnixAction returns the unix action or panics (for handler registration).
+func MustUnixAction(domain, name string) string {
+	ua, ok := UnixActionFor(domain, name)
+	if !ok {
+		panic(fmt.Sprintf("uischema: missing UnixAction for %s.%s", domain, name))
+	}
+	return ua
+}
+
+// AllUnixActions maps unixAction → first "domain.action" that declares it.
+func AllUnixActions() map[string]string {
+	out := make(map[string]string)
+	for _, d := range Registry {
+		for _, a := range d.Actions {
+			if a.UnixAction == "" {
+				continue
+			}
+			if _, exists := out[a.UnixAction]; !exists {
+				out[a.UnixAction] = a.Key()
+			}
+		}
+	}
+	return out
+}
+
+// VisibleRegistry returns a copy of Registry with Hidden actions removed (and Surfaces filtered when surface != "").
+func VisibleRegistry(surface string) []DomainDetail {
+	out := make([]DomainDetail, 0, len(Registry))
+	for _, d := range Registry {
+		vis := DomainDetail{Name: d.Name, Title: d.Title}
+		for _, a := range d.Actions {
+			if surface == "" {
+				if a.Hidden {
+					continue
+				}
+			} else if !a.VisibleOn(surface) {
+				continue
+			}
+			vis.Actions = append(vis.Actions, a)
+		}
+		if len(vis.Actions) > 0 {
+			out = append(out, vis)
+		}
+	}
+	return out
+}
+
+// ApplyDefaults fills empty args from parameter DefaultValue.
+func ApplyDefaults(action ActionDetail, args map[string]string) map[string]string {
+	if args == nil {
+		args = make(map[string]string)
+	}
+	out := make(map[string]string, len(args)+len(action.Parameters))
+	for k, v := range args {
+		out[k] = v
+	}
+	for _, p := range action.Parameters {
+		if out[p.Name] == "" && p.DefaultValue != "" {
+			out[p.Name] = p.DefaultValue
+		}
+	}
+	return out
+}
+
+// MissingRequired returns names of required parameters that are still empty after defaults.
+func MissingRequired(action ActionDetail, args map[string]string) []string {
+	args = ApplyDefaults(action, args)
+	var missing []string
+	for _, p := range action.Parameters {
+		if p.Required && strings.TrimSpace(args[p.Name]) == "" {
+			missing = append(missing, p.Name)
+		}
+	}
+	return missing
+}
+
+// FormatSuccessMessage expands SuccessMessage placeholders {{key}} from args and {{result}}.
+func FormatSuccessMessage(action ActionDetail, args map[string]string, result string) string {
+	msg := action.SuccessMessage
+	if msg == "" {
+		if result != "" {
+			return result
+		}
+		return ""
+	}
+	out := msg
+	for k, v := range args {
+		out = strings.ReplaceAll(out, "{{"+k+"}}", v)
+	}
+	out = strings.ReplaceAll(out, "{{result}}", result)
+	return out
+}
+
+// GetRegistryJSON returns the UI-visible Schema registry in JSON format.
 func GetRegistryJSON() string {
-	b, _ := json.Marshal(Registry)
+	b, _ := json.Marshal(VisibleRegistry(""))
 	return string(b)
 }
 
-// GetDomainJSON returns a specific domain metadata by name in JSON format.
+// GetDomainJSON returns a specific domain metadata by name in JSON format (visible actions only).
 func GetDomainJSON(domainName string) string {
-	for _, d := range Registry {
+	for _, d := range VisibleRegistry("") {
 		if d.Name == domainName {
 			b, _ := json.Marshal(d)
 			return string(b)

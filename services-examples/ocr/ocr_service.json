@@ -1,6 +1,6 @@
 {
     "type": "script",
-    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/ocr/main.py",
+    "exec": "uv run --project __SERVICES_DIR__ python __SERVICES_DIR__/ocr/main.py",
     "schema": {
         "name": "ocr",
         "description": "OCR service to optimize PDF files",

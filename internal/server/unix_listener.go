@@ -7,13 +7,13 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
+
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
 
 func (s *Server) listenUnixSocket() {
-	sockPath := filepath.Join(s.Config.StoragePath, "proxyma.sock")
+	sockPath := protocol.UnixSockPath(s.Config.StoragePath)
 	_ = os.Remove(sockPath) // clean up old socket if it exists
 	l, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -81,138 +81,20 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 			return
 		}
 
-		var respData any
-		var actionErr error
-
-		switch req.Action {
-		case "sync":
-			actionErr = s.announceAndSync()
-
-		case "vfs_list":
-			respData = s.LocalVFSList()
-
-		case "vfs_upload":
-			actionErr = s.LocalVFSUpload(req.Args["name"], req.Args["path"])
-
-		case "vfs_subscribe", "vfs_unsubscribe", "vfs_delete", "vfs_purge", "vfs_fetch":
-			fileName := req.Args["name"]
-			if fileName == "" {
-				actionErr = fmt.Errorf("missing name parameter")
-				break
-			}
-			switch req.Action {
-			case "vfs_subscribe":
-				actionErr = s.LocalVFSSubscribe(fileName, true)
-			case "vfs_unsubscribe":
-				actionErr = s.LocalVFSSubscribe(fileName, false)
-			case "vfs_delete":
-				actionErr = s.Storage.DeleteLocalFile(fileName)
-			case "vfs_purge":
-				actionErr = s.Storage.DeleteLocalCache(fileName)
-			case "vfs_fetch":
-				actionErr = s.FetchFileOnDemand(fileName)
-			}
-
-		case "service_discover":
-			respData, actionErr = s.LocalServiceDiscover()
-
-		case "service_detail":
-			schema, _, err := s.LocalServiceDetail(req.Args["name"])
-			if err != nil {
-				actionErr = err
-				break
-			}
-			respData = schema
-
-		case "service_add":
-			respData, actionErr = s.LocalServiceAdd(
-				req.Args["name"],
-				req.Args["type"],
-				req.Args["exec"],
-				req.Args["desc"],
-				req.Args["param"],
-				req.Args["no-required"],
-				req.Args["schema-file"],
-			)
-
-		case "service_remove":
-			respData, actionErr = s.LocalServiceRemove(req.Args["name"])
-
-		case "service_subscribe":
-			actionErr = s.LocalServiceSubscribe(req.Args["name"], true)
-			if actionErr == nil {
-				respData = fmt.Sprintf("Subscribed to service pattern %q", req.Args["name"])
-			}
-
-		case "service_unsubscribe":
-			actionErr = s.LocalServiceSubscribe(req.Args["name"], false)
-			if actionErr == nil {
-				respData = fmt.Sprintf("Unsubscribed from service pattern %q", req.Args["name"])
-			}
-
-		case "service_stream":
-			svcName := req.Args["service"]
-			payloadStr := req.Args["payload"]
-			err := s.LocalServiceStreamRun(svcName, payloadStr, func(chunk map[string]any) {
-				chunkBytes, _ := json.Marshal(chunk)
-				writeUnixNDJSON(c, protocol.UnixResponse{Success: true, Data: chunkBytes})
-			})
-			if err != nil {
-				writeUnixNDJSON(c, protocol.UnixResponse{Success: false, Error: err.Error()})
-			}
+		h, ok := unixHandlers[req.Action]
+		if !ok {
+			writeUnixResponse(c, nil, fmt.Errorf("unknown action: %s", req.Action))
 			return
-
-		case "service_run":
-			respData, actionErr = s.LocalServiceRun(req.Args["service"], req.Args["payload"], req.Args["strategy"])
-
-		case "service_status":
-			taskID := req.Args["task_id"]
-			if taskID == "" {
-				respData = s.Compute.GetAllTaskStatuses()
-			} else {
-				r, ok := s.Compute.GetTaskResponse(taskID)
-				if !ok {
-					actionErr = fmt.Errorf("task not found")
-					break
-				}
-				respData = r
-			}
-
-		case "invite_generate":
-			token, _, err := s.LocalInviteGenerate(DefaultInviteMinutes)
-			respData, actionErr = token, err
-
-		case "logs":
-			respData = s.LocalLogs()
-
-		case "bandwidth":
-			respData = s.LocalBandwidthStats()
-
-		case "peers":
-			respData = s.LocalPeersList()
-
-		case "pipeline_add":
-			actionErr = s.LocalPipelineAdd(req.Args["schema"])
-
-		case "pipeline_validate":
-			actionErr = s.LocalPipelineValidate(req.Args["schema"])
-
-		case "pipeline_remove":
-			actionErr = s.LocalPipelineRemove(req.Args["id"])
-
-		case "pipeline_list":
-			respData = s.LocalPipelineList()
-
-		case "pipeline_get":
-			respData, actionErr = s.LocalPipelineGet(req.Args["id"])
-
-		case "pipeline_clone":
-			respData, actionErr = s.LocalPipelineClone(req.Args["id"], req.Args["new_id"], req.Args["target_node"])
-
-		default:
-			actionErr = fmt.Errorf("unknown action: %s", req.Action)
 		}
-
+		if h.Stream != nil {
+			h.Stream(s, req.Args, c)
+			return
+		}
+		if h.Unary == nil {
+			writeUnixResponse(c, nil, fmt.Errorf("action %s has no handler", req.Action))
+			return
+		}
+		respData, actionErr := h.Unary(s, req.Args)
 		writeUnixResponse(c, respData, actionErr)
 	}
 }

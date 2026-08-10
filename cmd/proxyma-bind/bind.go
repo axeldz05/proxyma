@@ -171,6 +171,35 @@ func BindMessageJSON(msg string) string {
 // bindMessageJSON is the unexported alias used inside this package.
 func bindMessageJSON(msg string) string { return BindMessageJSON(msg) }
 
+// DispatchDomainAction resolves domain.action → unixAction via uischema SSOT, then dispatchUnixOrLocal.
+// Prefer InvokeDomainAction (uses CallUnixUnary). localCall nil → CallUnixUnary.
+func DispatchDomainAction(domain, action string, args map[string]string, localCall func(s *server.Server) (any, error)) string {
+	unixAct, ok := uischema.UnixActionFor(domain, action)
+	if !ok {
+		return BindErrorJSON(fmt.Errorf("no unix action for %s.%s", domain, action))
+	}
+	if localCall == nil {
+		localCall = func(s *server.Server) (any, error) {
+			return server.CallUnixUnary(s, unixAct, args)
+		}
+	}
+	return dispatchUnixOrLocal(unixAct, args, localCall)
+}
+
+// dispatchDomainLocalOrOffline is L3 with offline arm, resolving unix action from uischema.
+func dispatchDomainLocalOrOffline(
+	domain, action string,
+	args map[string]string,
+	localCall func(s *server.Server) (any, error),
+	offline func() (any, error),
+) string {
+	unixAct, ok := uischema.UnixActionFor(domain, action)
+	if !ok {
+		return BindErrorJSON(fmt.Errorf("no unix action for %s.%s", domain, action))
+	}
+	return dispatchUnixLocalOrOffline(unixAct, args, localCall, offline)
+}
+
 // dispatchUnixLocalOrOffline is L3: in-process localCall, else unix, else optional offline fallback.
 func dispatchUnixLocalOrOffline(
 	action string,
@@ -206,7 +235,7 @@ func DialUnix(storagePath string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't load config: %w", err)
 	}
-	sockPath := filepath.Join(cfg.StoragePath, "proxyma.sock")
+	sockPath := protocol.UnixSockPath(cfg.StoragePath)
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("daemon is unreachable. Is 'proxyma run' active? Error: %w", err)

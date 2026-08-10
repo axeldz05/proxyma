@@ -1,6 +1,6 @@
 {
     "type": "script",
-    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/extract/main.py",
+    "exec": "uv run --project __SERVICES_DIR__ python __SERVICES_DIR__/extract/main.py",
     "schema": {
         "name": "text/extract",
         "description": "Extract text from PDF or Image",

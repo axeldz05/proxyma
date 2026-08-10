@@ -1,45 +1,90 @@
+---
+name: continuous-granularity
+description: Build APIs with compression-oriented continuous granularity—high-level wrappers never eliminate lower-level control. Includes Proxyma L1/L2/L3 examples for unix IPC, services, peers, and VFS.
+---
+
 # Continuous Granularity
 
-**Objective:** To build and modify APIs, abstractions, and user interfaces using a compression-oriented approach. The goal is to maximize code compaction while maintaining continuous granularity—ensuring high-level wrappers never eliminate or obscure lower-level control, avoiding API "holes" or artificial restrictions.
+**Objective:** Maximize compaction while keeping **continuous granularity**—high-level wrappers never obscure lower-level control (no API holes).
 
 ## Core Principles
 
-1. **Compression Over A Priori Design:** Do not pre-design complex object hierarchies, abstractions, or deep architectures. Write the inline, low-level, concrete code first. Compress it into functions or layout wrappers only when redundant patterns emerge.
+1. **Compression over a priori design** — write concrete code first; extract when patterns repeat.
+2. **Total cost focus** — prefer simple local solutions over fragile meta-frameworks.
+3. **Continuous granularity** — when bundling into a high-level function, **keep lower pieces public** and callable.
 
-2. **Total Cost Focus:** Evaluate all code changes strictly by their impact on total development time and maintainability. Accept localized, slightly "ugly" solutions (e.g., passing explicit counts) if the alternative requires highly complex, error-prone language magic (e.g., deep template meta-programming or deferred logic loops).
+## Three-Tier Rule
 
-3. **Continuous Granularity:** Maintain every layer of control. When bundling low-level operations into a high-level function, keep the smaller pieces exposed and functional. High-level functions must always be trivially replaceable by the lower-level components they compose.
+```
+Level 3: High-level utility     (e.g. dispatchUnixOrLocal, LocalServiceAdd)
+Level 2: Compressed wrapper     (e.g. sendUnixSocketCommand, UpsertLocalService, callPeer)
+Level 1: Low-level primitives   (e.g. DialUnix, WriteUnixRequest, SavePhysicalBlob, peerClient.Notify)
+```
 
-## Implementation Rules & Anti-Patterns
-### Layering vs. Destructive Modification
-When a specific high-level abstraction needs to adapt to a new, hyper-specific pattern (e.g., a toggle checkbox button instead of a plain click button):
+### Layering vs Destructive Modification
+* **DO NOT** force a mid-level API to only support a new special case (breaks callers that need the mid level).
+* **DO** leave L2 intact and add a thin L3 on top.
 
-* **DO NOT** modify the existing intermediate function to strictly require the new paradigm (e.g., forcing a pointer to a mutable boolean into a generic button call). This creates a granularity discontinuity for users who need the intermediate functionality without the data-binding wrapper.
-* **DO** leave the intermediate function intact and build a shallow, higher-level layer on top of it (bool_button() wrapping push_button()).
+## Proxyma L1 / L2 / L3 Map
 
-### The Three-Tier Architecture Rule
+### Unix IPC (`cmd/proxyma-bind`)
+| Tier | API |
+|------|-----|
+| L1 | `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
+| L2 | `sendUnixSocketCommand`; `server.CallUnixUnary` |
+| L3 | **`InvokeDomainAction`** / `NormalizeActionArgs`; `dispatchUnixOrLocal`; stream via `StreamService` |
 
-Always maintain access to three distinct levels of API granularity:
+### Admin UI actions (`shared/uischema`)
+| Tier | API |
+|------|-----|
+| L1 | `ActionDetail` / `FindAction` / `UnixActionFor` / `ApplyDefaults` / `MissingRequired` / `SuccessMessage` |
+| L2 | Daemon `unixHandlers` + `CallUnixUnary` |
+| L3 | CLI `executeActionLocal` → Invoke + `cliEscapes`; Cobra from `VisibleRegistry("cli")` |
 
-+-----------------------------------------------------------------------+
-| Level 3: High-Level Utility (e.g., layout.bool_button("X", &var))     |
-+-----------------------------------------------------------------------+
-| Level 2: Compressed Wrapper  (e.g., layout.push_button("X", checked)) |
-+-----------------------------------------------------------------------+
-| Level 1: Low-Level Primitives (e.g., draw_big_text_button(...))       |
-+-----------------------------------------------------------------------+
+### Services
+| Tier | API |
+|------|-----|
+| L1 | `LoadServicesMap` / `SaveServicesMap` |
+| L2 | `BuildLocalServiceFromArgs`, `UpsertLocalService`, `BuildHandler` |
+| L3 | `LocalServiceAdd` / bind `AddService` |
 
-### State and Encapsulation
-* **Keep Layout State Queryable:** Never make state or layout structures entirely private or opaque. If an agent or developer encounters an edge case that the high-level API doesn't support, they must be able to mix low-level primitive calls alongside high-level wrappers inside the same context without rewriting the entire module.
+### Peers
+| Tier | API |
+|------|-----|
+| L1 | `peerClient.*`, `SetPeerOnline` / `SetPeerOffline` |
+| L2 | `callPeer` |
+| L3 | `forEachPeer` |
 
-## Code Generation Checklists
-### Before Creating an Abstraction / Helper
-* Are you pulling out a pattern that has repeated at least 3+ times in the immediate context?
-* Does the helper allow the caller to step down a level of abstraction if a slight variation occurs?
-* If this helper introduces a strict parameter (like column_count), is it worth accepting that manual input to avoid complex framework overhead or frame-latency tracking? (Usually, yes).
+### VFS blobs
+| Tier | API |
+|------|-----|
+| L1 | `DownloadBlob`, `SavePhysicalBlob`, `Upsert`, `StoreRemoteBlob` |
+| L2 | `fetchBlobFromPeer`, `StageLocalFile` |
+| L3 | downloadWorker / DispatchTask / VFS stager callbacks |
 
-### When Refactoring / Compressing Code
-* Step 1: Isolate the repetitive chunks.
-* Step 2: Package them into a local helper or layout state struct method.
-* Step 3: Ensure the underlying components are public/accessible.
-* Step 4: Verify that a developer can still weave raw primitive calls between your new compressed helpers.
+### Relay
+| Tier | API |
+|------|-----|
+| L1 | HTTP RoundTrip to `/relay/forward` |
+| L2 | `ForwardRelay` |
+| L3 | `sendRelayMessage` / RoundTrip Phase 2 rebuild `http.Response` / join fallback |
+
+### Service metadata
+| Tier | API |
+|------|-----|
+| L1/L2 | `GetServiceSchema` → `protocol.ServiceSchema` |
+| L3 | `GetServiceDetails` → Android `ServiceDetail` + `uiHint` |
+
+## Checklist Before Adding a Helper
+* Pattern repeated ≥2–3 times?
+* Caller can drop to L1 if the new helper does not fit?
+* Prefer an extra explicit param over opaque framework state?
+
+## When Refactoring
+1. Isolate repeated chunks.  
+2. Package as L2; keep L1 exported.  
+3. Add L3 only for convenience.  
+4. Verify raw L1 calls still weave between L2/L3.
+
+## After Changing Tiers
+Update `.cursorrules.md`, `.agents/AGENTS.md`, and this skill’s Proxyma map.

@@ -38,21 +38,24 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Repository Map (Current)
 
 ### CLI — `cmd/proxyma/`
-* `root.go` — Cobra registration + `Execute`.
-* `cli_actions.go` — `executeActionLocal` + resolve helpers (`IsBindError`).
+* `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`.
+* `cli_actions.go` — `executeActionLocal` → `InvokeDomainAction` + `cliEscapes`; `ApplyDefaults`/`MissingRequired` from uischema.
 * `cli_render.go` / `cli_open.go` — formatting / editor+open.
 
 ### Bindings — `cmd/proxyma-bind/`
-* L1 IPC + `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`.
+* L1 IPC + **`InvokeDomainAction`** / `NormalizeActionArgs` / `dispatchUnixOrLocal` / `dispatchUnixStreamOrLocal`.
+* Socket via **`protocol.UnixSockPath`**; `ParameterDetail` = `uischema.ParameterDetail`.
+* Execution SSOT: `server.CallUnixUnary` (same bodies as unix listener).
 * `LocalServiceDetail` via bind schema paths; `BindErrorJSON` / `IsBindError` (StartNode/ChangeStorage too).
 * `GetServiceSchema` offline arm; `resolveServiceSchema` / `GetServiceDetails`; `RunPipeline` → `RunService`.
 
 ### Server — `internal/server/`
 * `server.go` lifecycle; `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
+* `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction`; `unix_listener.go` accept loop only.
 * `catalog_kinds.go` — `catalogKinds` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`.
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
 * `service_exec.go` — Run/Stream + ingest (`ResultLocalPath`); **`submitTrackedTask`**.
-* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` (incl. cycle); `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
+* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
 * `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; HTTP mounts use **`protocol.Path*`** (`handlePeerIDAction`, schema notify re-validates).
 * `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap.
 
@@ -62,9 +65,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `NATMapper.SetOnMapped`; `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`; `routeOverQUICSession`.
 
 ### Storage / Compute / Protocol
-* `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`.
+* `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
-* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, `DefaultTCPPort`, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
+* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, `DefaultTCPPort`, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
+* **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, `DispatchDomainAction` in bind). Compute `ServiceSchema` remains a separate contract.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
@@ -72,8 +76,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### Examples — `services-examples/`
 * Lab services: `sensor.telemetry` (server_stream), `music.resolve`/`convert`/`stream`, `remote.screen`/`input`, `media.resize`/`watermark`, `clipboard.sync`, `shell.attach`.
-* Pipelines: `music_prepare_pipeline.json` (`resolve→convert`), `media/thumbnail_pipeline.json` (`resize→watermark`).
-* `start_upstreams.sh` for HTTP NDJSON upstreams (ports 19101/19102); `scripts/bootstrap_dev.sh` registers them.
+* Pipelines: `music_prepare_pipeline.json`, `media/thumbnail_pipeline.json`, `ocr_obsidian_pipeline.json`.
+* `*_service.json` uses `__SERVICES_DIR__`; `scripts/bootstrap_dev.sh` globs + rewrites + registers all services/pipelines.
+* Editor: module `proxyma` package `./services-examples/editor` (`protocol` types + `dialUnary`).
+* `start_upstreams.sh` for HTTP NDJSON upstreams (ports 19101/19102); registered by `scripts/bootstrap_dev.sh`.
 * Music unit tests: `music/test_music.py`. See `services-examples/README.md`.
 
 ---
@@ -102,7 +108,12 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | HTTP paths / relay | `protocol.Path*` / `NewRelayRequest` / `RequestPathWithQuery` / `MaxRelayBodyBytes` |
 | RPC timeouts | `protocol.RPCTimeout*` / `PeerRPC*` |
 | Default TCP port | `protocol.DefaultTCPPort` |
-| Unix IPC | Dial/Write/Read/Scan + dispatch* / `dispatchUnixStreamOrLocal` |
+| Unix sock path | `protocol.SockFileName` / `UnixSockPath` |
+| Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` |
+| Bolt bucket names | `storage` `allBuckets` / `bucket*` / `vfsIndexBucket` |
+| Admin UI actions | `uischema.Registry` / `UnixAction` / `FindAction` / `VisibleRegistry` / `SuccessMessage` |
+| Unix/CLI dispatch | `server.CallUnixUnary` / `InvokeDomainAction` / `cliEscapes` |
+| Unix IPC | Dial/Write/Read/Scan + dispatch* / `DispatchDomainAction` / `dispatchUnixStreamOrLocal` |
 | Bind errors | `BindErrorJSON` / `ParseBindError` / `IsBindError` |
 | Cert / CA hash / PEM write | `WriteNodePEMs` / `signLeaf` / `LeafDNSNames` / `CAHashFromPEM` / `ReadCAPEM` / `ResolveNodeCertPaths` / `TLSConfigTrustCAHash` / `CSRCommonName` |
 | QUIC addr | `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr` |

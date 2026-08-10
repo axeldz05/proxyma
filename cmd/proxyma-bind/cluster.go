@@ -11,20 +11,22 @@ import (
 
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
-	"proxyma/internal/server"
 	"proxyma/internal/utils"
 )
 
 // GenerateInviteToken creates an invite token valid for 15 minutes.
 func GenerateInviteToken() string {
-	raw := dispatchUnixOrLocal("invite_generate", nil, func(s *server.Server) (any, error) {
-		token, _, err := s.LocalInviteGenerate(server.DefaultInviteMinutes)
-		return token, err
-	})
+	raw := InvokeDomainAction("cluster", "invite", nil)
 	if IsBindError(raw) {
 		return raw
 	}
-	// Unix path returns JSON-encoded string; in-process returns plain token.
+	// Prefer message envelope; fall back to raw / JSON-encoded token.
+	var msgEnv struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(raw), &msgEnv); err == nil && msgEnv.Message != "" {
+		return msgEnv.Message
+	}
 	var token string
 	if err := json.Unmarshal([]byte(raw), &token); err == nil {
 		return token

@@ -1,6 +1,6 @@
 {
     "type": "script",
-    "exec": "uv run --project /home/drusila/Projects/proxyma/services-examples python /home/drusila/Projects/proxyma/services-examples/media/watermark/main.py",
+    "exec": "uv run --project __SERVICES_DIR__ python __SERVICES_DIR__/media/watermark/main.py",
     "schema": {
         "name": "media.watermark",
         "description": "Draw a text watermark on an image",

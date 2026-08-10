@@ -1,58 +1,67 @@
 ---
 name: semantic-compression
-description: Write maintainable code by applying semantic compression. Avoid premature abstraction; extract reusable parts only after two or more identical use cases appear. Start by making code usable, then refactor bottom-up to remove duplication.
+description: Write maintainable code by applying semantic compression. Avoid premature abstraction; extract reusable parts only after two or more identical use cases appear. Start by making code usable, then refactor bottom-up to remove duplication. Includes Proxyma SSOT helpers already compressed.
 ---
 
 # Semantic Compression
 
 ## Core Philosophy
-Treat your code like a dictionary compressor that runs continuously. Write concrete, working code first. Compress (refactor) only when duplication emerges naturally. Let abstractions arise from real examples, not upfront design.
+Treat code like a dictionary compressor that runs continuously. Write concrete working code first. Compress only when duplication emerges. Abstractions arise from real examples, not upfront design.
 
 ## Rules
 
-1. **Write specific code first** – implement exactly what each case needs; ignore “reusability”.
-2. **Wait for the second occurrence** – only extract common logic when you see it again (or have a very similar second case).
+1. **Write specific code first** — ignore “reusability” until needed.
+2. **Wait for the second occurrence** — extract when you see it again (≥2; Proxyma golden rule often uses **>2 zones** as the trigger to force compression).
 3. **Compress by pulling out shared parts**:
-   - Group repeatedly used local variables into a struct (*shared stack frame*).
+   - Group repeated locals into a struct (*shared stack frame*).
    - Wrap repeated blocks into a plain function.
-   - Turn functions into methods if they operate on the same struct.
-4. **Postpone or eliminate fragile calculations** – e.g., compute total height after building rows rather than pre-counting.
-5. **Keep the call site readable** – the final API should read like a step‑by‑step recipe, minimising noise.
+   - Turn functions into methods on the shared struct.
+4. **Postpone fragile pre-calculations**.
+5. **Keep the call site readable** — recipe-style, minimal noise.
 
-## Typical Process (Example)
-From repetitive inline layout code:
-```c
-float x0 = x, y0 = y;
-y0 -= row_height; draw_button(x0, y0, w, h, "Auto Snap");
-y0 -= row_height; draw_button(x0, y0, w, h, "Reset");
-```
-1. Create a struct holding at_x, at_y, row_height, etc.
-2. Add functions row() and push_button(text).
-3. Calculate final panel height only at the end (complete()).
+## Proxyma Golden Rule
 
-Result:
-```c
-Panel_Layout layout(this, x, y, width);
-layout.window_title(title);
+> If changing one implementation / adding one variant requires editing **more than 2 code zones**, there is repeated behavior — compress.
 
-layout.row();
-if (layout.push_button("Auto Snap")) { do_auto_snap(this); }
+After compression, altering that behavior should touch **one** SSOT (plus thin call sites).
 
-layout.row();
-if (layout.push_button("Reset Orientation")) { … }
+## Already Compressed in Proxyma (Do Not Duplicate)
 
-layout.complete(this);
-```
+| Pattern | SSOT location |
+|---------|----------------|
+| `services.json` load/save/build/upsert/delete | `internal/compute/services_config.go` |
+| Handler from `ServiceType` + exec | `compute.BuildHandler` |
+| Peer fan-out + SetPeerOnline/Offline | `internal/server/peer_rpc.go` (`callPeer`, `forEachPeer`) |
+| Named peer RPC timeouts | `PeerRPCShort`, `PeerRPCDefault`, `PeerRPCBlob`, … |
+| `/relay/forward` marshal/POST/decode | `p2p.ForwardRelay` |
+| Download blob + store | `server.fetchBlobFromPeer` |
+| Local path → CAS + VFS upsert | `storage.StageLocalFile` |
+| Unix socket dial/write/read/NDJSON | `cmd/proxyma-bind`: `DialUnix`, `WriteUnixRequest`, `ReadUnixResponse`, `ScanUnixNDJSON` |
+| Unary unix-or-local dispatch | `dispatchUnixOrLocal` / **`InvokeDomainAction`** (CallUnixUnary) |
+| Admin action names + unix IPC strings | `shared/uischema.Registry` (`UnixAction`, `FindAction`, `MustUnixAction`) |
+| Daemon unix dispatch table | `internal/server/unix_handlers.go` (`unixHandlers` / `CallUnixUnary`) |
+| CLI action dispatch | `executeActionLocal` → `InvokeDomainAction` + `cliEscapes` |
+| Unix socket path | `protocol.SockFileName` / `protocol.UnixSockPath` |
+| Admin param DTO | `uischema.ParameterDetail` (bind aliases; do not clone) |
+| Raw service schema vs Android DTO | `GetServiceSchema` vs `GetServiceDetails` |
+| Streaming type aliases | `ServiceType.Normalize()` / `IsStreaming()` |
+| File/image UI | `ServiceParameter.UIHint` — consumers do not re-sniff names |
+| Bandwidth JSON | `protocol.BandwidthStats` only |
+| TLS construction | `p2p.LoadNodeTLS` |
+| HTTP stream handlers | `BuildHTTP*` / `BuildHandler` (`server_stream`, `http_bidi`, …) |
+| WebRTC DataChannel JSON | `compute.BuildWebRTCHandler` + `ServiceTypeWebRTC` |
+| HTTP JSON helpers | `utils.RespondJSON` / `DecodeJSONOrError` |
+
 ## What to Avoid
-* No class hierarchies based on domain nouns (Employee, Manager) before writing code.
-* No deep inheritance, templates, or patterns introduced before duplication exists.
-* No abstraction from a single use‑case – at least two real examples are required.
+* Class hierarchies from domain nouns before code exists.
+* Deep inheritance / patterns before duplication.
+* Abstraction from a **single** use case.
+* Copying a “temporary” offline path that duplicates server logic (bind offline must call the same L2 as server).
 
 ## Quality Indicators
-* High semantic density: each line expresses a clear domain action.
-* Changes are local: altering one behaviour means touching one place.
-* Adding a new variant follows the same simple pattern.
-* Debugging is straightforward because shared code is a single point of truth.
+* High semantic density; changes are local; new variants follow one pattern; one point of truth for debugging.
 
-**One‑line Mantra:**
-First make it work, then make it reusable – but only after you’ve seen the same pattern twice.
+## After You Compress
+Update `.cursorrules.md`, `.agents/AGENTS.md`, and `architecture-and-refactor-auditor` / this skill if you added a new SSOT helper.
+
+**Mantra:** First make it work, then make it reusable — but only after you’ve seen the same pattern twice (or N>2 zones).

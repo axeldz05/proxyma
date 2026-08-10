@@ -6,79 +6,42 @@ import (
 	"path/filepath"
 
 	"proxyma/internal/protocol"
-	"proxyma/internal/server"
 )
 
 func GetVFSFilesJson() string {
-	return dispatchUnixOrLocal("vfs_list", nil, func(s *server.Server) (any, error) {
-		return s.LocalVFSList(), nil
-	})
+	return InvokeDomainAction("storage", "list", nil)
 }
 
 // SyncVFS triggers VFS synchronization.
 func SyncVFS() string {
-	return dispatchUnixOrLocal("sync", nil, func(s *server.Server) (any, error) {
-		err := s.ExecuteSync()
-		if err != nil {
-			return nil, err
-		}
-		return "", nil
-	})
+	return InvokeDomainAction("storage", "sync", nil)
 }
 
 // UploadFile uploads a local file to the node's VFS.
 func UploadFile(name string, filePath string) string {
-	return dispatchUnixOrLocal("vfs_upload", map[string]string{
+	return InvokeDomainAction("storage", "upload", map[string]string{
 		"path": filePath,
 		"name": name,
-	}, func(s *server.Server) (any, error) {
-		if err := s.LocalVFSUpload(name, filePath); err != nil {
-			return nil, err
-		}
-		return "", nil
 	})
 }
 
 // SetSubscription enables/disables subscription for a VFS file.
 func SetSubscription(name string, subscribe bool) string {
-	action := "vfs_subscribe"
+	action := "subscribe"
 	if !subscribe {
-		action = "vfs_unsubscribe"
+		action = "unsubscribe"
 	}
-	return dispatchUnixOrLocal(action, map[string]string{
-		"name": name,
-	}, func(s *server.Server) (any, error) {
-		if err := s.LocalVFSSubscribe(name, subscribe); err != nil {
-			return nil, err
-		}
-		return "", nil
-	})
+	return InvokeDomainAction("storage", action, map[string]string{"name": name})
 }
 
 // DeleteLocalCache deletes the local blob copy of a VFS file.
 func DeleteLocalCache(name string) string {
-	return dispatchUnixOrLocal("vfs_purge", map[string]string{
-		"name": name,
-	}, func(s *server.Server) (any, error) {
-		err := s.Storage.DeleteLocalCache(name)
-		if err != nil {
-			return nil, err
-		}
-		return "", nil
-	})
+	return InvokeDomainAction("storage", "purge", map[string]string{"name": name})
 }
 
 // DeleteFile marks a VFS file as deleted in the registry.
 func DeleteFile(name string) string {
-	return dispatchUnixOrLocal("vfs_delete", map[string]string{
-		"name": name,
-	}, func(s *server.Server) (any, error) {
-		err := s.Storage.DeleteLocalFile(name)
-		if err != nil {
-			return nil, err
-		}
-		return "", nil
-	})
+	return InvokeDomainAction("storage", "delete", map[string]string{"name": name})
 }
 
 // GetLocalBlobPath returns absolute local file path for open operations.
@@ -86,12 +49,10 @@ func GetLocalBlobPath(hash string) string {
 	if s := getSrv(); s != nil {
 		return s.Storage.GetBlobPath(hash)
 	}
-	// Offline: same CAS layout as physical.Storage (storagePath/hash).
 	return filepath.Join(appStorage, hash)
 }
 
 // ResolveTaskResultPath extracts a local filesystem path from a run/stream JSON response (L2).
-// Uses protocol.ResultLocalPath, then output_hash → GetLocalBlobPath.
 func ResolveTaskResultPath(runJSON string) string {
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(runJSON), &envelope); err != nil {
@@ -99,7 +60,6 @@ func ResolveTaskResultPath(runJSON string) string {
 	}
 	outputs, _ := envelope["outputs"].(map[string]any)
 	if outputs == nil {
-		// Flat response with outputs at top level, or nested under data.
 		if nested, ok := envelope["data"].(map[string]any); ok {
 			outputs, _ = nested["outputs"].(map[string]any)
 		}
@@ -115,7 +75,6 @@ func ResolveTaskResultPath(runJSON string) string {
 }
 
 // ResolveLocalBlob fetches a VFS file on demand and returns its local blob path (L2).
-// On failure returns BindErrorJSON.
 func ResolveLocalBlob(name string) string {
 	if name == "" {
 		return BindErrorJSON(fmt.Errorf("missing name parameter"))
@@ -146,13 +105,5 @@ func ResolveLocalBlob(name string) string {
 
 // FetchFileOnDemand downloads an unsubscribed or missing file on demand from peers into local cache.
 func FetchFileOnDemand(name string) string {
-	return dispatchUnixOrLocal("vfs_fetch", map[string]string{
-		"name": name,
-	}, func(s *server.Server) (any, error) {
-		err := s.FetchFileOnDemand(name)
-		if err != nil {
-			return nil, err
-		}
-		return "", nil
-	})
+	return InvokeDomainAction("storage", "open", map[string]string{"name": name})
 }

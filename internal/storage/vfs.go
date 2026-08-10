@@ -6,8 +6,6 @@ import (
 	"github.com/boltdb/bolt"
 )
 
-const vfsIndexBucket = "vfs_index"
-
 // IndexStore defines the abstraction for VFS metadata indexing.
 // Implementing this interface allows plugging alternative storage backends (e.g. BadgerDB, SQLite, Pebble).
 type IndexStore interface {

@@ -10,18 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"proxyma/internal/protocol"
 )
-
-type UnixRequest struct {
-	Action string            `json:"action"`
-	Args   map[string]string `json:"args,omitempty"`
-}
-
-type UnixResponse struct {
-	Success bool            `json:"success"`
-	Error   string          `json:"error,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-}
 
 var (
 	storagePath string
@@ -31,7 +22,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&storagePath, "storage", "/app/data", "Storage path containing proxyma.sock")
+	flag.StringVar(&storagePath, "storage", "/app/data", "Storage path containing "+protocol.SockFileName)
 	flag.StringVar(&fileToOpen, "file", "", "Path to local pipeline schema JSON file to load")
 	flag.StringVar(&fileToOpen, "f", "", "Path to local pipeline schema JSON file to load (shorthand)")
 	flag.StringVar(&pipelineID, "id", "", "Pipeline ID to edit")
@@ -61,7 +52,7 @@ func main() {
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Couldn't fetch service registry from daemon: %v\n", err)
 		fmt.Println("Type checks will be skipped for unknown services.")
-		services = make(map[string]ServiceSchema)
+		services = make(map[string]protocol.ServiceSchema)
 	} else {
 		fmt.Printf("Found %d registered services.\n", len(services))
 	}
@@ -499,81 +490,59 @@ func printDashboard(b *Builder) {
 	fmt.Println("----------------------------------------------------")
 }
 
-func sendUnixSocketCommand(storage string, action string, args map[string]string) error {
-	sockPath := filepath.Join(storage, "proxyma.sock")
-	conn, err := net.Dial("unix", sockPath)
+// dialUnary is the editor-local L2 over protocol unix types (SSOT framing/sock in protocol).
+func dialUnary(storage, action string, args map[string]string) (json.RawMessage, error) {
+	conn, err := net.Dial("unix", protocol.UnixSockPath(storage))
 	if err != nil {
-		return fmt.Errorf("daemon is unreachable: %w", err)
+		return nil, fmt.Errorf("daemon is unreachable: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	req := UnixRequest{
-		Action: action,
-		Args:   args,
+	reqBytes, err := json.Marshal(protocol.UnixRequest{Action: action, Args: args})
+	if err != nil {
+		return nil, err
 	}
-	reqBytes, _ := json.Marshal(req)
-	_, _ = conn.Write(reqBytes)
+	if _, err := conn.Write(reqBytes); err != nil {
+		return nil, err
+	}
 
 	var respBytes []byte
 	buf := make([]byte, 4096)
 	for {
-		n, err := conn.Read(buf)
+		n, readErr := conn.Read(buf)
 		if n > 0 {
 			respBytes = append(respBytes, buf[:n]...)
 		}
-		if err != nil {
+		if readErr != nil {
 			break
 		}
 	}
 
-	var resp UnixResponse
+	var resp protocol.UnixResponse
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return fmt.Errorf("failed to parse daemon response: %w", err)
+		return nil, fmt.Errorf("failed to parse daemon response: %w", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("daemon error: %s", resp.Error)
+		return nil, fmt.Errorf("daemon error: %s", resp.Error)
 	}
-	return nil
+	return resp.Data, nil
 }
 
-func fetchServices(storage string) (map[string]ServiceSchema, error) {
-	sockPath := filepath.Join(storage, "proxyma.sock")
-	conn, err := net.Dial("unix", sockPath)
+func sendUnixSocketCommand(storage string, action string, args map[string]string) error {
+	_, err := dialUnary(storage, action, args)
+	return err
+}
+
+func fetchServices(storage string) (map[string]protocol.ServiceSchema, error) {
+	data, err := dialUnary(storage, "service_discover", nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-
-	req := UnixRequest{Action: "service_discover"}
-	reqBytes, _ := json.Marshal(req)
-	_, _ = conn.Write(reqBytes)
-
-	var respBytes []byte
-	buf := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buf)
-		if n > 0 {
-			respBytes = append(respBytes, buf[:n]...)
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	var resp UnixResponse
-	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return nil, err
-	}
-	if !resp.Success {
-		return nil, fmt.Errorf("%s", resp.Error)
-	}
-
 	var names []string
-	if err := json.Unmarshal(resp.Data, &names); err != nil {
+	if err := json.Unmarshal(data, &names); err != nil {
 		return nil, err
 	}
-
-	res := make(map[string]ServiceSchema)
+	res := make(map[string]protocol.ServiceSchema)
 	for _, name := range names {
 		schema, err := fetchServiceDetail(storage, name)
 		if err == nil {
@@ -583,82 +552,25 @@ func fetchServices(storage string) (map[string]ServiceSchema, error) {
 	return res, nil
 }
 
-func fetchServiceDetail(storage string, name string) (ServiceSchema, error) {
-	sockPath := filepath.Join(storage, "proxyma.sock")
-	conn, err := net.Dial("unix", sockPath)
+func fetchServiceDetail(storage string, name string) (protocol.ServiceSchema, error) {
+	data, err := dialUnary(storage, "service_detail", map[string]string{"name": name})
 	if err != nil {
-		return ServiceSchema{}, err
+		return protocol.ServiceSchema{}, err
 	}
-	defer func() { _ = conn.Close() }()
-
-	req := UnixRequest{
-		Action: "service_detail",
-		Args:   map[string]string{"name": name},
-	}
-	reqBytes, _ := json.Marshal(req)
-	_, _ = conn.Write(reqBytes)
-
-	var respBytes []byte
-	buf := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buf)
-		if n > 0 {
-			respBytes = append(respBytes, buf[:n]...)
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	var resp UnixResponse
-	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return ServiceSchema{}, err
-	}
-	if !resp.Success {
-		return ServiceSchema{}, fmt.Errorf("%s", resp.Error)
-	}
-
-	var schema ServiceSchema
-	if err := json.Unmarshal(resp.Data, &schema); err != nil {
-		return ServiceSchema{}, err
+	var schema protocol.ServiceSchema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return protocol.ServiceSchema{}, err
 	}
 	return schema, nil
 }
 
-func fetchPipelines(storage string) ([]PipelineSchema, error) {
-	sockPath := filepath.Join(storage, "proxyma.sock")
-	conn, err := net.Dial("unix", sockPath)
+func fetchPipelines(storage string) ([]protocol.PipelineSchema, error) {
+	data, err := dialUnary(storage, "pipeline_list", nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-
-	req := UnixRequest{Action: "pipeline_list"}
-	reqBytes, _ := json.Marshal(req)
-	_, _ = conn.Write(reqBytes)
-
-	var respBytes []byte
-	buf := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buf)
-		if n > 0 {
-			respBytes = append(respBytes, buf[:n]...)
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	var resp UnixResponse
-	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return nil, err
-	}
-	if !resp.Success {
-		return nil, fmt.Errorf("%s", resp.Error)
-	}
-
-	var list []PipelineSchema
-	if err := json.Unmarshal(resp.Data, &list); err != nil {
+	var list []protocol.PipelineSchema
+	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
 	}
 	return list, nil
