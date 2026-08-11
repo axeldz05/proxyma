@@ -7,7 +7,7 @@ TEMP_DIR=/tmp/proxyma-dev
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test lint clean help init-cluster issue-cert test-e2e test-all coverage
+.PHONY: all build test test-race lint clean help init-cluster issue-cert test-e2e test-all coverage
 
 all: lint test build
 
@@ -18,6 +18,14 @@ build:
 test:
 	@echo "$(BLUE)Running tests...$(NC)"
 	$(GO) test -v ./...
+
+# Usable since the bbolt migration; boltdb v1.3.1 tripped checkptr and aborted any
+# package that opened the database. Currently reports two known server lifecycle bugs
+# (TLS config mutated while serving, NAT mapper started after shutdown) — see
+# docs/audit/07-bbolt-and-race.md. Keep it out of `test` until those are fixed.
+test-race:
+	@echo "$(BLUE)Running tests with the race detector...$(NC)"
+	$(GO) test -race ./...
 
 lint:
 	@echo "$(BLUE)Running golangci-lint...$(NC)"

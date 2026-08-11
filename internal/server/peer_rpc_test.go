@@ -18,7 +18,8 @@ func TestMapEachPeerContinuesAfterPartialFailure(t *testing.T) {
 
 	cfg := testutil.DefaultConfig(t, "fanout-root")
 	mock := &testutil.MockPeerClient{}
-	s := New(cfg, mock)
+	s, err := New(cfg, mock)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -52,7 +53,8 @@ func TestForEachPeerSkipSelf(t *testing.T) {
 	t.Parallel()
 
 	cfg := testutil.DefaultConfig(t, "self-node")
-	s := New(cfg, &testutil.MockPeerClient{})
+	s, err := New(cfg, &testutil.MockPeerClient{})
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

@@ -32,7 +32,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`.
 * **Error wording**: validation text lives in `protocol/errors.go`; validators may stay per-layer, the message must not be retyped.
 * **No parallel maps on one key**: per-entity state goes in one struct under one lock (`peerState`), not N maps with N mutexes.
-* **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors; Bolt failures propagate instead of collapsing into a bool.
+* **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors (`storage.NewStorageEngine` and `server.New` return `(T, error)`); Bolt failures propagate instead of collapsing into a bool.
+* **Long-lived goroutines re-check their lifetime after blocking network calls** before logging or firing callbacks (`QUICManager.lifetime`, `NATMapper.stopped`).
+* **Never mutate a `tls.Config` already in use**; swap snapshots behind `GetConfigForClient` / `GetClientCertificate`.
+* Store is **`go.etcd.io/bbolt`**, never `github.com/boltdb/bolt` (unmaintained, writes past an allocation, aborts under `-race`).
 * **UI hints**: `protocol.InferUIHint` / `EffectiveUIHint`; Android uses `FormParameter.isFilePicker()` — no name sniffing.
 * **Bind errors**: `BindErrorJSON` / `ParseBindError` / `IsBindError` only (no double-wrap, no `"error:"` prefix).
 * **In-memory registry**: Persist `services.json` only on mutation; runtime via `Compute.GetService` / `GetHandler`.
@@ -82,7 +85,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
 * `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
 * `compute`: `serviceTypeBuilders` → `BuildHandler`; `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
-* `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`.
+* `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`; bbolt types are `bbolt.Tx` / `bbolt.DB`.
 * `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` — but tests whose subject *is* a TLS/storage step keep using the L1.
 * **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**, shared `vfsNameParam`/`svcNameParam`/`pipelineIDParam`). Compute `ServiceSchema` remains a separate contract.
 

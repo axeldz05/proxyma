@@ -17,7 +17,8 @@ func TestServiceSubscriptionReceivesAddAndRemoveNotify(t *testing.T) {
 	t.Parallel()
 
 	cfg := testutil.DefaultConfig(t, "svc-sub-node")
-	sv := server.New(cfg, nil)
+	sv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 
 	require.NoError(t, sv.LocalServiceSubscribe("ocr", true))
 
@@ -52,7 +53,8 @@ func TestServiceSubscriptionReceivesAddAndRemoveNotify(t *testing.T) {
 func TestServiceSubscriptionPatternMatch(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "svc-sub-pat")
-	sv := server.New(cfg, nil)
+	sv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 	require.NoError(t, sv.LocalServiceSubscribe("vision.*", true))
 
 	body, _ := json.Marshal(protocol.ServiceNotification{
@@ -81,7 +83,8 @@ func TestServiceNotifyWithoutSubscriptionAcceptsAll(t *testing.T) {
 	t.Parallel()
 	// Backward compat: empty subscription set still materializes (join sync / legacy).
 	cfg := testutil.DefaultConfig(t, "svc-sub-legacy")
-	sv := server.New(cfg, nil)
+	sv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 
 	body, _ := json.Marshal(protocol.ServiceNotification{
 		Action: protocol.ActionAdd,

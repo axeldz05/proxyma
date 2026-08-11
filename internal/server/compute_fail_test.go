@@ -7,6 +7,7 @@ import (
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,11 +81,15 @@ func TestLocalServiceRunFailsWhenServiceUnknown(t *testing.T) {
 func TestLocalServiceRunHonorsSortStrategy(t *testing.T) {
 	t.Parallel()
 
+	// Bids are fetched from one goroutine per peer, so the captures need a lock.
+	var mu sync.Mutex
 	var gotStrategy string
 	var chosenPeer string
 	mock := &testutil.MockPeerClient{
 		OnFetchServiceBid: func(ctx context.Context, peerID string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
+			mu.Lock()
 			gotStrategy = q.SortStrategy
+			mu.Unlock()
 			switch peerID {
 			case "cheap-peer":
 				return protocol.ServiceBid{
@@ -103,7 +108,9 @@ func TestLocalServiceRunHonorsSortStrategy(t *testing.T) {
 			}
 		},
 		OnSubmitTask: func(ctx context.Context, peerID string, req protocol.TaskRequest) error {
+			mu.Lock()
 			chosenPeer = peerID
+			mu.Unlock()
 			return fmt.Errorf("stop-after-bid")
 		},
 	}
@@ -116,6 +123,9 @@ func TestLocalServiceRunHonorsSortStrategy(t *testing.T) {
 	_, err := sv.LocalServiceRun("echo", `{"msg":"hi"}`, "cheapest")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stop-after-bid")
+
+	mu.Lock()
+	defer mu.Unlock()
 	require.Equal(t, protocol.StrategyCheapest, gotStrategy)
 	require.Equal(t, "cheap-peer", chosenPeer)
 }

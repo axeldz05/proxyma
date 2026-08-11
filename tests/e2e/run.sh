@@ -50,6 +50,10 @@ echo -e "\n⏳ Waiting for all tests to finish...\n"
 
 FAILED_COUNT=0
 PASSED_COUNT=0
+FAILED_NAMES=()
+
+# The next run overwrites logs/, so keep a copy of anything that failed.
+ARCHIVE_DIR="$LOG_DIR/failed/$(date +%Y%m%d-%H%M%S)"
 
 for pid in "${!CASE_NAMES[@]}"; do
     case_name=${CASE_NAMES[$pid]}
@@ -65,6 +69,9 @@ for pid in "${!CASE_NAMES[@]}"; do
     else
         echo -e "🔴 [FAIL] ${case_name} (Exit code: $exit_code)"
         FAILED_COUNT=$((FAILED_COUNT + 1))
+        FAILED_NAMES+=("$case_name")
+        mkdir -p "$ARCHIVE_DIR"
+        cp "$log_file" "$ARCHIVE_DIR/"
         echo -e "${YELLOW}--- Last 15 lines of log for $case_name: ---${NC}"
         tail -n 15 "$log_file"
         echo -e "${YELLOW}----------------------------------------------${NC}\n"
@@ -78,6 +85,10 @@ echo -e "    Failed:  ${RED}$FAILED_COUNT${NC}"
 echo -e "${BLUE}======================================================${NC}"
 
 if [ $FAILED_COUNT -ne 0 ]; then
+    # Repeat the names here: the per-case output above scrolls away, and truncating
+    # the tail of this script's output used to lose which case actually failed.
+    echo -e "    Failed cases: ${RED}${FAILED_NAMES[*]}${NC}"
+    echo -e "    Logs kept in: ${YELLOW}${ARCHIVE_DIR#"$SCRIPTPATH/"}${NC}"
     echo -e "${RED}❌ E2E test suite failed.${NC}"
     exit 1
 else

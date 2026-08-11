@@ -3,7 +3,7 @@ package storage
 import (
 	"proxyma/internal/protocol"
 
-	"github.com/boltdb/bolt"
+	"go.etcd.io/bbolt"
 )
 
 // IndexStore defines the abstraction for VFS metadata indexing.
@@ -17,12 +17,12 @@ type IndexStore interface {
 }
 
 type VFS struct {
-	index *bolt.DB
+	index *bbolt.DB
 }
 
 var _ IndexStore = (*VFS)(nil)
 
-func NewVFS(index *bolt.DB) *VFS {
+func NewVFS(index *bbolt.DB) *VFS {
 	return &VFS{
 		index: index,
 	}
@@ -31,7 +31,7 @@ func NewVFS(index *bolt.DB) *VFS {
 func (v *VFS) Get(name string) (protocol.IndexEntry, bool) {
 	var entry protocol.IndexEntry
 	exists := false
-	_ = v.index.View(func(tx *bolt.Tx) error {
+	_ = v.index.View(func(tx *bbolt.Tx) error {
 		entry, exists = boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, name)
 		return nil
 	})
@@ -40,7 +40,7 @@ func (v *VFS) Get(name string) (protocol.IndexEntry, bool) {
 
 func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 	updated := false
-	err := v.index.Update(func(tx *bolt.Tx) error {
+	err := v.index.Update(func(tx *bbolt.Tx) error {
 		if existing, ok := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name); ok {
 			if existing.Version >= entry.Version {
 				return nil

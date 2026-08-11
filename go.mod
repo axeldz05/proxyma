@@ -3,12 +3,12 @@ module proxyma
 go 1.26.1
 
 require (
-	github.com/boltdb/bolt v1.3.1
 	github.com/fd/go-nat v1.0.0
 	github.com/pion/webrtc/v4 v4.2.18
 	github.com/quic-go/quic-go v0.60.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
+	go.etcd.io/bbolt v1.5.0
 )
 
 require (

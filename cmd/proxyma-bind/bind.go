@@ -323,7 +323,10 @@ func StartNode(storagePath string, debug bool) string {
 	wrappedTransport := &p2p.BandwidthRoundTripper{Base: baseTransport}
 	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, appLogger)
 
-	srv = server.New(cfg, peerClient)
+	srv, err = server.New(cfg, peerClient)
+	if err != nil {
+		return BindErrorJSON(fmt.Errorf("failed to start node: %v", err))
+	}
 	srv.SetTLSConfigs(stls, ctls)
 	wrappedTransport.Recorder = srv
 	srv.LoadLocalServices()

@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/boltdb/bolt"
+	"go.etcd.io/bbolt"
 )
 
-func boltPutJSON(tx *bolt.Tx, bucket, key string, v any) error {
+func boltPutJSON(tx *bbolt.Tx, bucket, key string, v any) error {
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
 		return fmt.Errorf("%s bucket not found", bucket)
@@ -19,7 +19,7 @@ func boltPutJSON(tx *bolt.Tx, bucket, key string, v any) error {
 	return b.Put([]byte(key), data)
 }
 
-func boltGetJSON[T any](tx *bolt.Tx, bucket, key string) (T, bool) {
+func boltGetJSON[T any](tx *bbolt.Tx, bucket, key string) (T, bool) {
 	var zero T
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
@@ -36,7 +36,7 @@ func boltGetJSON[T any](tx *bolt.Tx, bucket, key string) (T, bool) {
 	return item, true
 }
 
-func boltDelete(tx *bolt.Tx, bucket, key string) error {
+func boltDelete(tx *bbolt.Tx, bucket, key string) error {
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
 		return fmt.Errorf("%s bucket not found", bucket)
@@ -44,7 +44,7 @@ func boltDelete(tx *bolt.Tx, bucket, key string) error {
 	return b.Delete([]byte(key))
 }
 
-func boltPutFlag(tx *bolt.Tx, bucket, key string) error {
+func boltPutFlag(tx *bbolt.Tx, bucket, key string) error {
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
 		return fmt.Errorf("%s bucket not found", bucket)
@@ -52,14 +52,14 @@ func boltPutFlag(tx *bolt.Tx, bucket, key string) error {
 	return b.Put([]byte(key), []byte("true"))
 }
 
-func boltHasKey(tx *bolt.Tx, bucket, key string) bool {
+func boltHasKey(tx *bbolt.Tx, bucket, key string) bool {
 	b := tx.Bucket([]byte(bucket))
 	return b != nil && b.Get([]byte(key)) != nil
 }
 
-func boltLoadMapJSON[T any](db *bolt.DB, bucket string) (map[string]T, error) {
+func boltLoadMapJSON[T any](db *bbolt.DB, bucket string) (map[string]T, error) {
 	out := make(map[string]T)
-	err := db.View(func(tx *bolt.Tx) error {
+	err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucket))
 		if b == nil {
 			return nil

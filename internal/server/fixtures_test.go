@@ -47,7 +47,8 @@ func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient)
 		finalClient = p2p.NewHTTPPeerClient(customTransport, "", cfg.Logger)
 	}
 
-	app := server.New(cfg, finalClient)
+	app, err := server.New(cfg, finalClient)
+	require.NoError(t, err)
 
 	ts := httptest.NewUnstartedServer(app.MountHandlers())
 	ts.TLS = serverTLS

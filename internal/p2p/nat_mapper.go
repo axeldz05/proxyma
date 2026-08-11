@@ -26,11 +26,26 @@ type NATMapper struct {
 }
 
 func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
+	// The lifetime is bound at construction so Stop is safe before Start and the
+	// fields are never written once the mapper goroutine can observe them.
+	ctx, cancel := context.WithCancel(context.Background())
 	return &NATMapper{
 		logger:          logger,
+		ctx:             ctx,
+		cancel:          cancel,
 		tcpPort:         tcpPort,
 		udpPort:         udpPort,
 		discoverGateway: nat.DiscoverGateway,
+	}
+}
+
+// stopped reports whether Stop already cancelled the mapper.
+func (nm *NATMapper) stopped() bool {
+	select {
+	case <-nm.ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
 
@@ -45,15 +60,17 @@ func (nm *NATMapper) Start() {
 	if nm.logger != nil {
 		nm.logger.Info("Starting UPnP/NAT-PMP port mapping...")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	nm.ctx = ctx
-	nm.cancel = cancel
-
 	go nm.runMapper()
 }
 
 func (nm *NATMapper) runMapper() {
 	dev, err := nm.discoverGateway()
+	// Gateway discovery blocks on the network for seconds, so the owner may already
+	// be gone. Returning silently keeps the goroutine from outliving it and from
+	// logging into a closed sink.
+	if nm.stopped() {
+		return
+	}
 	if err != nil {
 		if nm.logger != nil {
 			nm.logger.Warn("Failed to discover NAT gateway (UPnP/NAT-PMP might be disabled on your router)", "error", err)
@@ -105,6 +122,10 @@ func (nm *NATMapper) refreshMappings() {
 
 func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, setMapped func(int)) {
 	extPort, err := dev.AddPortMapping(proto, port, desc, 30*time.Minute)
+	// AddPortMapping talks to the router, so re-check the lifetime before reporting.
+	if nm.stopped() {
+		return
+	}
 	if err != nil {
 		if nm.logger != nil {
 			nm.logger.Warn("Failed to map "+strings.ToUpper(proto)+" port", "internalPort", port, "error", err)
@@ -125,9 +146,7 @@ func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, s
 }
 
 func (nm *NATMapper) Stop() {
-	if nm.cancel != nil {
-		nm.cancel()
-	}
+	nm.cancel()
 
 	nm.mu.Lock()
 	dev := nm.natDev

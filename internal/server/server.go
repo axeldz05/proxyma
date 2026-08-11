@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -59,9 +60,9 @@ type DownloadJob struct {
 	Source string
 }
 
-func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
+func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	if cfg.Logger == nil {
-		panic("server.New: cfg.Logger must not be nil — use protocol.NewLogger to create it")
+		return nil, errors.New("server.New: cfg.Logger must not be nil — use protocol.NewLogger to create it")
 	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
@@ -87,7 +88,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Compute.SetAddress(cfg.Address)
-	s.Storage = storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
+	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
 		for peerID, peerAddress := range s.GetPeersCopy() {
 			if rawSource == peerAddress {
 				s.downloadQueue <- DownloadJob{
@@ -99,6 +100,11 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		}
 		return fmt.Errorf("peer of address %s not found", rawSource)
 	})
+	if err != nil {
+		s.Compute.Close()
+		return nil, err
+	}
+	s.Storage = engine
 
 	// Load persisted peers from DB and populate registry
 	if peers, err := s.Storage.LoadPeers(); err == nil {
@@ -160,7 +166,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) *Server {
 		}
 	}()
 	s.Storage.CleanupTempFiles()
-	return s
+	return s, nil
 }
 
 func (s *Server) ListenAndServe(serverTLS *tls.Config) error {

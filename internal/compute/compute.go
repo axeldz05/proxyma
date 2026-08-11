@@ -422,7 +422,7 @@ func (ce *ComputeEngine) BuildServiceBid(query protocol.DiscoveryQuery) (protoco
 	if !canAccept {
 		return protocol.ServiceBid{CanAccept: false}, false
 	}
-	cpuLoad, memPressure := hostResourceSampler()
+	cpuLoad, memPressure := currentHostResourceSampler()()
 	costUnits := estimated + int64(cpuLoad*200) + int64(memPressure*200)
 	powerScore := int64(cpuLoad*1000) + int64(memPressure*100)
 	bid := protocol.ServiceBid{

@@ -68,10 +68,15 @@ func NewNodeTLS(t *testing.T, id string) NodeTLS {
 
 // NewStorageEngine builds an engine on cfg with no-op sync callbacks (L2).
 // Tests that assert on the callbacks call storage.NewStorageEngine directly.
-func NewStorageEngine(cfg protocol.NodeConfig) *storage.StorageEngine {
-	return storage.NewStorageEngine(
+func NewStorageEngine(t *testing.T, cfg protocol.NodeConfig) *storage.StorageEngine {
+	t.Helper()
+	engine, err := storage.NewStorageEngine(
 		cfg.Logger, cfg.StoragePath,
 		func(protocol.IndexEntry) {},
 		func(protocol.IndexEntry, string) error { return nil },
 	)
+	if err != nil {
+		t.Fatalf("storage engine for %q: %v", cfg.ID, err)
+	}
+	return engine
 }

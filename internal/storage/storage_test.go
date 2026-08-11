@@ -23,7 +23,7 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "test11.txt"
 
@@ -45,7 +45,7 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 func TestLocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "testLocalDeleteCreatesTombstone.txt"
 	fileContent := []byte("hello from testLocalDeleteCreatesTombstone!!")
@@ -75,7 +75,7 @@ func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 	fileContent := "helloo from test10"
 	expectedHash := testutil.CalculateHash(t, fileContent)
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	engine.SetSubscription(fileName, true)
 
@@ -108,7 +108,7 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 	hashA := testutil.CalculateHash(t, "Content A")
 	hashB := testutil.CalculateHash(t, "Content B")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	engine.SetSubscription(fileAName, true)
 	remoteManifest := map[string]protocol.IndexEntry{
@@ -135,7 +135,7 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-snapshot-1")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileA := "alpha.txt"
 	contentA := []byte("content of alpha")
@@ -200,7 +200,7 @@ func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-vfs-version")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	entry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v3", Version: 3, Size: 100}
 	updated := engine.Upsert(entry)
@@ -220,7 +220,7 @@ func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-integrity")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	correctContent := "correct content"
 	expectedHash := testutil.CalculateHash(t, correctContent)
@@ -245,7 +245,7 @@ func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-tombstone-manifest")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "deleted_file.txt"
 	engine.SetSubscription(fileName, true)
@@ -267,7 +267,7 @@ func TestHandleNotificationRespectsSubscription(t *testing.T) {
 	cfg := testutil.DefaultConfig(t, "notif-sub-filter")
 	var downloadInvoked bool
 
-	engine := storage.NewStorageEngine(
+	engine, err := storage.NewStorageEngine(
 		cfg.Logger, cfg.StoragePath,
 		func(entry protocol.IndexEntry) {},
 		func(ie protocol.IndexEntry, s string) error {
@@ -275,6 +275,7 @@ func TestHandleNotificationRespectsSubscription(t *testing.T) {
 			return nil
 		},
 	)
+	require.NoError(t, err)
 
 	subscribedFile := "subscribed.txt"
 	unsubscribedFile := "unsubscribed.txt"
@@ -313,7 +314,7 @@ func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-remote-del-new")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	tombstone := protocol.IndexEntry{
 		Name: "never_existed.txt", Hash: "hash-phantom", Version: 1, Deleted: true,
@@ -332,7 +333,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-concurrent")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	var wg sync.WaitGroup
 	const goroutines = 10
@@ -390,7 +391,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-cas")
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	// 1. Upload identical content to two different files (Deduplication)
 	content := []byte("shared content")
@@ -432,7 +433,7 @@ func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 func TestCleanupTempFilesRespectsActiveDownloads(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-temp")
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	// Create a "recent" temp file mimicking an active download
 	recentTempFile, err := os.CreateTemp(cfg.StoragePath, "tmp-blob-*")
@@ -471,7 +472,7 @@ func TestDownloadRejectsNonCASHashPaths(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "dl-sanitize")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	dbPath := filepath.Join(cfg.StoragePath, "metadata.db")
 	dbBytes, err := os.ReadFile(dbPath)
@@ -501,7 +502,7 @@ func TestRemoteTombstoneNotificationGCsPhysicalBlob(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "tombstone-gc-notify")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "orphan-me.txt"
 	content := []byte("blob that should be GC'd on remote tombstone")
@@ -536,7 +537,7 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "tombstone-gc-manifest")
 
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "manifest-orphan.txt"
 	content := []byte("blob GC via ProcessRemoteManifest")
@@ -558,7 +559,7 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 func TestStageLocalFileDistinctLogicalNamesForSameBasename(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "stage-distinct-names")
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	dirA := filepath.Join(t.TempDir(), "dirA")
 	dirB := filepath.Join(t.TempDir(), "dirB")
@@ -617,7 +618,7 @@ func snapNameForHash(snap map[string]protocol.IndexEntry, hash string) string {
 func TestStageAndRewriteRewritesNestedPayloadPaths(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "stage-and-rewrite")
-	engine := testutil.NewStorageEngine(cfg)
+	engine := testutil.NewStorageEngine(t, cfg)
 
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "doc.txt")
@@ -637,4 +638,23 @@ func TestStageAndRewriteRewritesNestedPayloadPaths(t *testing.T) {
 	nested := payload["nested"].(map[string]any)
 	require.True(t, protocol.IsVFSURI(nested["file"].(string)))
 	require.Equal(t, payload["input"], nested["file"])
+}
+
+// A library must not kill the process: before this returned an error it called
+// os.Exit(1), which took the whole node (and any test binary) down with it.
+func TestNewStorageEngineReportsOpenFailure(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "unopenable")
+
+	// metadata.db as a directory makes bbolt.Open fail without any privileges.
+	require.NoError(t, os.Mkdir(filepath.Join(cfg.StoragePath, "metadata.db"), 0o755))
+
+	engine, err := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+	require.Error(t, err)
+	require.Nil(t, engine)
+	require.Contains(t, err.Error(), "metadata.db")
 }

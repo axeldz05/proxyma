@@ -445,7 +445,8 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	testutil.InitClusterCA(t, caPath)
 	serverTLS := testutil.IssueNode(t, caPath, cfg.StoragePath, cfg.ID).ServerTLS
 
-	srv := server.New(cfg, nil)
+	srv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 
 	serverErr := make(chan error, 1)
 
@@ -458,7 +459,7 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := srv.Shutdown(ctx)
+	err = srv.Shutdown(ctx)
 	require.NoError(t, err, "Node shutdown should run without errors")
 
 	select {
@@ -814,7 +815,8 @@ func TestServerLoadsLocalServicesOnStartup(t *testing.T) {
 	require.NoError(t, os.WriteFile(servicesFile, []byte(mockServices), 0644))
 
 	// Initialize the server, which should load local services
-	srv := server.New(cfg, nil)
+	srv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 	srv.LoadLocalServices()
 
 	schema, exists := srv.Compute.GetService("test-script")
@@ -826,7 +828,8 @@ func TestServerLoadsLocalServicesOnStartup(t *testing.T) {
 func TestServerHandlesServiceNotifications(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "service-notify-node")
-	srv := server.New(cfg, nil)
+	srv, err := server.New(cfg, nil)
+	require.NoError(t, err)
 
 	notification := protocol.ServiceNotification{
 		Action: "add",

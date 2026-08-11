@@ -10,37 +10,36 @@ import (
 	storage "proxyma/internal/storage/physical"
 	"time"
 
-	"github.com/boltdb/bolt"
+	"go.etcd.io/bbolt"
 )
 
 type StorageEngine struct {
 	physical         storage.Storage
 	vfs              IndexStore
-	subscriptions    *bolt.DB
+	subscriptions    *bbolt.DB
 	logger           *slog.Logger
 	notifyFunc       func(protocol.IndexEntry)
 	onDownloadNeeded func(file protocol.IndexEntry, rawSource string) error
 }
 
-func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.IndexEntry), downloadCallback func(protocol.IndexEntry, string) error) *StorageEngine {
+func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.IndexEntry), downloadCallback func(protocol.IndexEntry, string) error) (*StorageEngine, error) {
 	dbPath := filepath.Join(path, "metadata.db")
-	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
-		logger.Error("Failed to open BoltDB", "path", dbPath, "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("open metadata db %s: %w", dbPath, err)
 	}
 
-	if err = db.Update(func(tx *bolt.Tx) error {
+	if err = db.Update(func(tx *bbolt.Tx) error {
 		for _, bName := range allBuckets {
 			if _, err := tx.CreateBucketIfNotExists([]byte(bName)); err != nil {
-				logger.Error("Failed to create bucket", "bucket", bName, "error", err)
-				return err
+				return fmt.Errorf("create bucket %s: %w", bName, err)
 			}
 		}
 		return nil
 	}); err != nil {
-		logger.Error("Failed to initialize database buckets", "error", err)
-		os.Exit(1)
+		// Release the file lock, or a retry in this process burns the Open timeout.
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize metadata db %s: %w", dbPath, err)
 	}
 
 	engine := &StorageEngine{
@@ -52,7 +51,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 		onDownloadNeeded: downloadCallback,
 	}
 
-	return engine
+	return engine, nil
 }
 
 func (se *StorageEngine) GetFileMeta(logicalName string) (protocol.IndexEntry, bool) {
@@ -76,7 +75,7 @@ func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
 }
 
 func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
-	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
+	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		if isSubscribed {
 			return boltPutFlag(tx, bucketSubscriptions, fileName)
 		}
@@ -89,7 +88,7 @@ func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 
 func (se *StorageEngine) IsSubscribed(fileName string) bool {
 	var subscribed bool
-	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+	_ = se.subscriptions.View(func(tx *bbolt.Tx) error {
 		subscribed = boltHasKey(tx, bucketSubscriptions, fileName)
 		return nil
 	})
@@ -101,7 +100,7 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 	if pattern == "" {
 		return
 	}
-	err := se.subscriptions.Update(func(tx *bolt.Tx) error {
+	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		if subscribed {
 			return boltPutFlag(tx, bucketServiceSubs, pattern)
 		}
@@ -115,7 +114,7 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 // HasServiceSubscriptions reports whether any service interest filters are active.
 func (se *StorageEngine) HasServiceSubscriptions() bool {
 	var n int
-	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+	_ = se.subscriptions.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketServiceSubs))
 		if b == nil {
 			return nil
@@ -133,7 +132,7 @@ func (se *StorageEngine) IsServiceSubscribed(name string) bool {
 		return true
 	}
 	matched := false
-	_ = se.subscriptions.View(func(tx *bolt.Tx) error {
+	_ = se.subscriptions.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketServiceSubs))
 		if b == nil {
 			return nil
@@ -359,13 +358,13 @@ func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) int {
 }
 
 func (se *StorageEngine) boltPutKeyed(bucket, key string, v any) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		return boltPutJSON(tx, bucket, key, v)
 	})
 }
 
 func (se *StorageEngine) boltDeleteKeyed(bucket, key string) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		return boltDelete(tx, bucket, key)
 	})
 }
@@ -403,7 +402,7 @@ func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSche
 
 // PutOutboxRaw upserts a durable notify outbox entry (raw JSON bytes).
 func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
-	return se.subscriptions.Update(func(tx *bolt.Tx) error {
+	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return fmt.Errorf("notify_outbox bucket not found")
@@ -418,7 +417,7 @@ func (se *StorageEngine) DeleteOutboxEntry(id string) error {
 
 func (se *StorageEngine) CountOutboxEntries() (int, error) {
 	var n int
-	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return nil
@@ -431,7 +430,7 @@ func (se *StorageEngine) CountOutboxEntries() (int, error) {
 
 func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 	out := make(map[string][]byte)
-	err := se.subscriptions.View(func(tx *bolt.Tx) error {
+	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketNotifyOutbox))
 		if b == nil {
 			return nil
