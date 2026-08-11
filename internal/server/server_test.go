@@ -1533,24 +1533,12 @@ func TestDistributedPipelineExecution(t *testing.T) {
 	srvC.SetAddress(srvC.httpTestSrv.URL)
 
 	// Update peer routes on the http clients so they can talk mTLS to each other
-	if updater, ok := srvA.PeerClient().(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
-		updater.UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
-	}
-	if updater, ok := srvB.PeerClient().(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
-		updater.UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
-	}
-	if updater, ok := srvC.PeerClient().(interface {
-		UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-	}); ok {
-		updater.UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
-		updater.UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
-	}
+	srvA.PeerClient().UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
+	srvA.PeerClient().UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+	srvB.PeerClient().UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+	srvB.PeerClient().UpdatePeerRoute("node-c", protocol.AddressRecord{Addresses: []string{srvC.httpTestSrv.URL}})
+	srvC.PeerClient().UpdatePeerRoute("node-a", protocol.AddressRecord{Addresses: []string{srvA.httpTestSrv.URL}})
+	srvC.PeerClient().UpdatePeerRoute("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})
 
 	// 2. Wire them as cluster peers
 	srvA.AddPeer("node-b", protocol.AddressRecord{Addresses: []string{srvB.httpTestSrv.URL}})

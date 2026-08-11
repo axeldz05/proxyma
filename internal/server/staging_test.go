@@ -20,16 +20,12 @@ func linkClusterPeers(t *testing.T, nodes ...*TestServer) {
 		a.SetAddress(a.httpTestSrv.URL)
 	}
 	for _, a := range nodes {
-		updater, ok := a.PeerClient().(interface {
-			UpdatePeerRoute(peerID string, record protocol.AddressRecord)
-		})
-		require.True(t, ok)
 		for _, b := range nodes {
 			if a.Config.ID == b.Config.ID {
 				continue
 			}
 			rec := protocol.AddressRecord{Addresses: []string{b.httpTestSrv.URL}}
-			updater.UpdatePeerRoute(b.Config.ID, rec)
+			a.PeerClient().UpdatePeerRoute(b.Config.ID, rec)
 			a.AddPeer(b.Config.ID, rec)
 			a.SetPeerOnline(b.Config.ID, true)
 		}

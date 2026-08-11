@@ -49,15 +49,6 @@ func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func decodeNotifyOK[T any](w http.ResponseWriter, r *http.Request, fn func(T)) {
-	req, ok := utils.DecodeJSONOrError[T](w, r)
-	if !ok {
-		return
-	}
-	fn(req)
-	w.WriteHeader(http.StatusOK)
-}
-
 func (s *Server) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	memLimit := utils.ReadMemoryLimit()
 	cpuLimit := utils.ReadCPULimit()

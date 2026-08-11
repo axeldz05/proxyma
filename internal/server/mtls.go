@@ -11,6 +11,19 @@ func peerCNFromRequest(r *http.Request) (string, bool) {
 	return p2p.PeerCNFromTLS(r.TLS)
 }
 
+func forbidMissingMTLS(w http.ResponseWriter) {
+	utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+}
+
+// requirePeerCN extracts the peer CN or writes the standard missing-mTLS 403.
+func requirePeerCN(w http.ResponseWriter, r *http.Request) (cn string, ok bool) {
+	cn, ok = peerCNFromRequest(r)
+	if !ok {
+		forbidMissingMTLS(w)
+	}
+	return
+}
+
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mode := s.routeAuth(r.URL.Path)
@@ -21,7 +34,7 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 		peerID, ok := peerCNFromRequest(r)
 		if !ok {
 			s.Config.Logger.Warn("Reject mTLS: tried access without a certificate", "ip", r.RemoteAddr, "path", r.URL.Path)
-			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+			forbidMissingMTLS(w)
 			return
 		}
 		if mode != authMTLSUnregistered {

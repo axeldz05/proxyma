@@ -67,19 +67,6 @@ func mockSTUNResponder(conn *net.UDPConn) {
 	_, _ = conn.WriteToUDP(resp, raddr)
 }
 
-func TestSTUNClient(t *testing.T) {
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
-
-	go mockSTUNResponder(conn)
-
-	extIP, extPort, err := GetExternalIPPort(conn.LocalAddr().String(), 2*time.Second)
-	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1", extIP)
-	require.True(t, extPort > 0)
-}
-
 func TestGetExternalUDPListener(t *testing.T) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)

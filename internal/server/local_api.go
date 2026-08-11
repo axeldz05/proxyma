@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-type LocalService = protocol.LocalService
-
 var errNotCAAuthority = errors.New("only the CA authority node can mint invites")
 
 // LocalInviteGenerate creates an invite token and returns it with its expiry (SSOT).

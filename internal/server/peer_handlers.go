@@ -1,9 +1,7 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,9 +13,8 @@ import (
 )
 
 func requirePeerCNMatchesBodyID(w http.ResponseWriter, r *http.Request, bodyID string) bool {
-	cn, ok := peerCNFromRequest(r)
+	cn, ok := requirePeerCN(w, r)
 	if !ok {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 		return false
 	}
 	if cn != bodyID {
@@ -29,9 +26,8 @@ func requirePeerCNMatchesBodyID(w http.ResponseWriter, r *http.Request, bodyID s
 
 // allowLeaveOrSponsorEvict: self-leave (CN==bodyID) or CA authority evicting another peer.
 func (s *Server) allowLeaveOrSponsorEvict(w http.ResponseWriter, r *http.Request, bodyID string) bool {
-	cn, ok := peerCNFromRequest(r)
+	cn, ok := requirePeerCN(w, r)
 	if !ok {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 		return false
 	}
 	if cn == bodyID {
@@ -103,12 +99,11 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 
 	go func(newID string, newAddress protocol.AddressRecord) {
 		payload := protocol.AddPeerRequest{ID: newID, Address: newAddress}
-		bodyBytes, _ := json.Marshal(payload)
 		s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 			if peerID == newID {
 				return errPeerSkipped
 			}
-			if err := s.peerClient.AddPeer(peerID, bytes.NewBuffer(bodyBytes)); err != nil {
+			if err := s.peerClient.AddPeer(peerID, payload); err != nil {
 				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerID, "newPeer", newAddress, "error", err)
 				return err
 			}
@@ -128,9 +123,8 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	cn, ok := peerCNFromRequest(r)
+	cn, ok := requirePeerCN(w, r)
 	if !ok {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 		return
 	}
 	addr := req.Address

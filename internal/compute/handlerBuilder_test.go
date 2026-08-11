@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildGRPCBidiHandler_Success(t *testing.T) {
+func TestBuildHTTPBidiHandler_Success(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "application/x-ndjson", r.Header.Get("Content-Type"))
@@ -45,7 +45,7 @@ func TestBuildGRPCBidiHandler_Success(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiHandler(ts.URL, 5*time.Second)
+	handler := BuildHTTPBidiHandler(ts.URL, 5*time.Second)
 
 	in := make(chan map[string]any, 2)
 	out := make(chan map[string]any, 2)
@@ -90,7 +90,7 @@ done:
 	}
 }
 
-func TestBuildGRPCBidiHandler_UnaryAdaptation(t *testing.T) {
+func TestBuildHTTPBidiHandler_UnaryAdaptation(t *testing.T) {
 	t.Parallel()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,7 @@ func TestBuildGRPCBidiHandler_UnaryAdaptation(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiHandler(ts.URL, 5*time.Second)
+	handler := BuildHTTPBidiHandler(ts.URL, 5*time.Second)
 
 	ctx := context.Background()
 	resp, err := handler.Execute(ctx, map[string]any{"input": "test_data"})
@@ -117,7 +117,7 @@ func TestBuildGRPCBidiHandler_UnaryAdaptation(t *testing.T) {
 	require.Equal(t, "ok", resp["status"])
 }
 
-func TestBuildGRPCBidiHandler_ContextCancellation(t *testing.T) {
+func TestBuildHTTPBidiHandler_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +129,7 @@ func TestBuildGRPCBidiHandler_ContextCancellation(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiHandler(ts.URL, 0)
+	handler := BuildHTTPBidiHandler(ts.URL, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -151,7 +151,7 @@ func TestBuildGRPCBidiHandler_ContextCancellation(t *testing.T) {
 	}
 }
 
-func TestBuildGRPCBidiHandler_ServerError(t *testing.T) {
+func TestBuildHTTPBidiHandler_ServerError(t *testing.T) {
 	t.Parallel()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +159,7 @@ func TestBuildGRPCBidiHandler_ServerError(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	handler := BuildGRPCBidiHandler(ts.URL, 5*time.Second)
+	handler := BuildHTTPBidiHandler(ts.URL, 5*time.Second)
 
 	in := make(chan map[string]any, 1)
 	out := make(chan map[string]any, 1)
@@ -252,7 +252,7 @@ drained:
 
 func TestBidiHandlerRoundTripsNDJSONChunks(t *testing.T) {
 	t.Parallel()
-	TestBuildGRPCBidiHandler_Success(t)
+	TestBuildHTTPBidiHandler_Success(t)
 }
 
 func TestWebRTCHandlerExchangesPayloadOverDataChannel(t *testing.T) {

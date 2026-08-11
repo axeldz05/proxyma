@@ -121,26 +121,6 @@ func stunExchange(setDeadline func(time.Time) error, write func([]byte) error, r
 	return parseSTUNResponse(resp, n, txID)
 }
 
-// GetExternalIPPort queries the STUN server to discover the external/public IP and port.
-func GetExternalIPPort(stunServer string, timeout time.Duration) (string, int, error) {
-	addr, err := net.ResolveUDPAddr("udp", stunServer)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to resolve STUN address: %w", err)
-	}
-
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to connect to STUN: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	return stunExchange(conn.SetDeadline,
-		func(b []byte) error { _, err := conn.Write(b); return err },
-		func(b []byte) (int, error) { return conn.Read(b) },
-		timeout,
-	)
-}
-
 // GetExternalUDPListener binds a local UDP socket, queries the STUN server,
 // and returns the public IP/port along with the active *net.UDPConn (unconnected)
 // so it can be reused for UDP Hole Punching.

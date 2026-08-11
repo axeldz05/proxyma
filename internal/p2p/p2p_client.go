@@ -1,7 +1,6 @@
 package p2p
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -15,7 +14,7 @@ type PeerClient interface {
 	Notify(ctx context.Context, peerID string, notification protocol.PeerNotification) error
 	NotifyServiceUpdate(ctx context.Context, peerID string, notification protocol.ServiceNotification) error
 	NotifyPipelineSchema(ctx context.Context, peerID string, notification protocol.PipelineNotification) error
-	AddPeer(peerID string, payload *bytes.Buffer) error
+	AddPeer(peerID string, req protocol.AddPeerRequest) error
 	DownloadBlob(ctx context.Context, peerID, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerID string) ([]string, error)
 	SubmitTask(ctx context.Context, peerID string, req protocol.TaskRequest) error
@@ -127,10 +126,10 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, que
 	return doJSON[protocol.ServiceBid](ctx, c, "POST", peerID, protocol.PathRel(protocol.PathServicesBid), query)
 }
 
-func (c *HTTPPeerClient) AddPeer(peerID string, payload *bytes.Buffer) error {
+func (c *HTTPPeerClient) AddPeer(peerID string, req protocol.AddPeerRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
 	defer cancel()
-	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathPeersAdd), payload, http.StatusOK)
+	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathPeersAdd), req, http.StatusOK)
 }
 
 func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {

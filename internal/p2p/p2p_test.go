@@ -1,7 +1,6 @@
 package p2p_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -234,7 +233,12 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 	})
 	addr, client := newMockServer(t, mux)
 
-	payload := bytes.NewBuffer([]byte(`{"id":"new-node","address":{"addresses":["https://new-node:8080"]}}`))
+	payload := protocol.AddPeerRequest{
+		ID: "new-node",
+		Address: protocol.AddressRecord{
+			Addresses: []string{"https://new-node:8080"},
+		},
+	}
 	err := client.AddPeer(addr, payload)
 	require.NoError(t, err)
 

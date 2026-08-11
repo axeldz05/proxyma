@@ -140,13 +140,8 @@ func BuildHTTPHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	}
 }
 
-// BuildGRPCHandler is the legacy name for BuildHTTPHandler.
-func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return BuildHTTPHandler(endpointURL, timeout)
-}
-
-// BuildGRPCBidiHandler creates a ServiceHandler for HTTP NDJSON bidirectional streaming (legacy name).
-func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+// BuildHTTPBidiHandler creates a ServiceHandler for HTTP NDJSON bidirectional streaming.
+func BuildHTTPBidiHandler(endpointURL string, timeout time.Duration) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		if in != nil && out != nil {
 			defer close(out)
@@ -190,7 +185,7 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 		sout := make(chan map[string]any, 1)
 		errChan := make(chan error, 1)
 
-		bidiFunc := BuildGRPCBidiHandler(endpointURL, timeout)
+		bidiFunc := BuildHTTPBidiHandler(endpointURL, timeout)
 		go func() {
 			errChan <- bidiFunc.ExecuteStream(ctx, sin, sout)
 		}()
@@ -228,9 +223,9 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 	}
 }
 
-// BuildGRPCServerStreamHandler creates a handler for HTTP NDJSON server-streaming (legacy name).
+// BuildHTTPServerStreamHandler creates a handler for HTTP NDJSON server-streaming.
 // POSTs JSON payload (or {} if empty) and pumps the NDJSON response body into out.
-func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+func BuildHTTPServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		if out == nil {
 			return nil, fmt.Errorf("server stream requires an output channel")
@@ -282,14 +277,4 @@ func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) Ser
 		}
 		return nil, nil
 	}
-}
-
-// BuildHTTPBidiHandler is the preferred name for HTTP NDJSON bidirectional streaming.
-func BuildHTTPBidiHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return BuildGRPCBidiHandler(endpointURL, timeout)
-}
-
-// BuildHTTPServerStreamHandler is the preferred name for HTTP NDJSON server-streaming.
-func BuildHTTPServerStreamHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return BuildGRPCServerStreamHandler(endpointURL, timeout)
 }

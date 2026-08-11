@@ -119,7 +119,6 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 
 	// Paths must point at the installed certs dir (not staging).
 	caPath, _ = p2p.CACertPaths(certsDir)
-	certPath, keyPath = p2p.NodeCertPaths(certsDir, nodeID)
 
 	workersCount := cfg.Workers
 	if workersCount <= 0 {

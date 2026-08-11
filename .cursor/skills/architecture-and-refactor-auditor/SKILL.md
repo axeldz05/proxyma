@@ -102,6 +102,8 @@ Si al cambiar una implementación o agregar una variante hay que tocar **más de
 | Peer `.proxyma.local` URL | `protocol.PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL` |
 | Service query string | `protocol.QueryService` / `WithServiceQuery` |
 | Leave/Offline body | `protocol.PeerIDRequest` |
+| Add-peer RPC body | `protocol.AddPeerRequest` on `PeerClient.AddPeer` |
+| Missing-mTLS forbid | `server.forbidMissingMTLS` / `requirePeerCN` |
 | HTTP ack envelopes | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
 | Test insecure HTTP | `testutil.InsecureTLSConfig` / `InsecureHTTPClient` |
 

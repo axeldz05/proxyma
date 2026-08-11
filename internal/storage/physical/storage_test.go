@@ -13,12 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test01StorageStartsWithNofiles(t *testing.T) {
+func Test01StorageStartsEmpty(t *testing.T) {
 	aStorage := storage.NewStorage(t.TempDir())
-	got, err := aStorage.AmountOfBlobs()
+	exists, err := aStorage.BlobExists("0000000000000000000000000000000000000000000000000000000000000000")
 	require.NoError(t, err)
-	want := 0
-	require.Equal(t, want, got)
+	require.False(t, exists)
 }
 
 func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
@@ -61,21 +60,19 @@ func Test04SaveBlobIsIdempotent(t *testing.T) {
 	require.Equal(t, hash1, hash2, "Hashes must be the same")
 }
 
-func Test05SavingBlobsIncreasesTheAmountOfBlobs(t *testing.T) {
+func Test05SavingBlobsAreDiscoverable(t *testing.T) {
 	aStorage := storage.NewStorage(t.TempDir())
 
 	content1 := aFileAcceptedByStorage()
-	_, _, err := aStorage.SaveBlob(bytes.NewReader(content1))
+	hash1, _, err := aStorage.SaveBlob(bytes.NewReader(content1))
 	require.NoError(t, err)
 
 	content2 := aFileAcceptedByStorage2()
-	_, _, err = aStorage.SaveBlob(bytes.NewReader(content2))
+	hash2, _, err := aStorage.SaveBlob(bytes.NewReader(content2))
 	require.NoError(t, err)
 
-	got, err := aStorage.AmountOfBlobs()
-	require.NoError(t, err)
-	want := 2
-	require.Equal(t, got, want)
+	assertBlobExists(t, aStorage, hash1)
+	assertBlobExists(t, aStorage, hash2)
 }
 
 func Test06StorageRecognizesTheSameSavedBlob(t *testing.T) {

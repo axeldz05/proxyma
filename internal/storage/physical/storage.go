@@ -105,12 +105,6 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 	return generatedHash, writtenBytes, nil
 }
 
-func (st *Storage) AmountOfBlobs() (int, error) {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	return len(st.blobCache), nil
-}
-
 func (st *Storage) BlobExists(hash string) (bool, error) {
 	st.mu.RLock()
 	exists := st.blobCache[hash]

@@ -32,6 +32,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`. Peer virtual hosts: `PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL`.
 * **Service query / HTTP acks**: `QueryService` + `WithServiceQuery`; `APIMessage` / `APIStatus` / `APITaskAck` + `utils.RespondMessage` / `RespondStatus`.
 * **Leave/Offline**: `protocol.PeerIDRequest` on `PeerClient` (same as HTTP handlers).
+* **AddPeer RPC**: `protocol.AddPeerRequest` on `PeerClient.AddPeer` (same as Announce/HTTP).
+* **Missing mTLS**: `forbidMissingMTLS` / `requirePeerCN` in `mtls.go`.
 * **Error wording**: validation text lives in `protocol/errors.go`; validators may stay per-layer, the message must not be retyped.
 * **No parallel maps on one key**: per-entity state goes in one struct under one lock (`peerState`), not N maps with N mutexes.
 * **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors (`storage.NewStorageEngine` and `server.New` return `(T, error)`); Bolt failures propagate instead of collapsing into a bool.
@@ -91,7 +93,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
 * `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` (returns error) / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
 * `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`/`PeerLocal*`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
-* `compute`: `serviceTypeBuilders` → `BuildHandler` (`BuildHTTPHandler`; `BuildGRPCHandler` legacy alias); `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
+* `compute`: `serviceTypeBuilders` → `BuildHandler` (`BuildHTTPHandler` / `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler`); `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
 * `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`; bbolt types are `bbolt.Tx` / `bbolt.DB`.
 * `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` / **`InsecureTLSConfig` / `InsecureHTTPClient`** — but tests whose subject *is* a TLS/storage step keep using the L1.
 * **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**, shared `vfsNameParam`/`svcNameParam`/`pipelineIDParam`). Compute `ServiceSchema` remains a separate contract.
@@ -136,6 +138,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Service `?service=` query | `protocol.QueryService` / `WithServiceQuery` |
 | HTTP ack message/status | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
 | Leave/Offline RPC body | `protocol.PeerIDRequest` |
+| Add-peer RPC body | `protocol.AddPeerRequest` on `PeerClient.AddPeer` |
+| Missing-mTLS forbid | `server.forbidMissingMTLS` / `requirePeerCN` |
 | Unexpected HTTP status | `utils.HTTPStatusError` / `HTTPErrorFromResponse` / `p2p.RequireHTTPStatus` / `OpenHTTPBody` |
 | Required unix args / relay cap | `requireUnixArgs` / `rejectOversizedRelay` |
 | TLS rotation payload | `protocol.RotateTLSPayload` |
@@ -178,7 +182,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ### Pairing
 1. `LocalInviteGenerate` → `(token, expires)` + `protocol.DefaultInviteMinutes` (**CA key required**).
 2. Join CSR → `/cluster/join` with **`CheckAndConsume`** (or `ForwardRelay`).
-3. `mTLSGuard` on inter-node HTTP (`peerCNFromRequest`).
+3. `mTLSGuard` on inter-node HTTP (`peerCNFromRequest` / `requirePeerCN`).
 
 ### VFS / Compute
 1. `announceAndSync` + `forEachPeer` manifests → `fetchBlobFromPeer`.

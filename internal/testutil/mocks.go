@@ -1,7 +1,6 @@
 package testutil
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"proxyma/internal/p2p"
@@ -13,7 +12,7 @@ type MockPeerClient struct {
 	OnAnnounce             func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	OnNotify               func(ctx context.Context, addr string, n protocol.PeerNotification) error
 	OnNotifyServiceUpdate  func(ctx context.Context, addr string, n protocol.ServiceNotification) error
-	OnAddPeer              func(addr string, payload *bytes.Buffer) error
+	OnAddPeer              func(addr string, req protocol.AddPeerRequest) error
 	OnDownloadBlob         func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
 	OnDiscoverServices     func(ctx context.Context, addr string) ([]string, error)
 	OnSubmitTask           func(ctx context.Context, addr string, req protocol.TaskRequest) error
@@ -28,7 +27,10 @@ type MockPeerClient struct {
 	OnNotifyPipelineSchema func(ctx context.Context, addr string, n protocol.PipelineNotification) error
 }
 
-func (m *MockPeerClient) AddPeer(addr string, payload *bytes.Buffer) error {
+func (m *MockPeerClient) AddPeer(addr string, req protocol.AddPeerRequest) error {
+	if m.OnAddPeer != nil {
+		return m.OnAddPeer(addr, req)
+	}
 	return nil
 }
 
