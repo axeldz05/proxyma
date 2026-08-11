@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/testutil"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -106,18 +107,8 @@ func TestP2PRoundTripperRelayFallback(t *testing.T) {
 
 func TestP2PRoundTripperPeerIdentityMismatch(t *testing.T) {
 	// 1. Generate CA and certificates for 'bob'
-	caPath := t.TempDir()
-	err := p2p.InitCluster(caPath)
-	require.NoError(t, err)
-
-	err = p2p.IssueNodeCertificate(caPath, caPath, "bob")
-	require.NoError(t, err)
-
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(caPath, "bob")
-
-	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
+	bob := testutil.NewNodeTLS(t, "bob")
+	serverTLS, clientTLS := bob.ServerTLS, bob.ClientTLS
 
 	// 2. Start a secure TLS server presenting 'bob''s certificate
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

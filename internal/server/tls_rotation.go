@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 )
 
 func (s *Server) SetTLSConfigs(serverTLS, clientTLS *tls.Config) {
@@ -121,12 +122,10 @@ func (s *Server) RotateCAAndResignPeers() {
 			return err
 		}
 
-		rotationPayload := map[string]string{
-			"ca_cert":   string(caCertPEM),
-			"node_cert": string(newCertPEM),
-		}
-
-		err = s.peerClient.RotateTLS(ctx, peerID, rotationPayload)
+		err = s.peerClient.RotateTLS(ctx, peerID, protocol.RotateTLSPayload{
+			CACert:   string(caCertPEM),
+			NodeCert: string(newCertPEM),
+		})
 		if err != nil {
 			s.Config.Logger.Error("Failed to push rotated TLS certs to peer", "peerID", peerID, "error", err)
 			return err

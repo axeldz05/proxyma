@@ -7,6 +7,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
+	"strconv"
 )
 
 // configTCPPort returns the configured listen TCP port (default protocol.DefaultTCPPort) as string and int.
@@ -32,153 +33,169 @@ func (s *Server) advertisedTCPPort() string {
 	return portStr
 }
 
+// defaultSTUNServer is used when the node config leaves STUNServer empty.
+const defaultSTUNServer = "stun.l.google.com:19302"
+
+// publicEndpoint is the externally visible UDP endpoint plus the socket that
+// discovered it. The socket is later reused as the QUIC transport.
+type publicEndpoint struct {
+	IP   string
+	Port int
+	Conn *net.UDPConn
+}
+
+// applySponsorStatus records the auto-detected role, letting an explicit config
+// override win (SSOT for every exit path of NAT detection).
+func (s *Server) applySponsorStatus(detected bool) {
+	if override := s.Config.IsSponsorOverride; override != nil {
+		s.isSponsor = *override
+		s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
+		return
+	}
+	s.isSponsor = detected
+}
+
 func (s *Server) determineSponsorAndNATStatus() {
 	s.Config.Logger.Info("Determining NAT and Sponsor status...")
 
-	sponsorOverride := s.Config.IsSponsorOverride
-
-	// Perform STUN check to get public IP (override only sets isSponsor; do not skip QUIC/NAT).
-	stunServer := s.Config.STUNServer
-	if stunServer == "" {
-		stunServer = "stun.l.google.com:19302"
-	}
-
-	var extIP string
-	var extPort int
-	var conn *net.UDPConn
-	var err error
-
-	extIP, extPort, conn, err = utils.GetExternalUDPListener(stunServer, PeerRPCSTUN)
-	stunSuccess := err == nil
-
-	if !stunSuccess {
-		s.Config.Logger.Warn("STUN check failed, trying UPnP fallback to discover gateway", "error", err)
-		if s.Config.DisableUPnP {
-			if sponsorOverride != nil {
-				s.isSponsor = *sponsorOverride
-			} else {
-				s.isSponsor = false
-			}
-			return
-		}
-		// Bind a local UDP socket to use for QUIC
-		var listenErr error
-		conn, listenErr = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-		if listenErr != nil {
-			s.Config.Logger.Warn("Could not bind local UDP socket after STUN failure", "error", listenErr)
-			if sponsorOverride != nil {
-				s.isSponsor = *sponsorOverride
-			} else {
-				s.isSponsor = false
-			}
-			return
-		}
-	} else {
-		s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
-	}
-
-	// Try UPnP/NAT-PMP mapping if enabled (default)
-	if !s.Config.DisableUPnP {
-		_, tcpPort := s.configTCPPort()
-		udpPort := conn.LocalAddr().(*net.UDPAddr).Port
-
-		s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
-		s.natMapper.SetOnMapped(func(mappedTCP, mappedUDP int) {
-			s.refreshPublicUDPFromMapping(extIP, mappedUDP)
-		})
-		s.natMapper.Start()
-
-		mappedTCP, mappedUDP := s.natMapper.GetMappedPorts()
-		if mappedTCP > 0 {
-			tcpPort = mappedTCP
-		}
-		if mappedUDP > 0 {
-			extPort = mappedUDP
-		}
-
-		// If STUN failed but UPnP succeeded, query router for our external IP
-		if !stunSuccess && mappedTCP > 0 {
-			routerIP, routerErr := s.natMapper.GetExternalAddress()
-			if routerErr == nil && routerIP != nil {
-				extIP = routerIP.String()
-				stunSuccess = true // We have a valid public IP now!
-				s.Config.Logger.Info("UPnP successfully mapped ports and retrieved public IP from gateway", "ip", extIP, "tcpPort", tcpPort, "udpPort", extPort)
-			}
-		}
-	}
-
-	// If we still don't have a valid STUN/UPnP external IP, we cannot act as a Sponsor
-	if !stunSuccess {
-		s.Config.Logger.Warn("Could not determine public IP, assuming private/CGNAT network")
-		_ = conn.Close()
-		if sponsorOverride != nil {
-			s.isSponsor = *sponsorOverride
-			s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
-		} else {
-			s.isSponsor = false
-		}
+	// An override only decides the sponsor role; NAT/QUIC setup still runs.
+	endpoint, publicKnown, err := s.openUDPEndpoint()
+	if err != nil {
+		s.applySponsorStatus(false)
 		return
 	}
 
-	// Initialize QUIC Manager with the socket used for STUN query
+	if !s.Config.DisableUPnP {
+		endpoint, publicKnown = s.mapPortsWithUPnP(endpoint, publicKnown)
+	}
+
+	if !publicKnown {
+		s.Config.Logger.Warn("Could not determine public IP, assuming private/CGNAT network")
+		_ = endpoint.Conn.Close()
+		s.applySponsorStatus(false)
+		return
+	}
+
+	s.startDirectQUIC(endpoint)
+	s.applySponsorStatus(s.detectPublicReachability(endpoint.IP))
+}
+
+// openUDPEndpoint returns the socket QUIC will use plus whether STUN already
+// revealed a public address. A non-nil error means no socket could be opened.
+func (s *Server) openUDPEndpoint() (publicEndpoint, bool, error) {
+	stunServer := s.Config.STUNServer
+	if stunServer == "" {
+		stunServer = defaultSTUNServer
+	}
+
+	extIP, extPort, conn, err := utils.GetExternalUDPListener(stunServer, PeerRPCSTUN)
+	if err == nil {
+		s.Config.Logger.Debug("STUN public IP detected", "ip", extIP, "port", extPort)
+		return publicEndpoint{IP: extIP, Port: extPort, Conn: conn}, true, nil
+	}
+
+	s.Config.Logger.Warn("STUN check failed, trying UPnP fallback to discover gateway", "error", err)
+	if s.Config.DisableUPnP {
+		return publicEndpoint{}, false, err
+	}
+
+	local, listenErr := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if listenErr != nil {
+		s.Config.Logger.Warn("Could not bind local UDP socket after STUN failure", "error", listenErr)
+		return publicEndpoint{}, false, listenErr
+	}
+	return publicEndpoint{Conn: local}, false, nil
+}
+
+// mapPortsWithUPnP starts the port mapper and, when STUN failed, recovers the
+// public IP from the gateway. It reports whether a public IP is known afterwards.
+func (s *Server) mapPortsWithUPnP(endpoint publicEndpoint, publicKnown bool) (publicEndpoint, bool) {
+	_, tcpPort := s.configTCPPort()
+	udpPort := endpoint.Conn.LocalAddr().(*net.UDPAddr).Port
+
+	s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
+	s.natMapper.SetOnMapped(func(mappedTCP, mappedUDP int) {
+		s.refreshPublicUDPFromMapping(endpoint.IP, mappedUDP)
+	})
+	s.natMapper.Start()
+
+	mappedTCP, mappedUDP := s.natMapper.GetMappedPorts()
+	if mappedTCP > 0 {
+		tcpPort = mappedTCP
+	}
+	if mappedUDP > 0 {
+		endpoint.Port = mappedUDP
+	}
+
+	if publicKnown || mappedTCP <= 0 {
+		return endpoint, publicKnown
+	}
+
+	routerIP, routerErr := s.natMapper.GetExternalAddress()
+	if routerErr != nil || routerIP == nil {
+		return endpoint, false
+	}
+	endpoint.IP = routerIP.String()
+	s.Config.Logger.Info("UPnP successfully mapped ports and retrieved public IP from gateway",
+		"ip", endpoint.IP, "tcpPort", tcpPort, "udpPort", endpoint.Port)
+	return endpoint, true
+}
+
+// startDirectQUIC reuses the discovery socket as the QUIC transport. Without TLS
+// material there is nothing to serve, so the socket is released.
+func (s *Server) startDirectQUIC(endpoint publicEndpoint) {
 	s.tlsMutex.RLock()
-	stls := s.serverTLSConfig
-	ctls := s.clientTLSConfig
+	stls, ctls := s.serverTLSConfig, s.clientTLSConfig
 	s.tlsMutex.RUnlock()
 
 	if stls == nil || ctls == nil {
-		_ = conn.Close()
-	} else {
-		s.udpConn = conn
-		s.publicUDPAddr = fmt.Sprintf("%s:%d", extIP, extPort)
-		s.quicMgr = p2p.NewQUICManager(s.Config.ID, conn, ctls, stls, s.handler, s.Config.Logger)
-		s.quicMgr.PublicUDPAddr = s.publicUDPAddr
-
-		if err := s.quicMgr.StartListener(); err != nil {
-			s.Config.Logger.Error("Failed to start QUIC listener", "error", err)
-		} else {
-			s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", s.publicUDPAddr)
-			s.peerClient.SetQUICManager(s.quicMgr)
-		}
+		_ = endpoint.Conn.Close()
+		return
 	}
 
-	// Check if the IP is private or CGNAT
+	s.udpConn = endpoint.Conn
+	s.publicUDPAddr = net.JoinHostPort(endpoint.IP, strconv.Itoa(endpoint.Port))
+	s.quicMgr = p2p.NewQUICManager(s.Config.ID, endpoint.Conn, ctls, stls, s.handler, s.Config.Logger)
+	s.quicMgr.PublicUDPAddr = s.publicUDPAddr
+
+	if err := s.quicMgr.StartListener(); err != nil {
+		s.Config.Logger.Error("Failed to start QUIC listener", "error", err)
+		return
+	}
+	s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", s.publicUDPAddr)
+	s.peerClient.SetQUICManager(s.quicMgr)
+}
+
+// detectPublicReachability decides whether this node can serve as a Sponsor:
+// CGNAT ranges never can, and a node with peers must be confirmed from outside.
+func (s *Server) detectPublicReachability(extIP string) bool {
 	if utils.IsPrivateOrCGNATIP(extIP) {
 		s.Config.Logger.Info("Node is behind CGNAT/Private range. Auto-detected as NOT a Sponsor.", "ip", extIP)
-		s.isSponsor = false
-	} else if s.Config.BootstrapNode != "" {
-		// Probe ourselves via a peer in the cluster (Bootstrap Node)
-		ownPort := s.advertisedTCPPort()
-
-		s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
-
-		ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSTUN)
-		defer cancel()
-
-		probeReq := protocol.ProbeRequest{
-			Address: fmt.Sprintf("https://%s:%s", extIP, ownPort),
-		}
-
-		probeResp, err := s.peerClient.RequestProbe(ctx, s.Config.BootstrapNode, probeReq)
-		if err != nil {
-			s.Config.Logger.Warn("Probe request to Bootstrap Node failed, assuming firewalled", "error", err)
-			s.isSponsor = false
-		} else if !probeResp.Reachable {
-			s.Config.Logger.Info("Node port is unreachable from outside (Firewalled). Auto-detected as NOT a Sponsor.", "error", probeResp.Error)
-			s.isSponsor = false
-		} else {
-			s.Config.Logger.Info("Node is publicly reachable. Auto-detected as a Sponsor!")
-			s.isSponsor = true
-		}
-	} else {
-		// If we are the Bootstrap Node (no bootstrap node configured) and we have a public IP, we assume we are a Sponsor.
-		s.Config.Logger.Info("No Bootstrap Node configured. Assuming publicly reachable Sponsor since IP is public.", "ip", extIP)
-		s.isSponsor = true
+		return false
 	}
 
-	if sponsorOverride != nil {
-		s.isSponsor = *sponsorOverride
-		s.Config.Logger.Info("Sponsor status manually overridden", "isSponsor", s.isSponsor)
+	if s.Config.BootstrapNode == "" {
+		s.Config.Logger.Info("No Bootstrap Node configured. Assuming publicly reachable Sponsor since IP is public.", "ip", extIP)
+		return true
+	}
+
+	s.Config.Logger.Info("Requesting reachability probe from Bootstrap Node...", "bootstrap", s.Config.BootstrapNode)
+	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSTUN)
+	defer cancel()
+
+	probeResp, err := s.peerClient.RequestProbe(ctx, s.Config.BootstrapNode, protocol.ProbeRequest{
+		Address: protocol.HTTPSAddr(extIP, s.advertisedTCPPort()),
+	})
+	switch {
+	case err != nil:
+		s.Config.Logger.Warn("Probe request to Bootstrap Node failed, assuming firewalled", "error", err)
+		return false
+	case !probeResp.Reachable:
+		s.Config.Logger.Info("Node port is unreachable from outside (Firewalled). Auto-detected as NOT a Sponsor.", "error", probeResp.Error)
+		return false
+	default:
+		s.Config.Logger.Info("Node is publicly reachable. Auto-detected as a Sponsor!")
+		return true
 	}
 }
 

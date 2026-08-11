@@ -19,15 +19,8 @@ import (
 
 func TestMTLSConnectionRejectsUnauthorizedPeers(t *testing.T) {
 	t.Parallel()
-	caPath := t.TempDir()
-	err := p2p.InitCluster(caPath)
-	require.NoError(t, err)
-	err = p2p.IssueNodeCertificate(caPath, caPath, "1")
-	require.NoError(t, err)
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(caPath, "1")
-	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err, "Should not fail while generating certs for the cluster")
+	node := testutil.NewNodeTLS(t, "1")
+	serverTLS, clientTLS := node.ServerTLS, node.ClientTLS
 	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("hyper secure connection")); err != nil {

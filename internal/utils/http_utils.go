@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -16,7 +17,9 @@ func RespondJSON(w http.ResponseWriter, status int, payload any) {
 	w.WriteHeader(status)
 	if payload != nil {
 		if err := json.NewEncoder(w).Encode(payload); err != nil {
-			panic(err)
+			// Status and headers are already on the wire, so the client just sees a
+			// truncated body. Panicking here would take the whole node down.
+			slog.Error("Failed to encode JSON response", "status", status, "error", err)
 		}
 	}
 }

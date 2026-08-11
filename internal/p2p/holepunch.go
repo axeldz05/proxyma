@@ -63,7 +63,7 @@ func BurstPings(pc net.PacketConn, addr *net.UDPAddr, localID string, n int, int
 
 func (qm *QUICManager) serveIncomingStreams(conn *quic.Conn, tlsState *tls.ConnectionState) {
 	for {
-		stream, err := conn.AcceptStream(context.Background())
+		stream, err := conn.AcceptStream(qm.lifetime())
 		if err != nil {
 			return
 		}
@@ -109,6 +109,14 @@ type dialResult struct {
 	err  error
 }
 
+// Logger is the logging surface the QUIC manager needs (satisfied by *slog.Logger).
+type Logger interface {
+	Info(msg string, args ...any)
+	Debug(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+}
+
 // QUICManager manages active direct QUIC sessions and incoming listeners
 type QUICManager struct {
 	LocalID       string
@@ -121,17 +129,19 @@ type QUICManager struct {
 	TLSClient     *tls.Config
 	TLSServer     *tls.Config
 	HTTPHandler   http.Handler
-	Logger        interface {
-		Info(msg string, args ...any)
-		Debug(msg string, args ...any)
-		Warn(msg string, args ...any)
-		Error(msg string, args ...any)
-	}
+	Logger        Logger
+
+	// ctx is cancelled by Close so accept loops unblock at shutdown instead of
+	// waiting on their own connection teardown.
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+
 	dialsMu sync.Mutex
 	dials   map[string]*dialResult
 }
 
-func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls.Config, handler http.Handler, logger any) *QUICManager {
+func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls.Config, handler http.Handler, logger Logger) *QUICManager {
 	wrapped := NewHolePunchPacketConn(conn)
 
 	// Clone TLS configs and append NextProtos required by QUIC
@@ -144,7 +154,8 @@ func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls
 		Conn: wrapped,
 	}
 
-	qm := &QUICManager{
+	ctx, cancel := context.WithCancel(context.Background())
+	return &QUICManager{
 		LocalID:     localID,
 		PacketConn:  wrapped,
 		Transport:   transport,
@@ -152,20 +163,11 @@ func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls
 		TLSClient:   clTls,
 		TLSServer:   srvTls,
 		HTTPHandler: handler,
+		Logger:      logger,
+		ctx:         ctx,
+		cancel:      cancel,
 		dials:       make(map[string]*dialResult),
 	}
-
-	// Cast logging interface
-	if casted, ok := logger.(interface {
-		Info(msg string, args ...any)
-		Debug(msg string, args ...any)
-		Warn(msg string, args ...any)
-		Error(msg string, args ...any)
-	}); ok {
-		qm.Logger = casted
-	}
-
-	return qm
 }
 
 func (qm *QUICManager) StartListener() error {
@@ -177,7 +179,7 @@ func (qm *QUICManager) StartListener() error {
 
 	go func() {
 		for {
-			conn, err := listener.Accept(context.Background())
+			conn, err := listener.Accept(qm.lifetime())
 			if err != nil {
 				return
 			}
@@ -186,6 +188,15 @@ func (qm *QUICManager) StartListener() error {
 	}()
 
 	return nil
+}
+
+// lifetime returns the manager context, which Close cancels. Managers built by
+// tests without the constructor fall back to Background.
+func (qm *QUICManager) lifetime() context.Context {
+	if qm.ctx == nil {
+		return context.Background()
+	}
+	return qm.ctx
 }
 
 // SetSession stores a QUIC connection in the sessions map.
@@ -215,6 +226,11 @@ func (qm *QUICManager) removeDial(peerID string) {
 }
 
 func (qm *QUICManager) Close() {
+	qm.closeOnce.Do(func() {
+		if qm.cancel != nil {
+			qm.cancel()
+		}
+	})
 	if qm.QUICListener != nil {
 		_ = qm.QUICListener.Close()
 	}

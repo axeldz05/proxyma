@@ -77,7 +77,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 			if ip.To4() == nil || ip.IsLoopback() {
 				continue
 			}
-			addr := fmt.Sprintf("https://%s:%s", ip.String(), tcpPortStr)
+			addr := protocol.HTTPSAddr(ip.String(), tcpPortStr)
 			if !seen[addr] {
 				addresses = append(addresses, addr)
 				seen[addr] = true
@@ -87,7 +87,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	if s.isSponsor && s.publicUDPAddr != "" {
 		host, _, err := net.SplitHostPort(s.publicUDPAddr)
 		if err == nil {
-			publicTCPAddr := fmt.Sprintf("https://%s:%s", host, tcpPortStr)
+			publicTCPAddr := protocol.HTTPSAddr(host, tcpPortStr)
 			if !seen[publicTCPAddr] {
 				addresses = append(addresses, publicTCPAddr)
 				seen[publicTCPAddr] = true

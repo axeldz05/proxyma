@@ -197,14 +197,14 @@ func ParseSmartToken(smartToken string) (payload InvitePayload, secret string, e
 				}
 				ip := net.IP(data[idx : idx+4])
 				idx += 4
-				payload.Addresses = append(payload.Addresses, fmt.Sprintf("https://%s:%d", ip.String(), port))
+				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
 			case 2: // IPv6
 				if idx+16 > len(data) {
 					return InvitePayload{}, "", fmt.Errorf("malformed binary token: ipv6 out of bounds")
 				}
 				ip := net.IP(data[idx : idx+16])
 				idx += 16
-				payload.Addresses = append(payload.Addresses, fmt.Sprintf("https://[%s]:%d", ip.String(), port))
+				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
 			case 3: // Hostname
 				if idx >= len(data) {
 					return InvitePayload{}, "", fmt.Errorf("malformed binary token: hostname len out of bounds")
@@ -216,7 +216,7 @@ func ParseSmartToken(smartToken string) (payload InvitePayload, secret string, e
 				}
 				host := string(data[idx : idx+hostLen])
 				idx += hostLen
-				payload.Addresses = append(payload.Addresses, fmt.Sprintf("https://%s:%d", host, port))
+				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(host, port))
 			case 4: // Relay Information
 				if idx >= len(data) {
 					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay sid len out of bounds")

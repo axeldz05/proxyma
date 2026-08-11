@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -68,6 +71,21 @@ func ClientHost(remoteAddr string) string {
 // HTTPSuccess reports whether status is 2xx.
 func HTTPSuccess(code int) bool {
 	return code >= 200 && code < 300
+}
+
+// HTTPStatusError describes an unexpected status code (L1 SSOT for the message).
+func HTTPStatusError(code int) error {
+	return fmt.Errorf("unexpected status code: %d", code)
+}
+
+// HTTPErrorFromResponse returns nil for 2xx, otherwise an error carrying the
+// status and the (already consumed) response body (L1). Callers keep owning Close.
+func HTTPErrorFromResponse(resp *http.Response, label string) error {
+	if HTTPSuccess(resp.StatusCode) {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("%s returned status %d: %s", label, resp.StatusCode, string(body))
 }
 
 // ExtractPort parses the port from an address string (e.g. "https://127.0.0.1:8443" or "localhost:8080").

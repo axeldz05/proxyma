@@ -67,6 +67,12 @@ var (
 		Required:    true,
 		Description: "Service name",
 	}
+	pipelineIDParam = ParameterDetail{
+		Name:        "id",
+		Type:        "string",
+		Required:    true,
+		Description: "Unique pipeline identifier",
+	}
 )
 
 // Registry is the global single source of truth for all user actions
@@ -323,9 +329,7 @@ var Registry = []DomainDetail{
 				OutputType:  "json",
 				UnixAction:  "service_detail",
 				Hidden:      true,
-				Parameters: []ParameterDetail{
-					{Name: "name", Type: "string", Required: true, Description: "Service name"},
-				},
+				Parameters:  []ParameterDetail{svcNameParam},
 			},
 			{
 				Name:        "status",
@@ -345,7 +349,7 @@ var Registry = []DomainDetail{
 				UnixAction:     "pipeline_add",
 				SuccessMessage: "Pipeline added successfully",
 				Parameters: []ParameterDetail{
-					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
+					pipelineIDParam,
 					{Name: "schema-file", Type: "string", Required: true, Description: "Path to JSON file containing the pipeline schema", UIHint: "file_picker"},
 				},
 			},
@@ -368,9 +372,7 @@ var Registry = []DomainDetail{
 				OutputType:     "text",
 				UnixAction:     "pipeline_remove",
 				SuccessMessage: "Pipeline removed successfully",
-				Parameters: []ParameterDetail{
-					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
-				},
+				Parameters:     []ParameterDetail{pipelineIDParam},
 			},
 			{
 				Name:        "get_pipeline",
@@ -378,9 +380,7 @@ var Registry = []DomainDetail{
 				Description: "Retrieve a pipeline schema JSON by ID",
 				OutputType:  "json",
 				UnixAction:  "pipeline_get",
-				Parameters: []ParameterDetail{
-					{Name: "id", Type: "string", Required: true, Description: "Unique pipeline identifier"},
-				},
+				Parameters:  []ParameterDetail{pipelineIDParam},
 			},
 			{
 				Name:        "clone_pipeline",

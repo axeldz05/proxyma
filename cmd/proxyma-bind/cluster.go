@@ -64,7 +64,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 
 	// Prefer stable node-ID hostname (matches `proxyma init` and Docker Compose DNS).
 	// Ephemeral bridge/LAN IPs are added later by AnnouncePresence as secondary addresses.
-	localAddr := fmt.Sprintf("https://%s:%s", nodeID, port)
+	localAddr := protocol.HTTPSAddr(nodeID, port)
 
 	logFn := func(msg string, err error) {
 		if appLogger != nil {

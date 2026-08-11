@@ -13,6 +13,25 @@ import (
 	"time"
 )
 
+// withHandlerTimeout bounds a handler run when a positive timeout is configured (L2).
+// A zero timeout keeps the caller's context so long-lived NDJSON pipes are not cut.
+func withHandlerTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// streamHTTPClient builds the client used by streaming handlers (L2). Deadlines
+// come from the context; a client-level timeout only applies when one is set.
+func streamHTTPClient(timeout time.Duration) *http.Client {
+	clientTimeout := time.Duration(0)
+	if timeout > 0 {
+		clientTimeout = timeout
+	}
+	return p2p.NewHTTPClient(nil, clientTimeout)
+}
+
 // doJSONPost POSTs JSON to endpointURL and decodes a JSON object response (L2).
 func doJSONPost(ctx context.Context, client *http.Client, endpointURL string, payload map[string]any) (map[string]any, error) {
 	resp, err := p2p.PostJSONAbsolute(ctx, client, endpointURL, payload)
@@ -21,9 +40,8 @@ func doJSONPost(ctx context.Context, client *http.Client, endpointURL string, pa
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if !utils.HTTPSuccess(resp.StatusCode) {
-		bodyStr, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("remote server returned status %d: %s", resp.StatusCode, string(bodyStr))
+	if err := utils.HTTPErrorFromResponse(resp, "remote server"); err != nil {
+		return nil, err
 	}
 
 	var result map[string]any
@@ -127,24 +145,14 @@ func BuildHTTPHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	return BuildGRPCHandler(endpointURL, timeout)
 }
 
-// notImplementedHandler generates a stub for unsupported connections.
-func notImplementedHandler(name string) ServiceHandler {
-	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
-		return nil, fmt.Errorf("%s not yet implemented", name)
-	}
-}
-
 // BuildGRPCBidiHandler creates a ServiceHandler for HTTP NDJSON bidirectional streaming (legacy name).
 func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		if in != nil && out != nil {
 			defer close(out)
 
-			if timeout > 0 {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, timeout)
-				defer cancel()
-			}
+			ctx, cancel := withHandlerTimeout(ctx, timeout)
+			defer cancel()
 
 			pr, pw := io.Pipe()
 
@@ -162,22 +170,14 @@ func BuildGRPCBidiHandler(endpointURL string, timeout time.Duration) ServiceHand
 			}
 			req.Header.Set("Content-Type", "application/x-ndjson")
 
-			// Streaming: rely on ctx for deadline; avoid client-level timeout that
-			// would cut long-lived NDJSON pipes when handler timeout is 0.
-			clientTimeout := time.Duration(0)
-			if timeout > 0 {
-				clientTimeout = timeout
-			}
-			client := p2p.NewHTTPClient(nil, clientTimeout)
-			resp, err := client.Do(req)
+			resp, err := streamHTTPClient(timeout).Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("bidi stream request failed: %w", err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 
-			if !utils.HTTPSuccess(resp.StatusCode) {
-				bodyStr, _ := io.ReadAll(resp.Body)
-				return nil, fmt.Errorf("remote bidi stream server returned status %d: %s", resp.StatusCode, string(bodyStr))
+			if err := utils.HTTPErrorFromResponse(resp, "remote bidi stream server"); err != nil {
+				return nil, err
 			}
 
 			if err := utils.PumpJSONDecode(ctx, resp.Body, out); err != nil {
@@ -237,11 +237,8 @@ func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) Ser
 		}
 		defer close(out)
 
-		if timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
+		ctx, cancel := withHandlerTimeout(ctx, timeout)
+		defer cancel()
 
 		bodyPayload := payload
 		if bodyPayload == nil {
@@ -270,20 +267,14 @@ func BuildGRPCServerStreamHandler(endpointURL string, timeout time.Duration) Ser
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/x-ndjson")
 
-		clientTimeout := time.Duration(0)
-		if timeout > 0 {
-			clientTimeout = timeout
-		}
-		client := p2p.NewHTTPClient(nil, clientTimeout)
-		resp, err := client.Do(req)
+		resp, err := streamHTTPClient(timeout).Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("server-stream request failed: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		if !utils.HTTPSuccess(resp.StatusCode) {
-			bodyStr, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("remote server-stream returned status %d: %s", resp.StatusCode, string(bodyStr))
+		if err := utils.HTTPErrorFromResponse(resp, "remote server-stream"); err != nil {
+			return nil, err
 		}
 
 		if err := utils.PumpJSONDecode(ctx, resp.Body, out); err != nil {

@@ -213,16 +213,13 @@ func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
 		File:   fileInfo,
 		Source: s.Config.Address,
 	}
+	dedupe := fmt.Sprintf("%s|%s|%d", fileInfo.Name, fileInfo.Hash, fileInfo.Version)
+	if fileInfo.Deleted {
+		dedupe += "|del"
+	}
 	s.gossipAll(func(ctx context.Context, peerID string) error {
-		err := s.peerClient.Notify(ctx, peerID, payload)
-		if err != nil {
-			s.Config.Logger.Debug("Unreachable peer for real-time notification", "peerID", peerID, "error", err)
-			dedupe := fileInfo.Name + "|" + fileInfo.Hash + "|" + fmt.Sprintf("%d", fileInfo.Version)
-			if fileInfo.Deleted {
-				dedupe += "|del"
-			}
-			s.enqueueOutbox(peerID, "vfs", dedupe, payload)
-		}
-		return err
+		return s.notifyWithOutbox(ctx, peerID, kindVFS, dedupe, payload, func(ctx context.Context) error {
+			return s.peerClient.Notify(ctx, peerID, payload)
+		})
 	})
 }

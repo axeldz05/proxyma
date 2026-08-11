@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"strings"
@@ -20,11 +19,7 @@ import (
 func mtlsClientForPeer(t *testing.T, sponsor *TestServer, peerID string) *http.Client {
 	t.Helper()
 	caPath := filepath.Dir(sponsor.Config.StoragePath)
-	require.NoError(t, p2p.IssueNodeCertificate(caPath, sponsor.Config.StoragePath, peerID))
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(sponsor.Config.StoragePath, peerID)
-	_, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
+	clientTLS := testutil.IssueNode(t, caPath, sponsor.Config.StoragePath, peerID).ClientTLS
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig:   clientTLS,

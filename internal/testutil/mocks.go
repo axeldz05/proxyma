@@ -24,7 +24,7 @@ type MockPeerClient struct {
 	OnLeave               func(ctx context.Context, peerID string, leaveReq map[string]string) error
 	OnOffline             func(ctx context.Context, peerID string, offlineReq map[string]string) error
 	OnRequestProbe        func(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
-	OnRotateTLS           func(ctx context.Context, peerID string, payload map[string]string) error
+	OnRotateTLS           func(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	OnNotifyPipelineSchema func(ctx context.Context, addr string, n protocol.PipelineNotification) error
 }
 
@@ -130,7 +130,7 @@ func (m *MockPeerClient) RequestProbe(ctx context.Context, targetAddr string, re
 	return protocol.ProbeResponse{Reachable: true}, nil
 }
 
-func (m *MockPeerClient) RotateTLS(ctx context.Context, peerID string, payload map[string]string) error {
+func (m *MockPeerClient) RotateTLS(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error {
 	if m.OnRotateTLS != nil {
 		return m.OnRotateTLS(ctx, peerID, payload)
 	}

@@ -18,6 +18,27 @@ import (
 	"proxyma/internal/utils"
 )
 
+// relayCapExceeded reports whether size is over the relay body cap (L1).
+func relayCapExceeded(size int) bool {
+	return size > protocol.MaxRelayBodyBytes
+}
+
+// relayCapMessage renders the cap error text from the constant, so raising
+// MaxRelayBodyBytes never leaves a stale size in the message.
+func relayCapMessage(what string) string {
+	return fmt.Sprintf("%s exceeds %dKB limit", what, protocol.MaxRelayBodyBytes/1024)
+}
+
+// rejectOversizedRelay answers 413 when size is over the cap, reporting whether
+// the caller should stop (L1).
+func rejectOversizedRelay(w http.ResponseWriter, size int, what string) bool {
+	if !relayCapExceeded(size) {
+		return false
+	}
+	utils.RespondError(w, http.StatusRequestEntityTooLarge, relayCapMessage(what))
+	return true
+}
+
 // RelayManager manages the relay communication queues and response waiters for tunneling HTTP requests.
 type RelayManager struct {
 	server  *Server
@@ -113,8 +134,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Body) > protocol.MaxRelayBodyBytes {
-		utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay payload exceeds 64KB limit")
+	if rejectOversizedRelay(w, len(req.Body), "Relay payload") {
 		return
 	}
 
@@ -133,8 +153,8 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if req.Path != protocol.PathClusterJoin {
-			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not cluster join", "path", req.Path, "ip", r.RemoteAddr)
+		if !s.relayAllowsAnonymous(req.Path) {
+			s.Config.Logger.Warn("Reject unauthenticated relay forward: path is not relay-anonymous", "path", req.Path, "ip", r.RemoteAddr)
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")
 			return
 		}
@@ -163,8 +183,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case resp := <-waiter:
-		if len(resp.Body) > protocol.MaxRelayBodyBytes {
-			utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay response exceeds 64KB limit")
+		if rejectOversizedRelay(w, len(resp.Body), "Relay response") {
 			return
 		}
 		utils.RespondJSON(w, http.StatusOK, resp)
@@ -179,8 +198,7 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(resp.Body) > protocol.MaxRelayBodyBytes {
-		utils.RespondError(w, http.StatusRequestEntityTooLarge, "Relay response exceeds 64KB limit")
+	if rejectOversizedRelay(w, len(resp.Body), "Relay response") {
 		return
 	}
 
@@ -321,10 +339,10 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 	limited := io.LimitReader(res.Body, int64(protocol.MaxRelayBodyBytes)+1)
 	bodyBytes, _ := io.ReadAll(limited)
 	_ = res.Body.Close()
-	if len(bodyBytes) > protocol.MaxRelayBodyBytes {
+	if relayCapExceeded(len(bodyBytes)) {
 		s.Config.Logger.Warn("Relay response body exceeds cap; truncating to error", "reqID", relayReq.ReqID, "size", len(bodyBytes))
 		relayRes.StatusCode = http.StatusRequestEntityTooLarge
-		relayRes.Body = []byte(`{"error":"relay response exceeds 64KB limit"}`)
+		relayRes.Body = []byte(fmt.Sprintf(`{"error":%q}`, relayCapMessage("relay response")))
 	} else {
 		relayRes.Body = bodyBytes
 	}

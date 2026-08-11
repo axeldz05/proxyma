@@ -142,32 +142,64 @@ func DeleteLocalService(storagePath, name string) error {
 	return SaveServicesMap(storagePath, services)
 }
 
+// isHTTPExec reports whether exec is an http(s) endpoint rather than a shell command (L1).
+func isHTTPExec(exec string) bool {
+	return strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://")
+}
+
+// requireHTTPExec rejects a non-URL exec for types that can only talk HTTP (L1).
+func requireHTTPExec(exec string, serviceType protocol.ServiceType, what string) error {
+	if isHTTPExec(exec) {
+		return nil
+	}
+	return fmt.Errorf("%s requires http(s) %s, got %q", serviceType, what, exec)
+}
+
+// buildStreamOrScript uses the HTTP NDJSON bidi transport for URL execs and falls
+// back to a piped script for local commands.
+func buildStreamOrScript(exec string) (ServiceHandler, error) {
+	if isHTTPExec(exec) {
+		return BuildHTTPBidiHandler(exec, protocol.HandlerDialStream), nil
+	}
+	return BuildScriptHandler(exec), nil
+}
+
+// serviceTypeBuilders maps a canonical ServiceType to its handler constructor (SSOT).
+// Supporting a new type means one row here plus one row in protocol.serviceTypeSpecs.
+var serviceTypeBuilders = map[protocol.ServiceType]func(exec string) (ServiceHandler, error){
+	protocol.ServiceTypeExec: func(exec string) (ServiceHandler, error) {
+		return BuildScriptHandler(exec), nil
+	},
+	protocol.ServiceTypeScript: func(exec string) (ServiceHandler, error) {
+		return BuildScriptHandler(exec), nil
+	},
+	protocol.ServiceTypeGRPC: func(exec string) (ServiceHandler, error) {
+		return BuildGRPCHandler(exec, protocol.HandlerDialUnary), nil
+	},
+	protocol.ServiceTypeGRPCBidi: buildStreamOrScript,
+	protocol.ServiceTypeBidi:     buildStreamOrScript,
+	protocol.ServiceTypeServerStream: func(exec string) (ServiceHandler, error) {
+		if err := requireHTTPExec(exec, protocol.ServiceTypeServerStream, "exec URL"); err != nil {
+			return nil, err
+		}
+		return BuildHTTPServerStreamHandler(exec, protocol.HandlerDialStream), nil
+	},
+	protocol.ServiceTypeWebRTC: func(exec string) (ServiceHandler, error) {
+		if err := requireHTTPExec(exec, protocol.ServiceTypeWebRTC, "signaling URL"); err != nil {
+			return nil, err
+		}
+		return BuildWebRTCHandler(exec, protocol.HandlerDialStream), nil
+	},
+	protocol.ServiceTypeScreen: func(exec string) (ServiceHandler, error) {
+		return BuildScreenHandler(exec, protocol.HandlerDialStream), nil
+	},
+}
+
 // BuildHandler constructs a ServiceHandler from type + exec (L2).
 func BuildHandler(serviceType protocol.ServiceType, exec string) (ServiceHandler, error) {
-	t := serviceType.Normalize()
-	switch t {
-	case protocol.ServiceTypeScript, protocol.ServiceTypeExec:
-		return BuildScriptHandler(exec), nil
-	case protocol.ServiceTypeGRPC:
-		return BuildGRPCHandler(exec, protocol.HandlerDialUnary), nil
-	case protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeBidi:
-		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildHTTPBidiHandler(exec, protocol.HandlerDialStream), nil
-		}
-		return BuildScriptHandler(exec), nil
-	case protocol.ServiceTypeServerStream:
-		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildHTTPServerStreamHandler(exec, protocol.HandlerDialStream), nil
-		}
-		return nil, fmt.Errorf("server_stream requires http(s) exec URL, got %q", exec)
-	case protocol.ServiceTypeWebRTC:
-		if strings.HasPrefix(exec, "http://") || strings.HasPrefix(exec, "https://") {
-			return BuildWebRTCHandler(exec, protocol.HandlerDialStream), nil
-		}
-		return nil, fmt.Errorf("webrtc requires http(s) signaling URL, got %q", exec)
-	case protocol.ServiceTypeScreen:
-		return BuildScreenHandler(exec, protocol.HandlerDialStream), nil
-	default:
+	build, ok := serviceTypeBuilders[serviceType.Normalize()]
+	if !ok {
 		return nil, fmt.Errorf("unknown service type: %s", serviceType)
 	}
+	return build(exec)
 }

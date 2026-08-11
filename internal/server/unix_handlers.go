@@ -19,6 +19,17 @@ type UnixActionHandler struct {
 // unixHandlers is the daemon SSOT dispatch table keyed by uischema UnixAction strings.
 var unixHandlers = map[string]UnixActionHandler{}
 
+// requireUnixArgs rejects empty required arguments (L1). The daemon re-checks even
+// though bind validates against the Registry, because raw unix clients skip that pass.
+func requireUnixArgs(args map[string]string, names ...string) error {
+	for _, name := range names {
+		if args[name] == "" {
+			return fmt.Errorf("missing %s parameter", name)
+		}
+	}
+	return nil
+}
+
 func init() {
 	register := func(domain, action string, h UnixActionHandler) {
 		unixHandlers[uischema.MustUnixAction(domain, action)] = h
@@ -41,40 +52,40 @@ func init() {
 	})
 	register("storage", "subscribe", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if args["name"] == "" {
-				return nil, fmt.Errorf("missing name parameter")
+			if err := requireUnixArgs(args, "name"); err != nil {
+				return nil, err
 			}
 			return nil, s.LocalVFSSubscribe(args["name"], true)
 		},
 	})
 	register("storage", "unsubscribe", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if args["name"] == "" {
-				return nil, fmt.Errorf("missing name parameter")
+			if err := requireUnixArgs(args, "name"); err != nil {
+				return nil, err
 			}
 			return nil, s.LocalVFSSubscribe(args["name"], false)
 		},
 	})
 	register("storage", "delete", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if args["name"] == "" {
-				return nil, fmt.Errorf("missing name parameter")
+			if err := requireUnixArgs(args, "name"); err != nil {
+				return nil, err
 			}
 			return nil, s.Storage.DeleteLocalFile(args["name"])
 		},
 	})
 	register("storage", "purge", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if args["name"] == "" {
-				return nil, fmt.Errorf("missing name parameter")
+			if err := requireUnixArgs(args, "name"); err != nil {
+				return nil, err
 			}
 			return nil, s.Storage.DeleteLocalCache(args["name"])
 		},
 	})
 	register("storage", "open", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if args["name"] == "" {
-				return nil, fmt.Errorf("missing name parameter")
+			if err := requireUnixArgs(args, "name"); err != nil {
+				return nil, err
 			}
 			return nil, s.FetchFileOnDemand(args["name"])
 		},

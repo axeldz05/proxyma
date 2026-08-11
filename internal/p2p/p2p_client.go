@@ -3,7 +3,6 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +27,7 @@ type PeerClient interface {
 	Leave(ctx context.Context, peerID string, leaveReq map[string]string) error
 	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
-	RotateTLS(ctx context.Context, peerID string, payload map[string]string) error
+	RotateTLS(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error)
 
 	// Routing / lifecycle (formerly ad-hoc type assertions)
@@ -110,11 +109,7 @@ func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerID, hash string) 
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return resp.Body, nil
+	return OpenHTTPBody(resp, http.StatusOK)
 }
 
 func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerID string) ([]string, error) {
@@ -171,7 +166,7 @@ func (c *HTTPPeerClient) RequestProbe(ctx context.Context, targetAddr string, re
 	return doJSON[protocol.ProbeResponse](ctx, c, "POST", targetAddr, protocol.PathRel(protocol.PathPeersProbe), req)
 }
 
-func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload map[string]string) error {
+func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error {
 	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathClusterRotate), payload, http.StatusOK)
 }
 
@@ -184,9 +179,5 @@ func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, servi
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code from remote stream: %d", resp.StatusCode)
-	}
-	return resp.Body, nil
+	return OpenHTTPBody(resp, http.StatusOK)
 }

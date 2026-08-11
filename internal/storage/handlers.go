@@ -48,7 +48,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
 		return
 	}
-	updated := se.vfs.Upsert(notification.File)
+	updated := se.upsertIndex(notification.File)
 	if updated && se.IsSubscribed(notification.File.Name) {
 		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
 

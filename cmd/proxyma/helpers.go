@@ -17,14 +17,13 @@ func getDefaultStorage() string {
 	return defaultStorage
 }
 
-// loadConfigOrDie loads the NodeConfig or exits if not found
-func loadConfigOrDie(storagePath string) protocol.NodeConfig {
-	cfg, err := protocol.LoadConfig(storagePath)
-	if err != nil {
-		fmt.Printf("❌ Error: Couldn't find config.json in %s. Run 'proxyma init' or 'proxyma join' first.\n", storagePath)
-		os.Exit(1)
+// requireConfig fails when the node has no config.json yet. Returning the error
+// lets cobra print it and set the exit code; helpers must not kill the process.
+func requireConfig(storagePath string) error {
+	if _, err := protocol.LoadConfig(storagePath); err != nil {
+		return fmt.Errorf("couldn't find config.json in %s: run 'proxyma init' or 'proxyma join' first", storagePath)
 	}
-	return cfg
+	return nil
 }
 
 // generateDefaultNodeID generates a fallback node ID using hostname and a short random hex

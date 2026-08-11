@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -136,75 +137,22 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var lastErr error
+	keepErr := func(err error) {
+		if err != nil && lastErr == nil {
+			lastErr = err
+		}
+	}
+
 	// Hostnames first (docker DNS); IPs after relay so stale bridge/STUN
 	// addresses cannot burn the whole parent RPC deadline.
 	hostnames, ipAddrs := splitDirectAddresses(record.Addresses)
 
-	tryDirect := func(addrs []string) (*http.Response, bool) {
-		for _, rawAddr := range addrs {
-			parsedAddr, err := url.Parse(rawAddr)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if parsedAddr.Scheme == "quic" {
-				continue
-			}
-
-			host := parsedAddr.Hostname()
-			port := defaultPortForURL(parsedAddr)
-
-			if r.OwnAddress != "" {
-				ownParsed, errOwn := url.Parse(r.OwnAddress)
-				if errOwn == nil {
-					ownPort := defaultPortForURL(ownParsed)
-					isLoopbackTarget := utils.IsLoopbackHost(host)
-					if (isLoopbackTarget && port == ownPort) || (parsedAddr.Host == ownParsed.Host) {
-						if peerID != r.NodeID {
-							r.logDebug("Skipping address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
-							continue
-						}
-					}
-				}
-			}
-
-			clone.URL.Scheme = parsedAddr.Scheme
-			clone.URL.Host = parsedAddr.Host
-
-			r.logDebug("Routing direct request", "url", clone.URL.String())
-			// TCP probe fail-fast on dead IPs without binding the HTTP body to a
-			// short request context (that aborted large blob downloads).
-			probeAddr := net.JoinHostPort(host, port)
-			if conn, dialErr := net.DialTimeout("tcp", probeAddr, protocol.DialTimeoutRouteProbe); dialErr != nil {
-				lastErr = dialErr
-				continue
-			} else {
-				_ = conn.Close()
-			}
-			directReq := clone.Clone(clone.Context())
-			resp, err := r.Base.RoundTrip(directReq)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
-				cert := resp.TLS.PeerCertificates[0]
-				if vErr := VerifyPeerCN(cert, peerID); vErr != nil {
-					_ = resp.Body.Close()
-					r.logDebug("Rejecting direct connection: peer identity mismatch", "expected", peerID, "got", cert.Subject.CommonName)
-					lastErr = vErr
-					continue
-				}
-			}
-			return resp, true
-		}
-		return nil, false
-	}
-
 	// Phase 1a: DNS hostnames only (fast fail when unknown)
-	if resp, ok := tryDirect(hostnames); ok {
+	resp, err := r.tryDirectAddresses(clone, peerID, hostnames)
+	if resp != nil {
 		return resp, nil
 	}
+	lastErr = err
 
 	// Phase 1.5: UDP Hole Punching to establish QUIC session
 	if resp, err, handled := r.tryHolePunchAndRoute(clone, req, peerID, record, sponsorAddr); handled {
@@ -216,35 +164,126 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Phase 2: Relay Fallback before IP literals (critical for partitioned nets)
 	if sponsorAddr != "" {
-		relayReq := NewRelayRequest(peerID, clone.Method, RequestPathWithQuery(clone.URL), nil, nil)
-		if clone.Body != nil {
-			bodyBytes, _ := io.ReadAll(clone.Body)
-			_ = clone.Body.Close()
-			if len(bodyBytes) > protocol.MaxRelayBodyBytes {
-				return nil, fmt.Errorf("payload exceeds 64KB limit for relay fallback")
-			}
-			relayReq.Body = bodyBytes
-		}
-		relayReq.Headers = FlattenHTTPHeader(clone.Header)
-
-		relayRes, err := ForwardRelay(clone.Context(), r.Base, sponsorAddr, relayReq)
-		if err == nil {
+		relayRes, relayErr := r.tryRelay(clone, peerID, sponsorAddr)
+		switch {
+		case relayErr == nil:
 			return relayRes.ToHTTPResponse(req), nil
-		}
-		if lastErr == nil {
-			lastErr = err
+		case errors.Is(relayErr, errRelayPayloadTooLarge):
+			return nil, relayErr
+		default:
+			keepErr(relayErr)
 		}
 	}
 
 	// Phase 3: IP literals last (private docker IPs, then public STUN)
-	if resp, ok := tryDirect(ipAddrs); ok {
+	resp, err = r.tryDirectAddresses(clone, peerID, ipAddrs)
+	if resp != nil {
 		return resp, nil
+	}
+	if err != nil {
+		lastErr = err
 	}
 
 	if lastErr != nil {
 		return nil, fmt.Errorf("failed to route to peer %s: %w", peerID, lastErr)
 	}
 	return nil, fmt.Errorf("no addresses available for peer %s", peerID)
+}
+
+// tryDirectAddresses dials addrs in order and returns the first response from a
+// peer whose certificate matches peerID. When none works it returns the last
+// failure, which may be nil if every address was skipped.
+func (r *P2PRoundTripper) tryDirectAddresses(clone *http.Request, peerID string, addrs []string) (*http.Response, error) {
+	var lastErr error
+	for _, rawAddr := range addrs {
+		parsedAddr, err := url.Parse(rawAddr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if parsedAddr.Scheme == "quic" || r.isOwnAddress(parsedAddr, peerID) {
+			continue
+		}
+
+		clone.URL.Scheme = parsedAddr.Scheme
+		clone.URL.Host = parsedAddr.Host
+		r.logDebug("Routing direct request", "url", clone.URL.String())
+
+		resp, err := r.dialDirect(clone, peerID, parsedAddr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// isOwnAddress reports whether parsedAddr points back at this node, which would
+// make the request loop. Reaching ourselves by ID is legitimate.
+func (r *P2PRoundTripper) isOwnAddress(parsedAddr *url.URL, peerID string) bool {
+	if r.OwnAddress == "" || peerID == r.NodeID {
+		return false
+	}
+	ownParsed, err := url.Parse(r.OwnAddress)
+	if err != nil {
+		return false
+	}
+	host := parsedAddr.Hostname()
+	port := defaultPortForURL(parsedAddr)
+	sameLoopbackPort := utils.IsLoopbackHost(host) && port == defaultPortForURL(ownParsed)
+	if !sameLoopbackPort && parsedAddr.Host != ownParsed.Host {
+		return false
+	}
+	r.logDebug("Skipping address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
+	return true
+}
+
+// dialDirect probes the TCP port before issuing the request, then verifies that
+// the TLS identity really belongs to peerID.
+func (r *P2PRoundTripper) dialDirect(clone *http.Request, peerID string, parsedAddr *url.URL) (*http.Response, error) {
+	// TCP probe fail-fast on dead IPs without binding the HTTP body to a
+	// short request context (that aborted large blob downloads).
+	probeAddr := net.JoinHostPort(parsedAddr.Hostname(), defaultPortForURL(parsedAddr))
+	conn, dialErr := net.DialTimeout("tcp", probeAddr, protocol.DialTimeoutRouteProbe)
+	if dialErr != nil {
+		return nil, dialErr
+	}
+	_ = conn.Close()
+
+	resp, err := r.Base.RoundTrip(clone.Clone(clone.Context()))
+	if err != nil {
+		return nil, err
+	}
+	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		cert := resp.TLS.PeerCertificates[0]
+		if vErr := VerifyPeerCN(cert, peerID); vErr != nil {
+			_ = resp.Body.Close()
+			r.logDebug("Rejecting direct connection: peer identity mismatch", "expected", peerID, "got", cert.Subject.CommonName)
+			return nil, vErr
+		}
+	}
+	return resp, nil
+}
+
+// errRelayPayloadTooLarge aborts routing outright: no other phase can carry a
+// body the relay refuses.
+var errRelayPayloadTooLarge = errors.New("payload exceeds relay size limit")
+
+// tryRelay tunnels the request through the sponsor.
+func (r *P2PRoundTripper) tryRelay(clone *http.Request, peerID, sponsorAddr string) (protocol.RelayResponse, error) {
+	relayReq := NewRelayRequest(peerID, clone.Method, RequestPathWithQuery(clone.URL), nil, nil)
+	if clone.Body != nil {
+		bodyBytes, _ := io.ReadAll(clone.Body)
+		_ = clone.Body.Close()
+		if len(bodyBytes) > protocol.MaxRelayBodyBytes {
+			return protocol.RelayResponse{}, fmt.Errorf("%w of %dKB for relay fallback",
+				errRelayPayloadTooLarge, protocol.MaxRelayBodyBytes/1024)
+		}
+		relayReq.Body = bodyBytes
+	}
+	relayReq.Headers = FlattenHTTPHeader(clone.Header)
+	return ForwardRelay(clone.Context(), r.Base, sponsorAddr, relayReq)
 }
 
 func (r *P2PRoundTripper) tryExistingSession(clone *http.Request, req *http.Request, peerID string) (*http.Response, bool) {

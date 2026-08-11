@@ -442,13 +442,8 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	cfg.Address = "https://127.0.0.1:0"
 
 	caPath := filepath.Dir(cfg.StoragePath)
-	require.NoError(t, p2p.InitCluster(caPath))
-	require.NoError(t, p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID))
-
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(cfg.StoragePath, cfg.ID)
-	serverTLS, _, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
+	testutil.InitClusterCA(t, caPath)
+	serverTLS := testutil.IssueNode(t, caPath, cfg.StoragePath, cfg.ID).ServerTLS
 
 	srv := server.New(cfg, nil)
 
@@ -463,7 +458,7 @@ func TestListenAndServeAndGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err = srv.Shutdown(ctx)
+	err := srv.Shutdown(ctx)
 	require.NoError(t, err, "Node shutdown should run without errors")
 
 	select {

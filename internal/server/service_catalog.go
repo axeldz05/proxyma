@@ -134,12 +134,9 @@ func (s *Server) notifyService(ctx context.Context, peerID string, schema protoc
 		NodeID: s.Config.ID,
 		Schema: schema,
 	}
-	err := s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
-	if err != nil {
-		s.Config.Logger.Debug("Failed to notify peer about service update", "peerID", peerID, "service", schema.Name, "error", err)
-		s.enqueueOutbox(peerID, "service", schema.Name+"|"+action, payload)
-	}
-	return err
+	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name+"|"+action, payload, func(ctx context.Context) error {
+		return s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
+	})
 }
 
 func (s *Server) NotifyServiceToPeer(peerID string, schema protocol.ServiceSchema, action string) {

@@ -18,11 +18,10 @@ var (
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Starts the Proxyma node using the local configuration",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		errStr := proxyma_bind.StartNode(cliStorage, runDebugMode)
 		if errStr != "" {
-			fmt.Printf("❌ Error starting node: %s\n", proxyma_bind.ParseBindError(errStr))
-			os.Exit(1)
+			return fmt.Errorf("error starting node: %s", proxyma_bind.ParseBindError(errStr))
 		}
 
 		signal.Ignore(syscall.SIGHUP)
@@ -33,6 +32,7 @@ var runCmd = &cobra.Command{
 		fmt.Println("Initiating graceful shutdown...")
 		proxyma_bind.StopNode()
 		fmt.Println("Node stopped successfully.")
+		return nil
 	},
 }
 

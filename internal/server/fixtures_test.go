@@ -8,6 +8,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
+	"proxyma/internal/testutil"
 	"testing"
 	"time"
 
@@ -29,15 +30,10 @@ func (ts *TestServer) ExpireInvite(secret string) {
 
 func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient) *TestServer {
 	caPath := filepath.Dir(cfg.StoragePath)
-	err := p2p.InitCluster(caPath)
-	require.NoError(t, err)
-	err = p2p.IssueNodeCertificate(caPath, cfg.StoragePath, cfg.ID)
-	require.NoError(t, err)
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	cfg.CAPath = caCertFile
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(cfg.StoragePath, cfg.ID)
-	serverTLS, clientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
+	testutil.InitClusterCA(t, caPath)
+	node := testutil.IssueNode(t, caPath, cfg.StoragePath, cfg.ID)
+	cfg.CAPath = node.CACertPath
+	serverTLS, clientTLS := node.ServerTLS, node.ClientTLS
 
 	customTransport := &http.Transport{
 		TLSClientConfig:   clientTLS,

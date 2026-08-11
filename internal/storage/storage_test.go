@@ -23,11 +23,7 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileName := "test11.txt"
 
@@ -49,11 +45,7 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 func TestLocalDeleteCreatesTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-1")
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileName := "testLocalDeleteCreatesTombstone.txt"
 	fileContent := []byte("hello from testLocalDeleteCreatesTombstone!!")
@@ -83,11 +75,7 @@ func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 	fileContent := "helloo from test10"
 	expectedHash := testutil.CalculateHash(t, fileContent)
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(e protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	engine.SetSubscription(fileName, true)
 
@@ -120,11 +108,7 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 	hashA := testutil.CalculateHash(t, "Content A")
 	hashB := testutil.CalculateHash(t, "Content B")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(e protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	engine.SetSubscription(fileAName, true)
 	remoteManifest := map[string]protocol.IndexEntry{
@@ -151,11 +135,7 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-snapshot-1")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileA := "alpha.txt"
 	contentA := []byte("content of alpha")
@@ -220,11 +200,7 @@ func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-vfs-version")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	entry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v3", Version: 3, Size: 100}
 	updated := engine.Upsert(entry)
@@ -244,11 +220,7 @@ func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-integrity")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	correctContent := "correct content"
 	expectedHash := testutil.CalculateHash(t, correctContent)
@@ -273,11 +245,7 @@ func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-tombstone-manifest")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileName := "deleted_file.txt"
 	engine.SetSubscription(fileName, true)
@@ -345,11 +313,7 @@ func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-remote-del-new")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	tombstone := protocol.IndexEntry{
 		Name: "never_existed.txt", Hash: "hash-phantom", Version: 1, Deleted: true,
@@ -368,11 +332,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-concurrent")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	var wg sync.WaitGroup
 	const goroutines = 10
@@ -430,11 +390,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-cas")
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	// 1. Upload identical content to two different files (Deduplication)
 	content := []byte("shared content")
@@ -476,11 +432,7 @@ func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 func TestCleanupTempFilesRespectsActiveDownloads(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-temp")
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(entry protocol.IndexEntry) {},
-		func(ie protocol.IndexEntry, s string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	// Create a "recent" temp file mimicking an active download
 	recentTempFile, err := os.CreateTemp(cfg.StoragePath, "tmp-blob-*")
@@ -519,11 +471,7 @@ func TestDownloadRejectsNonCASHashPaths(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "dl-sanitize")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(protocol.IndexEntry) {},
-		func(protocol.IndexEntry, string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	dbPath := filepath.Join(cfg.StoragePath, "metadata.db")
 	dbBytes, err := os.ReadFile(dbPath)
@@ -553,11 +501,7 @@ func TestRemoteTombstoneNotificationGCsPhysicalBlob(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "tombstone-gc-notify")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(protocol.IndexEntry) {},
-		func(protocol.IndexEntry, string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileName := "orphan-me.txt"
 	content := []byte("blob that should be GC'd on remote tombstone")
@@ -592,11 +536,7 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "tombstone-gc-manifest")
 
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(protocol.IndexEntry) {},
-		func(protocol.IndexEntry, string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	fileName := "manifest-orphan.txt"
 	content := []byte("blob GC via ProcessRemoteManifest")
@@ -618,11 +558,7 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 func TestStageLocalFileDistinctLogicalNamesForSameBasename(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "stage-distinct-names")
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(protocol.IndexEntry) {},
-		func(protocol.IndexEntry, string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	dirA := filepath.Join(t.TempDir(), "dirA")
 	dirB := filepath.Join(t.TempDir(), "dirB")
@@ -681,11 +617,7 @@ func snapNameForHash(snap map[string]protocol.IndexEntry, hash string) string {
 func TestStageAndRewriteRewritesNestedPayloadPaths(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "stage-and-rewrite")
-	engine := storage.NewStorageEngine(
-		cfg.Logger, cfg.StoragePath,
-		func(protocol.IndexEntry) {},
-		func(protocol.IndexEntry, string) error { return nil },
-	)
+	engine := testutil.NewStorageEngine(cfg)
 
 	dir := t.TempDir()
 	localPath := filepath.Join(dir, "doc.txt")

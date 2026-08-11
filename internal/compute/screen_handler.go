@@ -30,11 +30,8 @@ func BuildScreenHandler(source string, timeout time.Duration) ServiceHandler {
 		}
 		defer close(out)
 
-		if timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
+		ctx, cancel := withHandlerTimeout(ctx, timeout)
+		defer cancel()
 
 		switch source {
 		case "", "fake":

@@ -3,7 +3,6 @@ package server
 import (
 	"net/http"
 	"proxyma/internal/p2p"
-	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
 
@@ -14,7 +13,8 @@ func peerCNFromRequest(r *http.Request) (string, bool) {
 
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == protocol.PathClusterJoin || r.URL.Path == protocol.PathRelayForward || r.URL.Path == protocol.PathPeersProbe {
+		mode := s.routeAuth(r.URL.Path)
+		if mode == authAnonymous {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -24,7 +24,7 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 			return
 		}
-		if r.URL.Path != protocol.PathPeersAnnounce {
+		if mode != authMTLSUnregistered {
 			_, registered := s.Peers.GetPeerRecord(peerID)
 			if !registered && peerID != s.Config.ID && peerID != "sponsor" && peerID != "bootstrap" {
 				s.Config.Logger.Warn("Reject mTLS: peer not in registry", "peerID", peerID, "ip", r.RemoteAddr)

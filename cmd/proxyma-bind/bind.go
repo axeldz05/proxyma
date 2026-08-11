@@ -168,9 +168,6 @@ func BindMessageJSON(msg string) string {
 	return fmt.Sprintf(`{"message": %q}`, msg)
 }
 
-// bindMessageJSON is the unexported alias used inside this package.
-func bindMessageJSON(msg string) string { return BindMessageJSON(msg) }
-
 // dispatchUnixLocalOrOffline is L3: in-process localCall, else unix, else optional offline fallback.
 func dispatchUnixLocalOrOffline(
 	action string,
@@ -299,7 +296,7 @@ func StartNode(storagePath string, debug bool) string {
 		if os.IsNotExist(err) {
 			// Auto initialize configuration with default port if not found
 			nid := utils.GenerateDefaultNodeID()
-			localAddr := "https://127.0.0.1:" + protocol.DefaultTCPPort
+			localAddr := protocol.HTTPSAddr("127.0.0.1", protocol.DefaultTCPPort)
 			if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
 				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %v", err))
 			}

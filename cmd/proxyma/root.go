@@ -76,7 +76,9 @@ func init() {
 			}
 
 			actionCmd.RunE = func(cmd *cobra.Command, args []string) error {
-				_ = loadConfigOrDie(cliStorage)
+				if err := requireConfig(cliStorage); err != nil {
+					return err
+				}
 				proxyma_bind.SetStoragePath(cliStorage)
 
 				argsMap := make(map[string]string)

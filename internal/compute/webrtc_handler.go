@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"proxyma/internal/p2p"
 	"proxyma/internal/utils"
@@ -76,11 +75,8 @@ func BuildWebRTCHandlerWithClient(endpointURL string, timeout time.Duration, cli
 		}
 		defer close(out)
 
-		if timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
+		ctx, cancel := withHandlerTimeout(ctx, timeout)
+		defer cancel()
 
 		pc, err := newHostOnlyPeerConnection()
 		if err != nil {
@@ -178,20 +174,15 @@ func negotiateOfferer(ctx context.Context, pc *webrtc.PeerConnection, signalingU
 	}
 
 	if client == nil {
-		clientTimeout := time.Duration(0)
-		if timeout > 0 {
-			clientTimeout = timeout
-		}
-		client = p2p.NewHTTPClient(nil, clientTimeout)
+		client = streamHTTPClient(timeout)
 	}
 	resp, err := p2p.PostJSONAbsolute(ctx, client, signalingURL, pc.LocalDescription())
 	if err != nil {
 		return fmt.Errorf("webrtc signaling request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if !utils.HTTPSuccess(resp.StatusCode) {
-		bodyStr, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("webrtc signaling returned status %d: %s", resp.StatusCode, string(bodyStr))
+	if err := utils.HTTPErrorFromResponse(resp, "webrtc signaling"); err != nil {
+		return err
 	}
 	var answer webrtc.SessionDescription
 	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {

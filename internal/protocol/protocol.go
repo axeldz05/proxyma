@@ -8,10 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"proxyma/internal/utils"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -128,48 +126,6 @@ type UnixResponse struct {
 	Success bool            `json:"success"`
 	Error   string          `json:"error,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
-}
-
-type ServiceType string
-
-const (
-	ServiceTypeExec             ServiceType = "exec"
-	ServiceTypeScript           ServiceType = "script"
-	ServiceTypeGRPC             ServiceType = "grpc"
-	ServiceTypeGRPCBidi         ServiceType = "grpc_bidi"
-	ServiceTypeBidiGRPC         ServiceType = "bidi_grpc"
-	ServiceTypeBidi             ServiceType = "bidi"
-	ServiceTypeBidiStream       ServiceType = "bidi_stream"
-	ServiceTypeServerStream     ServiceType = "server_stream"
-	ServiceTypeHTTPServerStream ServiceType = "http_server_stream"
-	ServiceTypeGRPCServerStream ServiceType = "grpc_server_stream" // legacy alias → server_stream
-	ServiceTypeHTTPBidi         ServiceType = "http_bidi"          // HTTP NDJSON bidi (preferred name)
-	ServiceTypeWebRTC           ServiceType = "webrtc"             // WebRTC DataChannel JSON stream
-	ServiceTypeScreen           ServiceType = "screen"             // server-stream of media frames (fake/MJPEG)
-)
-
-func (t ServiceType) IsStreaming() bool {
-	n := t.Normalize()
-	return n == ServiceTypeGRPCBidi || n == ServiceTypeBidi || n == ServiceTypeServerStream || n == ServiceTypeWebRTC || n == ServiceTypeScreen
-}
-
-// Normalize maps streaming aliases to a canonical type.
-// Canonical streaming types: grpc_bidi (HTTP NDJSON bidi; also http_bidi),
-// server_stream (HTTP server-stream), and plain "bidi" (script-based streams).
-// Names with "grpc_" are legacy — transport is HTTP/NDJSON, not protobuf gRPC.
-func (t ServiceType) Normalize() ServiceType {
-	switch t {
-	case ServiceTypeBidiGRPC, ServiceTypeBidiStream, ServiceTypeHTTPBidi:
-		return ServiceTypeGRPCBidi
-	case ServiceTypeHTTPServerStream, ServiceTypeGRPCServerStream:
-		return ServiceTypeServerStream
-	default:
-		return t
-	}
-}
-
-func (t ServiceType) String() string {
-	return string(t)
 }
 
 type ServiceUIConfig struct {
@@ -627,16 +583,6 @@ type AddPeerRequest struct {
 	Address AddressRecord `json:"address"`
 }
 
-func SaveConfig(cfg NodeConfig) error {
-	return utils.WriteJSONFile(filepath.Join(cfg.StoragePath, "config.json"), cfg)
-}
-
-func LoadConfig(storagePath string) (NodeConfig, error) {
-	var cfg NodeConfig
-	err := utils.ReadJSONFile(filepath.Join(storagePath, "config.json"), &cfg)
-	return cfg, err
-}
-
 // RelayRequest encapsulates an HTTP request to be forwarded by the Sponsor
 type RelayRequest struct {
 	ReqID        string            `json:"req_id"`
@@ -694,6 +640,13 @@ type ProbeResponse struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// RotateTLSPayload carries re-signed PEMs pushed by the CA authority during CA
+// rotation. Private keys never travel: each node keeps its own.
+type RotateTLSPayload struct {
+	CACert   string `json:"ca_cert"`
+	NodeCert string `json:"node_cert"`
+}
+
 type PeerStatus struct {
 	ID      string `json:"id"`
 	Address string `json:"address"`
@@ -708,43 +661,3 @@ type BandwidthStats struct {
 	TotalReceived int64 `json:"total_received"`
 }
 
-type LogRecord struct {
-	Timestamp string `json:"timestamp"`
-	Level     string `json:"level"` // "INFO", "WARN", "ERROR", "DEBUG"
-	Message   string `json:"message"`
-}
-
-var (
-	LogBuffer   []LogRecord
-	LogBufferMu sync.RWMutex
-)
-
-type LogWriter struct {
-	Stdout io.Writer
-}
-
-func (w *LogWriter) Write(p []byte) (n int, err error) {
-	n, err = w.Stdout.Write(p)
-	line := string(p)
-	level := "INFO"
-	if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=error") {
-		level = "ERROR"
-	} else if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=warn") {
-		level = "WARN"
-	} else if strings.Contains(line, "level=DEBUG") || strings.Contains(line, "level=debug") {
-		level = "DEBUG"
-	}
-
-	LogBufferMu.Lock()
-	LogBuffer = append(LogBuffer, LogRecord{
-		Timestamp: time.Now().Format("15:04:05"),
-		Level:     level,
-		Message:   strings.TrimSpace(line),
-	})
-	if len(LogBuffer) > 1000 {
-		LogBuffer = LogBuffer[len(LogBuffer)-1000:]
-	}
-	LogBufferMu.Unlock()
-
-	return n, err
-}

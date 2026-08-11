@@ -27,7 +27,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Design Rules (Always On)
 
 * **Golden rule (duplication)**: If changing one behavior requires touching **>2 code zones**, compress into a shared helper. Do **not** copy service CRUD, peer fan-out, relay forward, blob fetch/stage, or unix dial stacks.
-* **Continuous granularity (3 tiers)**: Unix: `DialUnix` → Write/Read/Scan → `sendUnixSocketCommand` / `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`.
+* **Continuous granularity (3 tiers)**: Unix: `DialUnix` → Write/Read/Scan → `sendUnixSocketCommand` / `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`. Same shape for gossip (`enqueueOutbox` → `notifyWithOutbox` → `notifyService`) and tests (`InitClusterCA` → `IssueNode` → `NewNodeTLS`).
+* **Tables over switches**: gossip kind → `catalogKinds`; endpoint auth → `httpRoutes` / `routeAuth`; service type → `protocol.serviceTypeSpecs` + `compute.serviceTypeBuilders`. Never add a parallel `switch`.
+* **Node addresses**: `protocol.HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never `fmt.Sprintf("https://%s:%s", …)`.
+* **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors; Bolt failures propagate instead of collapsing into a bool.
 * **UI hints**: `protocol.InferUIHint` / `EffectiveUIHint`; Android uses `FormParameter.isFilePicker()` — no name sniffing.
 * **Bind errors**: `BindErrorJSON` / `ParseBindError` / `IsBindError` only (no double-wrap, no `"error:"` prefix).
 * **In-memory registry**: Persist `services.json` only on mutation; runtime via `Compute.GetService` / `GetHandler`.
@@ -40,7 +43,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ### CLI — `cmd/proxyma/`
 * `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`; tables via `uischema.ProjectRows`.
 * `cli_actions.go` — `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`**.
-* `cli_render.go` / `cli_open.go` — `uischema.FormatBytes` wrappers / editor+open.
+* `cli_open.go` — editor + system open; byte/rate rendering calls `uischema.FormatBytes` / `FormatRate` directly.
 * `service_help.go` — `ParseInputsToJSON` → `uischema.NormalizePayloadJSON`.
 
 ### Bindings — `cmd/proxyma-bind/`
@@ -53,8 +56,11 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### Server — `internal/server/`
 * `server.go` lifecycle; `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
-* `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction`; `unix_listener.go` accept loop only.
-* `catalog_kinds.go` — `catalogKinds` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`.
+* `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction` + **`requireUnixArgs`**; `unix_listener.go` accept loop only.
+* `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`.
+* `catalog_kinds.go` — `catalogKinds` (`Kind` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; `outbox.go` → **`notifyWithOutbox`**.
+* `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
+* `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
 * `service_exec.go` — Run/Stream + ingest (`ResultLocalPath`); **`submitTrackedTask`**.
 * `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
@@ -65,12 +71,17 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`.
 * `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash` / `WriteNodePEMs`.
 * `NATMapper.SetOnMapped`; `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`; `routeOverQUICSession`.
+* **`RequireHTTPStatus`** / **`OpenHTTPBody`** for non-`doJSON` paths; `QUICManager` takes a typed `Logger` and accepts on its shutdown ctx; `RoundTrip` = `tryDirectAddresses` → `tryRelay`.
 
 ### Storage / Compute / Protocol
 * `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
 * `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
-* **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**). Compute `ServiceSchema` remains a separate contract.
+* `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`HTTPSAddr`), `config.go`, `logring.go` — `protocol.go` keeps only types.
+* `compute`: `serviceTypeBuilders` → `BuildHandler`; `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
+* `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`.
+* `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` — but tests whose subject *is* a TLS/storage step keep using the L1.
+* **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**, shared `vfsNameParam`/`svcNameParam`/`pipelineIDParam`). Compute `ServiceSchema` remains a separate contract.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
@@ -100,8 +111,16 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Invite TTL | `protocol.DefaultInviteMinutes` |
 | Result path | `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` |
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
-| Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` |
-| Notify outbox | `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (Bolt `notify_outbox`) |
+| Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
+| Notify outbox | `notifyWithOutbox` (L2) / `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (Bolt `notify_outbox`) |
+| Endpoint + auth policy | `httpRoutes` / `routeAuth` / `relayAllowsAnonymous` |
+| Service type alias / streaming / builder | `protocol.serviceTypeSpecs` / `compute.serviceTypeBuilders` |
+| Handler timeout / stream client / exec check | `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` |
+| Node HTTPS URL (IPv6-safe) | `protocol.HTTPSAddr` / `HTTPSAddrPort` |
+| Unexpected HTTP status | `utils.HTTPStatusError` / `HTTPErrorFromResponse` / `p2p.RequireHTTPStatus` / `OpenHTTPBody` |
+| Required unix args / relay cap | `requireUnixArgs` / `rejectOversizedRelay` |
+| TLS rotation payload | `protocol.RotateTLSPayload` |
+| Test storage / CA / node TLS | `testutil.NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` |
 | Service subscribe | `LocalServiceSubscribe` / `SetServiceSubscription` / `IsServiceSubscribed` / `MatchServicePattern` |
 | Bid strategy | `NormalizeSortStrategy` / `LocalServiceRun(..., strategy)` / `--strategy` |
 | OTel bid export | `telemetry.ExportBidAsync` / `InitFromEnv` / `SetBidExporter` |

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"sync"
@@ -30,13 +29,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 
 	// Issue and load certificate for target-node to simulate mTLS authentication
 	caPath := filepath.Dir(sponsor.Config.StoragePath)
-	err := p2p.IssueNodeCertificate(caPath, sponsor.Config.StoragePath, "target-node")
-	require.NoError(t, err)
-
-	caCertFile, _ := p2p.CACertPaths(caPath)
-	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(sponsor.Config.StoragePath, "target-node")
-	_, targetClientTLS, err := p2p.LoadNodeTLS(caCertFile, nodeCertFile, nodeKeyFile)
-	require.NoError(t, err)
+	targetClientTLS := testutil.IssueNode(t, caPath, sponsor.Config.StoragePath, "target-node").ClientTLS
 
 	targetClient := &http.Client{
 		Transport: &http.Transport{
@@ -85,7 +78,7 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	require.Equal(t, http.StatusOK, pollResp.StatusCode)
 
 	var receivedReq protocol.RelayRequest
-	err = json.NewDecoder(pollResp.Body).Decode(&receivedReq)
+	err := json.NewDecoder(pollResp.Body).Decode(&receivedReq)
 	require.NoError(t, err)
 	require.Equal(t, "req-123", receivedReq.ReqID)
 	require.Equal(t, "/some/test/path", receivedReq.Path)

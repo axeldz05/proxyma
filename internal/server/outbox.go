@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"proxyma/internal/protocol"
 	"sync"
 	"time"
 )
@@ -13,16 +12,27 @@ import (
 type outboxEntry struct {
 	ID        string          `json:"id"`
 	PeerID    string          `json:"peer_id"`
-	Kind      string          `json:"kind"` // service | pipeline | vfs
+	Kind      gossipKind      `json:"kind"` // see catalogKinds
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-func (s *Server) outboxKey(peerID, kind, dedupe string) string {
-	return peerID + "|" + kind + "|" + dedupe
+func (s *Server) outboxKey(peerID string, kind gossipKind, dedupe string) string {
+	return peerID + "|" + string(kind) + "|" + dedupe
 }
 
-func (s *Server) enqueueOutbox(peerID, kind, dedupe string, payload any) {
+// notifyWithOutbox sends one gossip payload and durably queues it when the peer
+// is unreachable (L2 SSOT for every catalog domain).
+func (s *Server) notifyWithOutbox(ctx context.Context, peerID string, kind gossipKind, dedupe string, payload any, send func(ctx context.Context) error) error {
+	err := send(ctx)
+	if err != nil {
+		s.Config.Logger.Debug("Peer notify failed, queued in outbox", "peerID", peerID, "kind", string(kind), "dedupe", dedupe, "error", err)
+		s.enqueueOutbox(peerID, kind, dedupe, payload)
+	}
+	return err
+}
+
+func (s *Server) enqueueOutbox(peerID string, kind gossipKind, dedupe string, payload any) {
 	if s.Storage == nil {
 		return
 	}
@@ -106,26 +116,9 @@ func (s *Server) flushOutbox() {
 }
 
 func (s *Server) deliverOutboxEntry(ctx context.Context, peerID string, entry outboxEntry) error {
-	switch entry.Kind {
-	case "service":
-		var n protocol.ServiceNotification
-		if err := json.Unmarshal(entry.Payload, &n); err != nil {
-			return err
-		}
-		return s.peerClient.NotifyServiceUpdate(ctx, peerID, n)
-	case "pipeline":
-		var n protocol.PipelineNotification
-		if err := json.Unmarshal(entry.Payload, &n); err != nil {
-			return err
-		}
-		return s.peerClient.NotifyPipelineSchema(ctx, peerID, n)
-	case "vfs":
-		var n protocol.PeerNotification
-		if err := json.Unmarshal(entry.Payload, &n); err != nil {
-			return err
-		}
-		return s.peerClient.Notify(ctx, peerID, n)
-	default:
+	kind, ok := s.catalogKindFor(entry.Kind)
+	if !ok || kind.deliver == nil {
 		return fmt.Errorf("unknown outbox kind %q", entry.Kind)
 	}
+	return kind.deliver(s, ctx, peerID, entry.Payload)
 }

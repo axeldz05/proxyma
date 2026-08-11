@@ -155,7 +155,18 @@ func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {
 }
 
 func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
-	return se.vfs.Upsert(entry)
+	return se.upsertIndex(entry)
+}
+
+// upsertIndex writes metadata and logs an index failure instead of letting it
+// look like "already up to date" (L2 SSOT for every internal upsert).
+func (se *StorageEngine) upsertIndex(entry protocol.IndexEntry) bool {
+	updated, err := se.vfs.Upsert(entry)
+	if err != nil {
+		se.logger.Error("Failed to persist VFS index entry", "file", entry.Name, "version", entry.Version, "error", err)
+		return false
+	}
+	return updated
 }
 
 func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.IndexEntry) []protocol.IndexEntry {
@@ -165,7 +176,7 @@ func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.Inde
 			se.ProcessRemoteDeletion(remoteFileInfo)
 			continue
 		}
-		updated := se.vfs.Upsert(remoteFileInfo)
+		updated := se.upsertIndex(remoteFileInfo)
 		if se.IsSubscribed(logicalName) {
 			hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
 			if err != nil {
@@ -193,7 +204,7 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 		Version: entry.Version + 1,
 		Deleted: true,
 	}
-	if se.vfs.Upsert(fileMeta) {
+	if se.upsertIndex(fileMeta) {
 		if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
 			return fmt.Errorf("file %s could not be deleted: %w", fileMeta.Name, err)
 		}
@@ -220,7 +231,7 @@ func (se *StorageEngine) UpsertAndSubscribe(entry protocol.IndexEntry, notify bo
 			entry.Version = existing.Version + 1
 		}
 	}
-	se.vfs.Upsert(entry)
+	se.upsertIndex(entry)
 	se.SetSubscription(entry.Name, true)
 	if notify {
 		go se.notifyFunc(entry)
@@ -244,7 +255,7 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 	savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
 
-	if se.vfs.Upsert(fileInfo) {
+	if se.upsertIndex(fileInfo) {
 		if exists {
 			if err := se.deleteBlobIfOrphan(savedFileInfo.Hash, false); err != nil {
 				se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)

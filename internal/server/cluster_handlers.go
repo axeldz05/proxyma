@@ -104,15 +104,12 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONOrError[map[string]string](w, r)
+	req, ok := utils.DecodeJSONOrError[protocol.RotateTLSPayload](w, r)
 	if !ok {
 		return
 	}
 
-	caCert := req["ca_cert"]
-	nodeCert := req["node_cert"]
-
-	if caCert == "" || nodeCert == "" {
+	if req.CACert == "" || req.NodeCert == "" {
 		utils.RespondError(w, http.StatusBadRequest, "Missing ca_cert or node_cert")
 		return
 	}
@@ -120,7 +117,7 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 	caPath := s.Config.CAPath
 	certPath, keyPath := p2p.ResolveNodeCertPaths(caPath, s.Config.StoragePath, s.Config.ID)
 
-	if err := p2p.WriteNodePEMs(caPath, certPath, "", []byte(caCert), []byte(nodeCert), nil); err != nil {
+	if err := p2p.WriteNodePEMs(caPath, certPath, "", []byte(req.CACert), []byte(req.NodeCert), nil); err != nil {
 		s.Config.Logger.Error("Failed to save rotated certs", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to save rotated certs")
 		return

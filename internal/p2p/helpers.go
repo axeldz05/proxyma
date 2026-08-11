@@ -120,7 +120,7 @@ func doJSON[Resp any](ctx context.Context, c *HTTPPeerClient, method, target, pa
 	}()
 
 	if !utils.HTTPSuccess(resp.StatusCode) {
-		return respVal, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return respVal, utils.HTTPStatusError(resp.StatusCode)
 	}
 
 	if resp.StatusCode == http.StatusNoContent {
@@ -143,15 +143,32 @@ func doVoid(ctx context.Context, c *HTTPPeerClient, method, target, path string,
 		_ = resp.Body.Close()
 	}()
 
-	if expectedStatus != 0 {
-		if resp.StatusCode != expectedStatus {
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-		}
-	} else if !utils.HTTPSuccess(resp.StatusCode) {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+	return RequireHTTPStatus(resp, expectedStatus)
+}
 
+// RequireHTTPStatus checks a response status without consuming the body (L1).
+// wantStatus 0 accepts any 2xx.
+func RequireHTTPStatus(resp *http.Response, wantStatus int) error {
+	if wantStatus != 0 {
+		if resp.StatusCode != wantStatus {
+			return utils.HTTPStatusError(resp.StatusCode)
+		}
+		return nil
+	}
+	if !utils.HTTPSuccess(resp.StatusCode) {
+		return utils.HTTPStatusError(resp.StatusCode)
+	}
 	return nil
+}
+
+// OpenHTTPBody hands the caller a body to stream, closing it when the status is
+// not the expected one (L1). Used by the binary/NDJSON paths that skip doJSON.
+func OpenHTTPBody(resp *http.Response, wantStatus int) (io.ReadCloser, error) {
+	if err := RequireHTTPStatus(resp, wantStatus); err != nil {
+		_ = resp.Body.Close()
+		return nil, err
+	}
+	return resp.Body, nil
 }
 
 // ForwardRelay POSTs a RelayRequest to sponsorAddr + PathRelayForward and decodes the response (L2).
@@ -163,8 +180,8 @@ func ForwardRelay(ctx context.Context, rt http.RoundTripper, sponsorAddr string,
 		return zero, err
 	}
 	defer func() { _ = fwdResp.Body.Close() }()
-	if fwdResp.StatusCode != http.StatusOK {
-		return zero, fmt.Errorf("unexpected status code: %d", fwdResp.StatusCode)
+	if err := RequireHTTPStatus(fwdResp, http.StatusOK); err != nil {
+		return zero, err
 	}
 	var relayRes protocol.RelayResponse
 	if err := json.NewDecoder(fwdResp.Body).Decode(&relayRes); err != nil {
