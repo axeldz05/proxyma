@@ -122,8 +122,20 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.AddPeer(req.ID, req.Address)
-	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
+	cn, ok := peerCNFromRequest(r)
+	if !ok {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return
+	}
+	addr := req.Address
+	if cn != req.ID {
+		// Gossip fan-out: non-owners must not hijack primary via a higher sequence.
+		if existing, exists := s.Peers.GetPeerRecord(req.ID); exists && addr.Sequence > existing.Sequence {
+			addr.Sequence = existing.Sequence
+		}
+	}
+	s.AddPeer(req.ID, addr)
+	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", addr)
 	utils.RespondMessage(w, http.StatusOK, "Peer successfully added")
 }
 

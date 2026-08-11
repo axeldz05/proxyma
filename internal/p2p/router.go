@@ -272,8 +272,11 @@ var errRelayPayloadTooLarge = errors.New("payload exceeds relay size limit")
 func (r *P2PRoundTripper) tryRelay(clone *http.Request, peerID, sponsorAddr string) (protocol.RelayResponse, error) {
 	relayReq := NewRelayRequest(peerID, clone.Method, RequestPathWithQuery(clone.URL), nil, nil)
 	if clone.Body != nil {
-		bodyBytes, _ := io.ReadAll(clone.Body)
+		bodyBytes, err := io.ReadAll(clone.Body)
 		_ = clone.Body.Close()
+		if err != nil {
+			return protocol.RelayResponse{}, fmt.Errorf("read relay body: %w", err)
+		}
 		if len(bodyBytes) > protocol.MaxRelayBodyBytes {
 			return protocol.RelayResponse{}, fmt.Errorf("%w of %dKB for relay fallback",
 				errRelayPayloadTooLarge, protocol.MaxRelayBodyBytes/1024)

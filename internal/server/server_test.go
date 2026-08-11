@@ -143,7 +143,8 @@ func TestManifestEndpointReturnsCurrentState(t *testing.T) {
 		Hash: fakeHash,
 	}
 
-	sv.Storage.Upsert(fakeFile)
+	_, err := sv.Storage.Upsert(fakeFile)
+	require.NoError(t, err)
 
 	req, err := http.NewRequest("GET", sv.Config.Address+protocol.PathManifest, nil)
 	require.NoError(t, err)
@@ -501,20 +502,30 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	})
 
 	t.Run("Accepts a valid token and deletes it after one use", func(t *testing.T) {
-		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: validAddress}
+		// Invalid CSR must not burn the invite (A4: Consume only after SignCSR succeeds).
+		badCSRReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", ID: "joiner", Address: validAddress}
+		badCSRBody, _ := json.Marshal(badCSRReq)
+
+		respBadCSR, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(badCSRBody))
+		require.NoError(t, err)
+		defer func() { _ = respBadCSR.Body.Close() }()
+		require.Equal(t, http.StatusBadRequest, respBadCSR.StatusCode, "Invalid CSR should return 400")
+
+		csrPEM, _, err := p2p.GenerateNodeCSR("joiner")
+		require.NoError(t, err)
+		goodJoinReq := protocol.JoinRequest{Secret: secret, CSR: string(csrPEM), ID: "joiner", Address: validAddress}
 		goodBody, _ := json.Marshal(goodJoinReq)
 
 		respGood, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(goodBody))
 		require.NoError(t, err)
 		defer func() { _ = respGood.Body.Close() }()
-
-		require.Equal(t, http.StatusBadRequest, respGood.StatusCode, "Token accepted, fails on invalid CSR")
+		require.Equal(t, http.StatusOK, respGood.StatusCode, "Valid invite+CSR should join")
 
 		respReused, err := nakedClient.Post(sv.Config.Address+protocol.PathClusterJoin, "application/json", bytes.NewBuffer(goodBody))
 		require.NoError(t, err)
 		defer func() { _ = respReused.Body.Close() }()
 
-		require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after one use")
+		require.Equal(t, http.StatusUnauthorized, respReused.StatusCode, "Token should have been deleted after successful join")
 	})
 }
 
@@ -830,6 +841,7 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	bodyBytes, _ := json.Marshal(notification)
 	req, _ := http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathServicesNotify, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
+	req = withPeerTLS(req, "peer-99")
 
 	// Create a recorder
 	recorder := httptest.NewRecorder()
@@ -846,6 +858,7 @@ func TestServerHandlesServiceNotifications(t *testing.T) {
 	bodyBytes, _ = json.Marshal(notification)
 	req, _ = http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathServicesNotify, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
+	req = withPeerTLS(req, "peer-99")
 
 	recorder = httptest.NewRecorder()
 	srv.HandleServiceNotify(recorder, req)

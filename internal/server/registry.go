@@ -53,10 +53,11 @@ func (pr *PeerRegistry) stateLocked(peerID string) *peerState {
 	return st
 }
 
-// AddPeer adds or updates a peer's address record. It returns true if the peer record was actually updated.
-func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRecord) bool {
+// AddPeer adds or updates a peer's address record.
+// updated is true when the peer record was written; evicted lists same-address IDs removed from the map.
+func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRecord) (updated bool, evicted []string) {
 	if peerID == pr.nodeID {
-		return false
+		return false, nil
 	}
 
 	pr.mu.Lock()
@@ -65,14 +66,13 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 	// Clean up stale peers with the same primary address
 	if len(addressRecord.Addresses) > 0 {
 		newPrimaryAddr := addressRecord.Addresses[0]
-		var staleIDs []string
 		for id, st := range pr.peers {
 			if id != peerID && st.hasRecord && len(st.record.Addresses) > 0 && st.record.Addresses[0] == newPrimaryAddr {
-				staleIDs = append(staleIDs, id)
+				evicted = append(evicted, id)
 			}
 		}
 
-		for _, staleID := range staleIDs {
+		for _, staleID := range evicted {
 			delete(pr.peers, staleID)
 			pr.logger.Info("Removing stale peer replaced by new peer ID at same address", "stalePeerID", staleID, "newPeerID", peerID, "address", newPrimaryAddr)
 		}
@@ -83,21 +83,23 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 		existing := st.record
 		if addressRecord.Sequence < existing.Sequence {
 			pr.logger.Debug("Ignoring older peer address record", "peerID", peerID, "currentSeq", existing.Sequence, "newSeq", addressRecord.Sequence)
-			return false
+			return false, evicted
 		}
 		if addressRecord.Sequence == existing.Sequence {
-			addrSet := make(map[string]bool)
+			// Preserve existing address order (primary stays Addresses[0]); append new uniques.
+			addrSet := make(map[string]bool, len(existing.Addresses))
+			merged := make([]string, 0, len(existing.Addresses)+len(addressRecord.Addresses))
 			for _, a := range existing.Addresses {
 				addrSet[a] = true
+				merged = append(merged, a)
 			}
 			for _, a := range addressRecord.Addresses {
-				addrSet[a] = true
+				if !addrSet[a] {
+					addrSet[a] = true
+					merged = append(merged, a)
+				}
 			}
-			var newAddrs []string
-			for a := range addrSet {
-				newAddrs = append(newAddrs, a)
-			}
-			addressRecord.Addresses = newAddrs
+			addressRecord.Addresses = merged
 		}
 	}
 
@@ -106,7 +108,7 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 	markOnlineLocked(st)
 
 	pr.logger.Info("peerID added to peers", "peerID", peerID, "node", pr.nodeID)
-	return true
+	return true, evicted
 }
 
 // RemovePeer removes a peer and its status, services and certificate from the registry.

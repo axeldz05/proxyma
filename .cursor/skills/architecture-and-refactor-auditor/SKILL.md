@@ -23,7 +23,7 @@ Directrices de arquitectura, límites de paquetes y mapa de helpers SSOT actuale
 ## Mapa de Archivos Actual (Inspeccionar Primero)
 
 ### 1. CLI — `cmd/proxyma`
-* `root.go` — Cobra from `uischema.VisibleRegistry("cli")`; help via `NormalizeActionArgs`.
+* `root.go` — Cobra from **`cliRegistry()`** (`VisibleRegistry("cli")` + Hidden CLI escapes); help via `NormalizeActionArgs`.
 * `cli_actions.go` — `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`**.
 * `service_help.go` — help/schema; `ParseInputsToJSON` → `NormalizePayloadJSON`; `sampleValue`.
 * `helpers.go`, `run.go`, `init.go`.
@@ -53,8 +53,8 @@ Directrices de arquitectura, límites de paquetes y mapa de helpers SSOT actuale
 
 ### 5. Storage — `internal/storage`
 * `buckets.go` — Bolt bucket name consts + `allBuckets`.
-* `storage_engine.go` — **`StageLocalFile`** (L2); L1 `SavePhysicalBlob` + `Upsert` públicos.
-* `vfs.go`, `physical/storage.go`.
+* `storage_engine.go` — **`StageLocalFile`** (L2); L1 `SavePhysicalBlob` + `Upsert` `(bool, error)`; `UpsertAndSubscribe` returns error; `ErrBlobDiscarded` on obsolete remote store.
+* `vfs.go`, `physical/storage.go` — `BlobExists` Stats disk on cache hit; `DeleteBlob` clears cache when already missing.
 
 ### 6. Compute — `internal/compute`
 * **`services_config.go`** — SSOT `services.json`: Load/Save/Build/Upsert/Delete + **`BuildHandler`** (`HandlerDialUnary`/`HandlerDialStream`).

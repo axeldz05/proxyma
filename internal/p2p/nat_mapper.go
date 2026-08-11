@@ -124,6 +124,9 @@ func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, s
 	extPort, err := dev.AddPortMapping(proto, port, desc, 30*time.Minute)
 	// AddPortMapping talks to the router, so re-check the lifetime before reporting.
 	if nm.stopped() {
+		if err == nil {
+			_ = dev.DeletePortMapping(proto, port)
+		}
 		return
 	}
 	if err != nil {

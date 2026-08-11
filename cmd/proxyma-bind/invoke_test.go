@@ -70,6 +70,25 @@ func TestNormalizeActionArgsRun(t *testing.T) {
 	}
 }
 
+func TestNormalizeActionArgsAddPipelineRequiresSchema(t *testing.T) {
+	_, err := NormalizeActionArgs("service", "add_pipeline", map[string]string{"id": "p1"})
+	if err == nil || !strings.Contains(err.Error(), "schema or schema-file required") {
+		t.Fatalf("expected schema or schema-file required, got %v", err)
+	}
+
+	raw := `{"id":"p1","version":1,"steps":[{"id":"s1","service":"echo"}]}`
+	out, err := NormalizeActionArgs("service", "add_pipeline", map[string]string{
+		"id":     "p1",
+		"schema": raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["schema"] == "" {
+		t.Fatal("expected schema populated")
+	}
+}
+
 func TestUnaryUnixActionsHaveHandlers(t *testing.T) {
 	streamUA := uischema.MustUnixAction("service", "stream")
 	for ua, key := range uischema.AllUnixActions() {

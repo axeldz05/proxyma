@@ -82,7 +82,12 @@ func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error
 }
 
 func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) error {
-	s.Storage.StageAndRewrite(req.Payload, false)
+	if req.RequesterNodeID == "" {
+		req.RequesterNodeID = s.Config.ID
+	}
+	if err := s.Storage.StageAndRewrite(req.Payload, false); err != nil {
+		return fmt.Errorf("stage payload for dispatch: %w", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
 	defer cancel()

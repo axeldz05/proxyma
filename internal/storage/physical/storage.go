@@ -105,7 +105,20 @@ func (st *Storage) BlobExists(hash string) (bool, error) {
 	st.mu.RLock()
 	exists := st.blobCache[hash]
 	st.mu.RUnlock()
-	return exists, nil
+	if !exists {
+		return false, nil
+	}
+	_, err := os.Stat(st.GetBlobPath(hash))
+	if err == nil {
+		return true, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, err
+	}
+	st.mu.Lock()
+	delete(st.blobCache, hash)
+	st.mu.Unlock()
+	return false, nil
 }
 
 func (st *Storage) ReadBlob(hash string, w io.Writer) error {
@@ -129,10 +142,11 @@ func (st *Storage) ReadBlob(hash string, w io.Writer) error {
 func (st *Storage) DeleteBlob(hash string) error {
 	fullPath := filepath.Join(st.baseDir, hash)
 	err := os.Remove(fullPath)
-	if err == nil {
+	if err == nil || os.IsNotExist(err) {
 		st.mu.Lock()
 		delete(st.blobCache, hash)
 		st.mu.Unlock()
+		return nil
 	}
 	return err
 }

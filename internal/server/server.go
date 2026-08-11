@@ -16,6 +16,7 @@ import (
 	"proxyma/internal/utils"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,11 +46,14 @@ type Server struct {
 	serverTLSConfig *tls.Config
 	clientTLSConfig *tls.Config
 	tlsMutex        sync.RWMutex
+	clientMaterial  atomic.Pointer[tlsClientMaterial]
+	serverMaterial  atomic.Pointer[tlsServerMaterial]
 
 	udpConn       *net.UDPConn
 	publicUDPAddr string
 	quicMgr       *p2p.QUICManager
 	natMapper     *p2p.NATMapper
+	natMu         sync.Mutex
 
 	webrtcPCs   sync.Map
 	webrtcPCSeq uint64
@@ -89,13 +93,11 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Compute.SetAddress(cfg.Address)
 	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
-		for peerID, peerAddress := range s.GetPeersCopy() {
-			if rawSource == peerAddress {
-				s.downloadQueue <- DownloadJob{
-					File:   file,
-					Source: peerID,
+		for peerID, record := range s.GetPeersRecordCopy() {
+			for _, peerAddress := range record.Addresses {
+				if rawSource == peerAddress {
+					return s.enqueueDownload(DownloadJob{File: file, Source: peerID})
 				}
-				return nil
 			}
 		}
 		return fmt.Errorf("peer of address %s not found", rawSource)
@@ -109,7 +111,7 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	// Load persisted peers from DB and populate registry
 	if peers, err := s.Storage.LoadPeers(); err == nil {
 		for peerID, record := range peers {
-			s.Peers.AddPeer(peerID, record)
+			_, _ = s.Peers.AddPeer(peerID, record)
 			s.Peers.SetPeerOffline(peerID, fmt.Errorf("not contacted yet"))
 			s.peerClient.UpdatePeerRoute(peerID, record)
 		}
@@ -129,6 +131,10 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 					return "", fmt.Errorf("failed to download VFS blob %s from %s: %w", hash, requesterNodeID, err)
 				}
 			}
+		}
+		hasLocal, _ = s.Storage.HasPhysicalBlob(hash)
+		if !hasLocal {
+			return "", fmt.Errorf("VFS blob %s not available locally", hash)
 		}
 		return s.Storage.GetBlobPath(hash), nil
 	})
@@ -264,17 +270,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.Config.Logger.Info("Initiating shutdown...")
 		close(s.done)
 		s.announceOffline(ctx)
-		if s.natMapper != nil {
-			s.natMapper.Stop()
+		s.natMu.Lock()
+		nm := s.natMapper
+		s.natMu.Unlock()
+		if nm != nil {
+			nm.Stop()
 		}
 		if s.httpServer != nil {
 			if hsErr := s.httpServer.Shutdown(ctx); hsErr != nil {
 				s.Config.Logger.Error("HTTP server shutdown failed", "error", hsErr)
 				err = hsErr
-				return
+			} else {
+				s.Config.Logger.Info("HTTP server stopped accepting connections.")
 			}
 		}
-		s.Config.Logger.Info("HTTP server stopped accepting connections.")
 
 		if s.Compute != nil {
 			s.Compute.Close()
@@ -300,6 +309,28 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.Config.Logger.Info("Node shutdown complete.")
 	})
 	return err
+}
+
+// shuttingDown reports whether Shutdown has closed the done channel.
+func (s *Server) shuttingDown() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// enqueueDownload non-blockingly queues a blob download; drops when full or shutting down.
+func (s *Server) enqueueDownload(job DownloadJob) error {
+	select {
+	case <-s.done:
+		return fmt.Errorf("download queue closed: shutting down")
+	case s.downloadQueue <- job:
+		return nil
+	default:
+		return fmt.Errorf("download queue full (hash=%s source=%s)", job.File.Hash, job.Source)
+	}
 }
 
 func (s *Server) RecordBytesSent(n int64, path string) {

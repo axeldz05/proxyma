@@ -14,7 +14,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, exists := s.Invites.CheckAndConsume(req.Secret); !exists {
+	if _, exists := s.Invites.Check(req.Secret); !exists {
 		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
 		return
 	}
@@ -60,6 +60,8 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error reading CA")
 		return
 	}
+
+	s.Invites.Consume(req.Secret)
 
 	utils.RespondJSON(w, http.StatusOK, protocol.JoinResponse{
 		Certificate: string(newCertPEM),

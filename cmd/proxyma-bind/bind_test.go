@@ -69,6 +69,13 @@ func (m *mockStreamListener) OnComplete() {
 	close(m.done)
 }
 
+func TestStreamService_ValidationError(t *testing.T) {
+	res := StreamService("", `{}`, nil)
+	if !IsBindError(res) {
+		t.Fatalf("expected bind error for empty name, got %s", res)
+	}
+}
+
 func TestStreamService_GomobileBinding(t *testing.T) {
 	tempDir := t.TempDir()
 	StartNode(tempDir, true)

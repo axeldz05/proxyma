@@ -44,9 +44,28 @@ func TestVisibleRegistryHidesInternal(t *testing.T) {
 			if a.Hidden {
 				t.Errorf("visible registry leaked hidden action %s", a.Key())
 			}
-			if a.Name == "detail" || a.Name == "stream" || a.Name == "validate_pipeline" {
-				t.Errorf("internal action %s should not be visible", a.Key())
+			if a.Name == "detail" || a.Name == "stream" || a.Name == "validate_pipeline" ||
+				a.Name == "join" || a.Name == "edit_pipeline" {
+				t.Errorf("internal/escape-only action %s should not be visible", a.Key())
 			}
+		}
+	}
+}
+
+func TestHiddenEscapeActionsStillFindable(t *testing.T) {
+	for _, key := range []struct{ domain, name string }{
+		{"cluster", "join"},
+		{"service", "edit_pipeline"},
+	} {
+		a, ok := FindAction(key.domain, key.name)
+		if !ok {
+			t.Fatalf("expected %s.%s", key.domain, key.name)
+		}
+		if !a.Hidden {
+			t.Errorf("%s.%s should be Hidden", key.domain, key.name)
+		}
+		if a.UnixAction != "" {
+			t.Errorf("%s.%s should have empty UnixAction", key.domain, key.name)
 		}
 	}
 }

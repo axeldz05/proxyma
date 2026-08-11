@@ -10,13 +10,20 @@ import (
 )
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
-	decodeNotifyOK(w, r, func(req protocol.ServiceNotification) {
-		if !s.Storage.IsServiceSubscribed(req.Schema.Name) {
-			s.Config.Logger.Debug("Ignoring unsolicited service notify", "service", req.Schema.Name, "peer", req.NodeID)
-			return
-		}
-		s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
-	})
+	req, ok := utils.DecodeJSONOrError[protocol.ServiceNotification](w, r)
+	if !ok {
+		return
+	}
+	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
+		return
+	}
+	if !s.Storage.IsServiceSubscribed(req.Schema.Name) {
+		s.Config.Logger.Debug("Ignoring unsolicited service notify", "service", req.Schema.Name, "peer", req.NodeID)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +117,11 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	_ = s.LocalServiceStreamRun(serviceName, string(bodyBytes), func(chunk map[string]any) {
+	if err := s.LocalServiceStreamRun(serviceName, string(bodyBytes), func(chunk map[string]any) {
 		_ = utils.WriteNDJSON(w, chunk)
 		flusher.Flush()
-	})
+	}); err != nil {
+		_ = utils.WriteNDJSON(w, map[string]any{"error": err.Error()})
+		flusher.Flush()
+	}
 }

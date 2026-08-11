@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,10 @@ import (
 
 	"go.etcd.io/bbolt"
 )
+
+// ErrBlobDiscarded is returned when a downloaded blob no longer matches the
+// current VFS entry (obsolescence, deletion, or version mismatch).
+var ErrBlobDiscarded = errors.New("blob discarded due to obsolescence or deletion")
 
 type StorageEngine struct {
 	physical         storage.Storage
@@ -149,19 +154,19 @@ func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {
 	return se.vfs.Snapshot()
 }
 
-func (se *StorageEngine) Upsert(entry protocol.IndexEntry) bool {
+func (se *StorageEngine) Upsert(entry protocol.IndexEntry) (bool, error) {
 	return se.upsertIndex(entry)
 }
 
-// upsertIndex writes metadata and logs an index failure instead of letting it
-// look like "already up to date" (L2 SSOT for every internal upsert).
-func (se *StorageEngine) upsertIndex(entry protocol.IndexEntry) bool {
+// upsertIndex writes metadata and surfaces DB failures separately from
+// "already up to date" (updated=false, err=nil).
+func (se *StorageEngine) upsertIndex(entry protocol.IndexEntry) (bool, error) {
 	updated, err := se.vfs.Upsert(entry)
 	if err != nil {
 		se.logger.Error("Failed to persist VFS index entry", "file", entry.Name, "version", entry.Version, "error", err)
-		return false
+		return false, err
 	}
-	return updated
+	return updated, nil
 }
 
 func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.IndexEntry) []protocol.IndexEntry {
@@ -171,7 +176,10 @@ func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.Inde
 			se.ProcessRemoteDeletion(remoteFileInfo)
 			continue
 		}
-		updated := se.upsertIndex(remoteFileInfo)
+		updated, err := se.upsertIndex(remoteFileInfo)
+		if err != nil {
+			continue
+		}
 		if se.IsSubscribed(logicalName) {
 			hasBlob, err := se.HasPhysicalBlob(remoteFileInfo.Hash)
 			if err != nil {
@@ -199,12 +207,17 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 		Version: entry.Version + 1,
 		Deleted: true,
 	}
-	if se.upsertIndex(fileMeta) {
-		if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
-			return fmt.Errorf("file %s could not be deleted: %w", fileMeta.Name, err)
-		}
-		go se.notifyFunc(fileMeta)
+	updated, err := se.upsertIndex(fileMeta)
+	if err != nil {
+		return err
 	}
+	if !updated {
+		return fmt.Errorf("failed to persist deletion tombstone for %s", fileName)
+	}
+	if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
+		return fmt.Errorf("file %s could not be deleted: %w", fileMeta.Name, err)
+	}
+	go se.notifyFunc(fileMeta)
 	return nil
 }
 
@@ -219,19 +232,21 @@ func (se *StorageEngine) DeleteLocalCache(fileName string) error {
 }
 
 // UpsertAndSubscribe upserts VFS metadata with next version (if Version<=0), subscribes, optionally notifies (L2).
-func (se *StorageEngine) UpsertAndSubscribe(entry protocol.IndexEntry, notify bool) protocol.IndexEntry {
+func (se *StorageEngine) UpsertAndSubscribe(entry protocol.IndexEntry, notify bool) (protocol.IndexEntry, error) {
+	var err error
 	if entry.Version <= 0 {
-		entry.Version = 1
-		if existing, exists := se.vfs.Get(entry.Name); exists {
-			entry.Version = existing.Version + 1
+		entry, err = se.vfs.UpsertAutoVersion(entry)
+		if err != nil {
+			return entry, err
 		}
+	} else if _, err = se.upsertIndex(entry); err != nil {
+		return entry, err
 	}
-	se.upsertIndex(entry)
 	se.SetSubscription(entry.Name, true)
 	if notify {
 		go se.notifyFunc(entry)
 	}
-	return entry
+	return entry, nil
 }
 
 func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error {
@@ -239,25 +254,27 @@ func (se *StorageEngine) SaveLocalFile(fileName string, content io.Reader) error
 	if err != nil {
 		return fmt.Errorf("error saving the blob %s: %v", fileName, err.Error())
 	}
-	se.UpsertAndSubscribe(protocol.IndexEntry{
+	_, err = se.UpsertAndSubscribe(protocol.IndexEntry{
 		Name: fileName,
 		Size: fileSize,
 		Hash: hash,
 	}, true)
-	return nil
+	return err
 }
 
 func (se *StorageEngine) ProcessRemoteDeletion(fileInfo protocol.IndexEntry) {
 	savedFileInfo, exists := se.vfs.Get(fileInfo.Name)
 
-	if se.upsertIndex(fileInfo) {
-		if exists {
-			if err := se.deleteBlobIfOrphan(savedFileInfo.Hash, false); err != nil {
-				se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
-			}
-		}
-		se.logger.Info("File remotely deleted", "file", fileInfo.Name)
+	updated, err := se.upsertIndex(fileInfo)
+	if err != nil || !updated {
+		return
 	}
+	if exists {
+		if err := se.deleteBlobIfOrphan(savedFileInfo.Hash, false); err != nil {
+			se.logger.Error("Failed to delete blob physically", "file", fileInfo.Name, "error", err)
+		}
+	}
+	se.logger.Info("File remotely deleted", "file", fileInfo.Name)
 }
 
 func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content io.Reader) error {
@@ -276,7 +293,7 @@ func (se *StorageEngine) StoreRemoteBlob(fileInfo protocol.IndexEntry, content i
 		se.logger.Error("Failed to delete obsolete blob", "file", fileInfo.Name, "error", err)
 	}
 
-	return nil
+	return ErrBlobDiscarded
 }
 
 // SaveVerifiedPhysicalBlob stores content and fails hard unless SHA-256 matches expectedHash (L2).
@@ -313,17 +330,19 @@ func (se *StorageEngine) StageLocalFile(pathStr string) (hash string, size int64
 		return "", 0, err
 	}
 	name := "stage/" + hash + "/" + filepath.Base(pathStr)
-	se.UpsertAndSubscribe(protocol.IndexEntry{
+	if _, err = se.UpsertAndSubscribe(protocol.IndexEntry{
 		Name: name,
 		Hash: hash,
 		Size: size,
-	}, false)
+	}, false); err != nil {
+		return "", 0, err
+	}
 	return hash, size, nil
 }
 
 // StageAndRewrite stages local file paths in m and rewrites them to vfs:// URIs (L2).
-func (se *StorageEngine) StageAndRewrite(m map[string]any, annotateOutputs bool) {
-	protocol.RewriteLocalFilePaths(m, se.StageLocalFile, annotateOutputs)
+func (se *StorageEngine) StageAndRewrite(m map[string]any, annotateOutputs bool) error {
+	return protocol.RewriteLocalFilePaths(m, se.StageLocalFile, annotateOutputs)
 }
 
 func (se *StorageEngine) CleanupTempFiles() {

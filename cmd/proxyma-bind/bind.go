@@ -103,8 +103,10 @@ func dispatchUnixStreamOrLocal(
 			return
 		}
 
+		streamErr := false
 		_ = ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
 			if !resp.Success {
+				streamErr = true
 				if onError != nil {
 					onError(resp.Error)
 				}
@@ -115,7 +117,8 @@ func dispatchUnixStreamOrLocal(
 			}
 			return true
 		})
-		if onComplete != nil {
+		// Mirror local path: OnComplete only after a clean stream (no error).
+		if !streamErr && onComplete != nil {
 			onComplete()
 		}
 	}()

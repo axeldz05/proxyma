@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,27 +11,98 @@ import (
 	"proxyma/internal/protocol"
 )
 
+// tlsClientMaterial is an immutable client cert + verify pair swapped on rotation (H1).
+type tlsClientMaterial struct {
+	cert   tls.Certificate
+	verify func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
+}
+
+// tlsServerMaterial is an immutable server tls.Config snapshot swapped on rotation (H1).
+type tlsServerMaterial struct {
+	cfg *tls.Config
+}
+
 func (s *Server) SetTLSConfigs(serverTLS, clientTLS *tls.Config) {
 	s.tlsMutex.Lock()
 	defer s.tlsMutex.Unlock()
 	s.serverTLSConfig = serverTLS
 	s.clientTLSConfig = clientTLS
+	// Arm callbacks once before any handshake; never mutate tls.Config fields later.
+	s.armHotReloadServerTLSLocked(serverTLS)
+	s.armHotReloadClientTLSLocked(clientTLS)
 }
 
 // armHotReloadServerTLS installs GetConfigForClient so ServeTLS's cloned config
-// still picks up rotated certs/CA from disk on every handshake (L2).
+// still picks up rotated certs/CA from an atomic snapshot (L2).
 func (s *Server) armHotReloadServerTLS(cfg *tls.Config) {
+	s.tlsMutex.Lock()
+	defer s.tlsMutex.Unlock()
+	s.armHotReloadServerTLSLocked(cfg)
+}
+
+func (s *Server) armHotReloadServerTLSLocked(cfg *tls.Config) {
 	if cfg == nil {
 		return
 	}
-	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
-		caPath := s.Config.CAPath
-		certPath, keyPath := p2p.ResolveNodeCertPaths(caPath, s.Config.StoragePath, s.Config.ID)
-		stls, _, err := p2p.LoadNodeTLS(caPath, certPath, keyPath)
-		if err != nil {
-			return nil, err
+	s.storeServerMaterial(cfg)
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		m := s.serverMaterial.Load()
+		if m == nil || m.cfg == nil {
+			return nil, fmt.Errorf("no server TLS material")
+		}
+		stls := m.cfg.Clone()
+		// Honor ALPN the client offered (HTTP/2 or QUIC proxyma-p2p).
+		if hello != nil && len(hello.SupportedProtos) > 0 {
+			stls.NextProtos = append([]string(nil), hello.SupportedProtos...)
 		}
 		return stls, nil
+	}
+}
+
+func (s *Server) storeServerMaterial(cfg *tls.Config) {
+	if cfg == nil {
+		return
+	}
+	// Clone without GetConfigForClient to avoid recursive callback on Clone use.
+	snap := cfg.Clone()
+	snap.GetConfigForClient = nil
+	s.serverMaterial.Store(&tlsServerMaterial{cfg: snap})
+}
+
+func materialFromClientTLS(cfg *tls.Config) *tlsClientMaterial {
+	if cfg == nil {
+		return nil
+	}
+	m := &tlsClientMaterial{verify: cfg.VerifyPeerCertificate}
+	if len(cfg.Certificates) > 0 {
+		m.cert = cfg.Certificates[0]
+	}
+	return m
+}
+
+// armHotReloadClientTLSLocked installs cert/verify callbacks that read an atomic
+// snapshot. ReloadTLSConfig swaps the snapshot — it never mutates cfg fields (H1).
+func (s *Server) armHotReloadClientTLSLocked(cfg *tls.Config) {
+	if cfg == nil {
+		return
+	}
+	if m := materialFromClientTLS(cfg); m != nil && len(m.cert.Certificate) > 0 {
+		s.clientMaterial.Store(m)
+	}
+	cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		m := s.clientMaterial.Load()
+		if m == nil || len(m.cert.Certificate) == 0 {
+			return nil, fmt.Errorf("no client certificate available")
+		}
+		cert := m.cert
+		return &cert, nil
+	}
+	cfg.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		m := s.clientMaterial.Load()
+		if m == nil || m.verify == nil {
+			return fmt.Errorf("no client TLS verify material")
+		}
+		return m.verify(rawCerts, verifiedChains)
 	}
 }
 
@@ -45,33 +117,14 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 
 	s.Config.Logger.Info("Reloading dynamic TLS configuration across server and client...")
 
-	// Server side: ServeTLS clones TLSConfig; armHotReloadServerTLS makes handshakes
-	// reload from disk. Still refresh the base pointer for httptest / non-cloned paths.
-	if s.serverTLSConfig != nil {
-		s.serverTLSConfig.Certificates = newServerTLS.Certificates
-		s.serverTLSConfig.ClientCAs = newServerTLS.ClientCAs
-		s.armHotReloadServerTLS(s.serverTLSConfig)
-	}
-
-	// Client side is held by HTTP transports by pointer (not cloned) — mutate in place.
-	if s.clientTLSConfig != nil {
-		s.clientTLSConfig.Certificates = newClientTLS.Certificates
-		s.clientTLSConfig.RootCAs = newClientTLS.RootCAs
-		s.clientTLSConfig.VerifyPeerCertificate = newClientTLS.VerifyPeerCertificate
-		s.clientTLSConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			_, ctls, loadErr := p2p.LoadNodeTLS(caPath, certPath, keyPath)
-			if loadErr != nil {
-				return nil, loadErr
-			}
-			if len(ctls.Certificates) == 0 {
-				return nil, fmt.Errorf("no client certificate available after reload")
-			}
-			return &ctls.Certificates[0], nil
-		}
+	// Swap snapshots only — do not write Certificates/ClientCAs/RootCAs on live configs.
+	s.storeServerMaterial(newServerTLS)
+	if m := materialFromClientTLS(newClientTLS); m != nil {
+		s.clientMaterial.Store(m)
 	}
 
 	if s.quicMgr != nil {
-		s.quicMgr.ReloadTLS(s.clientTLSConfig, s.serverTLSConfig)
+		s.quicMgr.ReloadTLS(newClientTLS, newServerTLS)
 	}
 
 	return nil
@@ -102,7 +155,8 @@ func (s *Server) RotateCAAndResignPeers() {
 		return
 	}
 
-	// 3. Loop over all other registered peers and re-sign their certificates
+	// 3. Push re-signed peer certs. Client/server snapshots stay on the pre-rotation
+	// material until step 4 so peers still presenting old CA certs can be reached.
 	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
 	if err != nil {
 		s.Config.Logger.Error("Failed to read new CA cert", "error", err)
@@ -134,7 +188,7 @@ func (s *Server) RotateCAAndResignPeers() {
 		return nil
 	})
 
-	// 4. Finally, reload our own TLS config in place
+	// 4. Finally, reload our own TLS snapshots
 	err = s.ReloadTLSConfig(s.Config.CAPath, ownCertFile, ownKeyFile)
 	if err != nil {
 		s.Config.Logger.Error("Failed to reload own TLS config after rotation", "error", err)

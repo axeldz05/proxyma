@@ -268,11 +268,18 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 				if pathStr, ok := v.(string); ok {
 					if hash, isVFS := protocol.ParseVFSURI(pathStr); isVFS {
 						resolvedPath, err := c.vfsBlobResolver(context.Background(), t.RequesterNodeID, hash)
-						if err == nil && resolvedPath != "" {
-							stepPayload[k] = resolvedPath
-						} else if err != nil {
-							c.logger.Error("Failed to resolve VFS blob for step", "step", currentStep.ID, "hash", hash, "error", err)
+						if err != nil {
+							logger.LogFailure(currentStep.ID, currentStep.Service, err)
+							c.sendPipelineError(t, fmt.Errorf("step '%s' failed to resolve vfs://%s: %w", currentStep.ID, hash, err))
+							return
 						}
+						if resolvedPath == "" {
+							err := fmt.Errorf("empty path resolving vfs://%s", hash)
+							logger.LogFailure(currentStep.ID, currentStep.Service, err)
+							c.sendPipelineError(t, fmt.Errorf("step '%s' failed to resolve vfs://%s: %w", currentStep.ID, hash, err))
+							return
+						}
+						stepPayload[k] = resolvedPath
 					}
 				}
 			}
@@ -296,7 +303,11 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 		}
 
 		// Auto-stage any generated local output file into VFS physical storage for subsequent steps
-		c.stageOutputBlobs(outputs)
+		if err := c.stageOutputBlobs(outputs); err != nil {
+			logger.LogFailure(currentStep.ID, currentStep.Service, err)
+			c.sendPipelineError(t, fmt.Errorf("step '%s' failed staging outputs: %w", currentStep.ID, err))
+			return
+		}
 
 		pipelineCtx.Outputs[currentStep.ID] = outputs
 		pipelineCtx.CurrentStep++
@@ -308,11 +319,11 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 	}
 }
 
-func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) {
+func (c *ComputeEngine) stageOutputBlobs(outputs map[string]any) error {
 	if c.vfsBlobStager == nil {
-		return
+		return nil
 	}
-	protocol.RewriteLocalFilePaths(outputs, c.vfsBlobStager, true)
+	return protocol.RewriteLocalFilePaths(outputs, c.vfsBlobStager, true)
 }
 
 func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.PipelineStep, schema protocol.PipelineSchema) {
@@ -363,7 +374,6 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		c.routePipelineStep(t, nextStep, schema)
 	} else {
 		logger := c.newTaskLogger(t)
-		logger.LogSuccess()
 
 		// Return outputs of final step (clone to avoid reference cycle)
 		finalOutputs := make(map[string]any)
@@ -374,7 +384,13 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		finalOutputs["$pipeline_outputs"] = pipelineCtx.Outputs
 
 		// Auto-stage any generated local output file into VFS physical storage
-		c.stageOutputBlobs(finalOutputs)
+		if err := c.stageOutputBlobs(finalOutputs); err != nil {
+			logger.LogFailure(finalStepID, schema.Steps[len(schema.Steps)-1].Service, err)
+			c.sendPipelineError(t, fmt.Errorf("pipeline failed staging final outputs: %w", err))
+			return
+		}
+
+		logger.LogSuccess()
 
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:  t.TaskID,

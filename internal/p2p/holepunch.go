@@ -200,10 +200,15 @@ func (qm *QUICManager) lifetime() context.Context {
 }
 
 // SetSession stores a QUIC connection in the sessions map.
+// If a different conn already exists for peerID, it is closed after unlock.
 func (qm *QUICManager) SetSession(peerID string, conn *quic.Conn) {
 	qm.SessionsMu.Lock()
+	old := qm.Sessions[peerID]
 	qm.Sessions[peerID] = conn
 	qm.SessionsMu.Unlock()
+	if old != nil && old != conn {
+		_ = old.CloseWithError(0, "replaced")
+	}
 }
 
 // CloseAndRemoveSession closes an existing session and deletes it from the map.
@@ -355,6 +360,9 @@ func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remo
 	var respMsg HolePunchMessage
 	if err := json.Unmarshal(respBytes, &respMsg); err != nil {
 		return nil, fmt.Errorf("failed to parse hole punch response: %w", err)
+	}
+	if respMsg.PublicUDP != "" {
+		remoteUDP = respMsg.PublicUDP
 	}
 
 	rUDPAddr, err := net.ResolveUDPAddr("udp", remoteUDP)

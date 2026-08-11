@@ -106,7 +106,10 @@ func TestAddPeerEvictsStaleSameAddress(t *testing.T) {
 	pr.SetPeerCertificate("old-id", &x509.Certificate{})
 	pr.UpdatePeerService("old-id", protocol.ActionAdd, protocol.ServiceSchema{Name: "svc"})
 
-	pr.AddPeer("new-id", record(1, "https://node:8443"))
+	_, evicted := pr.AddPeer("new-id", record(1, "https://node:8443"))
+	if len(evicted) != 1 || evicted[0] != "old-id" {
+		t.Errorf("expected evicted [old-id], got %v", evicted)
+	}
 
 	if _, ok := pr.GetPeerRecord("old-id"); ok {
 		t.Error("stale peer kept its record")
@@ -125,19 +128,27 @@ func TestAddPeerEvictsStaleSameAddress(t *testing.T) {
 func TestAddPeerSequenceRules(t *testing.T) {
 	pr := newTestRegistry(t)
 
-	if !pr.AddPeer("peer-a", record(5, "https://a:8443")) {
+	updated, _ := pr.AddPeer("peer-a", record(5, "https://a:8443"))
+	if !updated {
 		t.Fatal("first AddPeer must report an update")
 	}
-	if pr.AddPeer("peer-a", record(4, "https://stale:8443")) {
+	updated, _ = pr.AddPeer("peer-a", record(4, "https://stale:8443"))
+	if updated {
 		t.Error("an older sequence must be ignored")
 	}
 	if got, _ := pr.GetPeerRecord("peer-a"); got.Addresses[0] != "https://a:8443" {
 		t.Errorf("older record overwrote the current one: %v", got.Addresses)
 	}
 
-	// Same sequence unions the address sets.
-	pr.AddPeer("peer-a", record(5, "https://a-alt:8443"))
+	// Same sequence unions addresses while keeping the original primary first.
+	updated, _ = pr.AddPeer("peer-a", record(5, "https://a-alt:8443"))
+	if !updated {
+		t.Fatal("equal-sequence merge must report an update")
+	}
 	got, _ := pr.GetPeerRecord("peer-a")
+	if got.Addresses[0] != "https://a:8443" {
+		t.Errorf("equal-sequence merge must keep original primary as Addresses[0], got %v", got.Addresses)
+	}
 	addrs := append([]string(nil), got.Addresses...)
 	sort.Strings(addrs)
 	if len(addrs) != 2 || addrs[0] != "https://a-alt:8443" || addrs[1] != "https://a:8443" {
@@ -154,8 +165,12 @@ func TestAddPeerSequenceRules(t *testing.T) {
 
 func TestAddPeerIgnoresSelf(t *testing.T) {
 	pr := newTestRegistry(t)
-	if pr.AddPeer("self", record(1, "https://self:8443")) {
+	updated, evicted := pr.AddPeer("self", record(1, "https://self:8443"))
+	if updated {
 		t.Error("the node must not register itself as a peer")
+	}
+	if len(evicted) != 0 {
+		t.Errorf("self AddPeer must not evict anyone, got %v", evicted)
 	}
 	if _, ok := pr.GetPeerRecord("self"); ok {
 		t.Error("self must not appear in the registry")

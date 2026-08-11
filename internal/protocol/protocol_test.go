@@ -228,7 +228,7 @@ func TestRewriteLocalFilePaths(t *testing.T) {
 		"label":    "not-a-path-value",
 		"nil_stage": nil,
 	}
-	protocol.RewriteLocalFilePaths(m, stage, false)
+	require.NoError(t, protocol.RewriteLocalFilePaths(m, stage, false))
 	require.Equal(t, "vfs://hash99", m["input"])
 	require.Equal(t, "vfs://existing", m["already"])
 	require.Equal(t, filepath.Join(dir, "nope.txt"), m["missing"]) // stage skipped: file missing
@@ -238,15 +238,15 @@ func TestRewriteLocalFilePaths(t *testing.T) {
 
 	// annotateOutputs writes output metadata keys
 	out := map[string]any{"result": filePath}
-	protocol.RewriteLocalFilePaths(out, stage, true)
+	require.NoError(t, protocol.RewriteLocalFilePaths(out, stage, true))
 	require.Equal(t, "vfs://hash99", out["result"])
 	require.Equal(t, "hash99", out[protocol.OutputHashKey])
 	require.Equal(t, "doc.txt", out[protocol.OutputNameKey])
 	require.Equal(t, float64(5), out[protocol.OutputSizeKey])
 
 	// nil map / nil stage are no-ops
-	protocol.RewriteLocalFilePaths(nil, stage, false)
-	protocol.RewriteLocalFilePaths(m, nil, false)
+	require.NoError(t, protocol.RewriteLocalFilePaths(nil, stage, false))
+	require.NoError(t, protocol.RewriteLocalFilePaths(m, nil, false))
 }
 
 func TestOutputHashAndResultLocalPath(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
@@ -173,13 +174,17 @@ func TestCARotationReloadsQUICTLS(t *testing.T) {
 	require.NotEmpty(t, qmAfter.TLSServer.Certificates)
 	require.NotEmpty(t, qmAfter.TLSClient.Certificates)
 
-	httpServerDER := sponsorSrv.ServerTLSConfig().Certificates[0].Certificate[0]
-	httpClientDER := sponsorSrv.ClientTLSConfig().Certificates[0].Certificate[0]
+	// HTTP configs use atomic snapshots — compare QUIC material against a fresh
+	// LoadNodeTLS from the live server config CA path after rotation.
+	caPath := sponsorSrv.Config.CAPath
+	certPath, keyPath := p2p.NodeCertPaths(filepath.Dir(caPath), sponsorSrv.Config.ID)
+	stls, ctls, err := p2p.LoadNodeTLS(caPath, certPath, keyPath)
+	require.NoError(t, err)
 
-	require.Equal(t, httpServerDER, qmAfter.TLSServer.Certificates[0].Certificate[0],
-		"QUIC server TLS must match rotated HTTP server TLS")
-	require.Equal(t, httpClientDER, qmAfter.TLSClient.Certificates[0].Certificate[0],
-		"QUIC client TLS must match rotated HTTP client TLS")
+	require.Equal(t, stls.Certificates[0].Certificate[0], qmAfter.TLSServer.Certificates[0].Certificate[0],
+		"QUIC server TLS must match rotated disk server TLS")
+	require.Equal(t, ctls.Certificates[0].Certificate[0], qmAfter.TLSClient.Certificates[0].Certificate[0],
+		"QUIC client TLS must match rotated disk client TLS")
 	require.NotEqual(t, oldServerDER, qmAfter.TLSServer.Certificates[0].Certificate[0])
 	require.NotEqual(t, oldClientDER, qmAfter.TLSClient.Certificates[0].Certificate[0])
 }

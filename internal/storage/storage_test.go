@@ -203,11 +203,13 @@ func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
 	engine := testutil.NewStorageEngine(t, cfg)
 
 	entry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v3", Version: 3, Size: 100}
-	updated := engine.Upsert(entry)
+	updated, err := engine.Upsert(entry)
+	require.NoError(t, err)
 	require.True(t, updated, "First insert should succeed")
 
 	olderEntry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v2", Version: 2, Size: 50}
-	updated = engine.Upsert(olderEntry)
+	updated, err = engine.Upsert(olderEntry)
+	require.NoError(t, err)
 	require.False(t, updated, "Upsert with lower version should be rejected")
 
 	meta, exists := engine.GetFileMeta("versioned.txt")
@@ -226,10 +228,11 @@ func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	expectedHash := testutil.CalculateHash(t, correctContent)
 
 	fileInfo := protocol.IndexEntry{Name: "integrity.txt", Hash: expectedHash, Version: 1, Size: int64(len(correctContent))}
-	engine.Upsert(fileInfo)
+	_, err := engine.Upsert(fileInfo)
+	require.NoError(t, err)
 
 	corruptedBody := io.NopCloser(bytes.NewReader([]byte("corrupted content")))
-	err := engine.StoreRemoteBlob(fileInfo, corruptedBody)
+	err = engine.StoreRemoteBlob(fileInfo, corruptedBody)
 	require.Error(t, err, "StoreRemoteBlob should return error on hash mismatch")
 	require.Contains(t, err.Error(), "hash mismatch")
 
@@ -239,6 +242,28 @@ func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	corruptedHash := testutil.CalculateHash(t, "corrupted content")
 	hasBlobCorrupt, _ := engine.HasPhysicalBlob(corruptedHash)
 	require.False(t, hasBlobCorrupt, "The corrupted blob should have been deleted")
+}
+
+func TestStoreRemoteBlobReturnsErrBlobDiscardedOnVersionMismatch(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-discard")
+	engine := testutil.NewStorageEngine(t, cfg)
+
+	content := "discard-me"
+	hash := testutil.CalculateHash(t, content)
+	v1 := protocol.IndexEntry{Name: "discard.txt", Hash: hash, Version: 1, Size: int64(len(content))}
+	_, err := engine.Upsert(v1)
+	require.NoError(t, err)
+
+	v2 := protocol.IndexEntry{Name: "discard.txt", Hash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", Version: 2, Size: 1}
+	_, err = engine.Upsert(v2)
+	require.NoError(t, err)
+
+	err = engine.StoreRemoteBlob(v1, bytes.NewReader([]byte(content)))
+	require.ErrorIs(t, err, storage.ErrBlobDiscarded)
+
+	hasBlob, _ := engine.HasPhysicalBlob(hash)
+	require.False(t, hasBlob, "orphan blob from discarded download should be removed")
 }
 
 func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
@@ -631,7 +656,7 @@ func TestStageAndRewriteRewritesNestedPayloadPaths(t *testing.T) {
 			"file": localPath,
 		},
 	}
-	engine.StageAndRewrite(payload, false)
+	require.NoError(t, engine.StageAndRewrite(payload, false))
 
 	require.True(t, protocol.IsVFSURI(payload["input"].(string)))
 	require.Equal(t, "vfs://already-there", payload["keep"])

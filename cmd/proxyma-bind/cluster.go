@@ -15,6 +15,8 @@ import (
 )
 
 // GenerateInviteToken creates an invite token valid for 15 minutes.
+// Failures are BindErrorJSON. Success peels formatActionResult's BindMessageJSON
+// envelope back to a raw token string so Android/CLI callers keep a stable wire shape.
 func GenerateInviteToken() string {
 	raw := InvokeDomainAction("cluster", "invite", nil)
 	if IsBindError(raw) {

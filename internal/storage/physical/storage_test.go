@@ -134,3 +134,39 @@ func Test9SaveBlobReturnsSHA256Hash(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, gotHash, "Hash should be the exact SHA-256 of the file content")
 }
+
+func TestBlobExistsClearsStaleCacheWhenFileMissingOnDisk(t *testing.T) {
+	baseDir := t.TempDir()
+	aStorage := storage.NewStorage(baseDir)
+	content := "stale-cache-blob"
+	hash, _, err := aStorage.SaveBlob(strings.NewReader(content))
+	require.NoError(t, err)
+
+	assertBlobExists(t, aStorage, hash)
+
+	require.NoError(t, os.Remove(filepath.Join(baseDir, hash)))
+
+	exists, err := aStorage.BlobExists(hash)
+	require.NoError(t, err)
+	require.False(t, exists, "BlobExists must Stat disk and clear stale cache")
+
+	// Second call should stay false without resurrecting the cache entry.
+	exists, err = aStorage.BlobExists(hash)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestDeleteBlobClearsCacheWhenAlreadyMissing(t *testing.T) {
+	baseDir := t.TempDir()
+	aStorage := storage.NewStorage(baseDir)
+	content := "idempotent-delete"
+	hash, _, err := aStorage.SaveBlob(strings.NewReader(content))
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(filepath.Join(baseDir, hash)))
+	require.NoError(t, aStorage.DeleteBlob(hash))
+
+	exists, err := aStorage.BlobExists(hash)
+	require.NoError(t, err)
+	require.False(t, exists)
+}

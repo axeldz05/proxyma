@@ -13,6 +13,8 @@ type IndexStore interface {
 	// Upsert reports whether the entry replaced an older version. A storage
 	// failure must surface as an error, never as updated=false.
 	Upsert(entry protocol.IndexEntry) (bool, error)
+	// UpsertAutoVersion bumps Version atomically when Version<=0.
+	UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error)
 	Snapshot() map[string]protocol.IndexEntry
 }
 
@@ -32,8 +34,9 @@ func (v *VFS) Get(name string) (protocol.IndexEntry, bool) {
 	var entry protocol.IndexEntry
 	exists := false
 	_ = v.index.View(func(tx *bbolt.Tx) error {
-		entry, exists = boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, name)
-		return nil
+		var err error
+		entry, exists, err = boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, name)
+		return err
 	})
 	return entry, exists
 }
@@ -41,7 +44,9 @@ func (v *VFS) Get(name string) (protocol.IndexEntry, bool) {
 func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 	updated := false
 	err := v.index.Update(func(tx *bbolt.Tx) error {
-		if existing, ok := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name); ok {
+		if existing, ok, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name); err != nil {
+			return err
+		} else if ok {
 			if existing.Version >= entry.Version {
 				return nil
 			}
@@ -56,6 +61,26 @@ func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 		return false, err
 	}
 	return updated, nil
+}
+
+// UpsertAutoVersion bumps Version atomically inside the Bolt transaction when Version<=0 (M5).
+func (v *VFS) UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error) {
+	err := v.index.Update(func(tx *bbolt.Tx) error {
+		if entry.Version <= 0 {
+			entry.Version = 1
+			if existing, ok, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name); err != nil {
+				return err
+			} else if ok {
+				entry.Version = existing.Version + 1
+			}
+		} else if existing, ok, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name); err != nil {
+			return err
+		} else if ok && existing.Version >= entry.Version {
+			return nil
+		}
+		return boltPutJSON(tx, vfsIndexBucket, entry.Name, entry)
+	})
+	return entry, err
 }
 
 func (v *VFS) Snapshot() map[string]protocol.IndexEntry {

@@ -39,7 +39,7 @@ Level 1: Low-level primitives   (e.g. DialUnix, WriteUnixRequest, SavePhysicalBl
 |------|-----|
 | L1 | `ActionDetail` / `FindAction` / `UnixActionFor` / `ApplyDefaults` / `MissingRequired` / `SuccessMessage` / `NormalizePayloadJSON` |
 | L2 | Daemon `unixHandlers` + `CallUnixUnary`; bind `offlineHooks` (headless compute L2) |
-| L3 | CLI `executeActionLocal` → Prepared + `cliEscapes`; Cobra from `VisibleRegistry("cli")`; Android Compose walks Registry + Invoke |
+| L3 | CLI `executeActionLocal` → Prepared + `cliEscapes`; Cobra from `cliRegistry()`; Android Compose walks Registry + Invoke |
 
 ### Services
 | Tier | API |

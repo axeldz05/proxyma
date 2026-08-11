@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/storage"
 	"sort"
 )
 
@@ -42,9 +44,8 @@ func (s *Server) ExecuteSync() error {
 		}
 
 		for _, file := range missingFiles {
-			s.downloadQueue <- DownloadJob{
-				File:   file,
-				Source: peerID,
+			if err := s.enqueueDownload(DownloadJob{File: file, Source: peerID}); err != nil {
+				s.Config.Logger.Warn("Download enqueue skipped", "peer", peerID, "file", file.Name, "error", err)
 			}
 		}
 		return nil
@@ -73,19 +74,31 @@ func (s *Server) downloadWorker() {
 			})
 			cancel()
 			// Manifest source may only hold metadata (e.g. relay sponsor). Fall back
-			// to any reachable peer that still has the physical blob.
-			if err != nil {
-				_, ok := firstPeer(s, forEachPeerOpts{Timeout: PeerRPCBlobLong, SkipSelf: true}, func(ctx context.Context, peerID string) (struct{}, error) {
-					if peerID == job.Source {
-						return struct{}{}, fmt.Errorf("already tried source peer")
+			// to any reachable peer that still has the physical blob — skip source so
+			// callPeer does not re-mark it offline via a synthetic error.
+			if err != nil && !errors.Is(err, storage.ErrBlobDiscarded) {
+				for peerID := range s.GetPeersCopy() {
+					if peerID == s.Config.ID || peerID == job.Source {
+						continue
 					}
-					return struct{}{}, s.fetchBlobFromPeer(ctx, peerID, job.File)
-				})
-				if ok {
-					err = nil
+					fbCtx, fbCancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
+					fbErr := s.callPeer(fbCtx, peerID, func(ctx context.Context, peerID string) error {
+						return s.fetchBlobFromPeer(ctx, peerID, job.File)
+					})
+					fbCancel()
+					if fbErr == nil {
+						err = nil
+						break
+					}
+					if errors.Is(fbErr, storage.ErrBlobDiscarded) {
+						err = fbErr
+						break
+					}
 				}
 			}
-			if err != nil {
+			if errors.Is(err, storage.ErrBlobDiscarded) {
+				s.Config.Logger.Debug("Blob download discarded due to obsolescence or deletion", "file", job.File.Name, "hash", job.File.Hash)
+			} else if err != nil {
 				s.Config.Logger.Error("Failed to download blob from peer", "hash", job.File.Hash, "peer", job.Source, "error", err)
 			} else {
 				s.Config.Logger.Info("Successfully downloaded and stored blob", "file", job.File.Name, "hash", job.File.Hash)

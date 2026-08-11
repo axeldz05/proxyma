@@ -25,8 +25,11 @@ func (s *Server) configTCPPort() (portStr string, portInt int) {
 // advertisedTCPPort returns the public TCP port (UPnP mapped override when available).
 func (s *Server) advertisedTCPPort() string {
 	portStr, _ := s.configTCPPort()
-	if s.natMapper != nil {
-		if mappedTCP, _ := s.natMapper.GetMappedPorts(); mappedTCP > 0 {
+	s.natMu.Lock()
+	nm := s.natMapper
+	s.natMu.Unlock()
+	if nm != nil {
+		if mappedTCP, _ := nm.GetMappedPorts(); mappedTCP > 0 {
 			return fmt.Sprintf("%d", mappedTCP)
 		}
 	}
@@ -56,6 +59,10 @@ func (s *Server) applySponsorStatus(detected bool) {
 }
 
 func (s *Server) determineSponsorAndNATStatus() {
+	// Skip entirely if Shutdown already closed done.
+	if s.shuttingDown() {
+		return
+	}
 	s.Config.Logger.Info("Determining NAT and Sponsor status...")
 
 	// An override only decides the sponsor role; NAT/QUIC setup still runs.
@@ -65,8 +72,20 @@ func (s *Server) determineSponsorAndNATStatus() {
 		return
 	}
 
+	// STUN blocked; drop the UDP socket if we shut down mid-probe.
+	if s.shuttingDown() {
+		_ = endpoint.Conn.Close()
+		return
+	}
+
 	if !s.Config.DisableUPnP {
 		endpoint, publicKnown = s.mapPortsWithUPnP(endpoint, publicKnown)
+	}
+
+	// UPnP (or the skip path) finished; do not start QUIC after shutdown.
+	if s.shuttingDown() {
+		_ = endpoint.Conn.Close()
+		return
 	}
 
 	if !publicKnown {
@@ -110,16 +129,30 @@ func (s *Server) openUDPEndpoint() (publicEndpoint, bool, error) {
 // mapPortsWithUPnP starts the port mapper and, when STUN failed, recovers the
 // public IP from the gateway. It reports whether a public IP is known afterwards.
 func (s *Server) mapPortsWithUPnP(endpoint publicEndpoint, publicKnown bool) (publicEndpoint, bool) {
+	// Avoid constructing a mapper if shutdown already won the race.
+	if s.shuttingDown() {
+		return endpoint, publicKnown
+	}
 	_, tcpPort := s.configTCPPort()
 	udpPort := endpoint.Conn.LocalAddr().(*net.UDPAddr).Port
 
-	s.natMapper = p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
-	s.natMapper.SetOnMapped(func(mappedTCP, mappedUDP int) {
+	mapper := p2p.NewNATMapper(s.Config.Logger, tcpPort, udpPort)
+	mapper.SetOnMapped(func(mappedTCP, mappedUDP int) {
 		s.refreshPublicUDPFromMapping(endpoint.IP, mappedUDP)
 	})
-	s.natMapper.Start()
 
-	mappedTCP, mappedUDP := s.natMapper.GetMappedPorts()
+	s.natMu.Lock()
+	// Re-check under natMu so Shutdown cannot miss this mapper.
+	if s.shuttingDown() {
+		s.natMu.Unlock()
+		mapper.Stop()
+		return endpoint, publicKnown
+	}
+	s.natMapper = mapper
+	s.natMu.Unlock()
+	mapper.Start()
+
+	mappedTCP, mappedUDP := mapper.GetMappedPorts()
 	if mappedTCP > 0 {
 		tcpPort = mappedTCP
 	}
@@ -131,7 +164,7 @@ func (s *Server) mapPortsWithUPnP(endpoint publicEndpoint, publicKnown bool) (pu
 		return endpoint, publicKnown
 	}
 
-	routerIP, routerErr := s.natMapper.GetExternalAddress()
+	routerIP, routerErr := mapper.GetExternalAddress()
 	if routerErr != nil || routerIP == nil {
 		return endpoint, false
 	}

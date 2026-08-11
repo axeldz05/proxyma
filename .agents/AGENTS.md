@@ -48,7 +48,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Repository Map (Current)
 
 ### CLI — `cmd/proxyma/`
-* `root.go` — Cobra from `uischema.VisibleRegistry("cli")` + `Execute`; tables via `uischema.ProjectRows`.
+* `root.go` — Cobra from **`cliRegistry()`** (`VisibleRegistry("cli")` + Hidden CLI escapes) + `Execute`; tables via `uischema.ProjectRows`.
 * `cli_actions.go` — `executeActionLocal` → Normalize→Validate → `cliEscapes` OR **`InvokeDomainActionPrepared`**.
 * `cli_open.go` — editor + system open; byte/rate rendering calls `uischema.FormatBytes` / `FormatRate` directly.
 * `service_help.go` — `ParseInputsToJSON` → `uischema.NormalizePayloadJSON`.
@@ -62,17 +62,19 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `GetServiceSchema` offline arm; `resolveServiceSchema` / `GetServiceDetails`; `RunPipeline` → `RunService`.
 
 ### Server — `internal/server/`
-* `server.go` lifecycle; `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
+* `server.go` lifecycle (`Shutdown` always closes Compute/WebRTC/QUIC/unix/Storage even if HTTP Shutdown fails; VFS resolver errors if blob still missing); `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
 * `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction` + **`requireUnixArgs`**; `unix_listener.go` accept loop only.
 * `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`. **`routeIndex`** memoizes policy with `sync.Once` (policy only, never handlers); subtree paths keep the default.
-* `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not.
+* `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not. **`AddPeer` → `(updated, evicted)`**; equal-seq merge keeps `Addresses[0]`.
+* `invite.go` — **`Check`** / **`Consume`** / **`CheckAndConsume`**; join consumes only after successful `SignCSR`.
 * `catalog_kinds.go` — `catalogKinds` (`Kind` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; `outbox.go` → **`notifyWithOutbox`**.
 * `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
 * `service_exec.go` — Run/Stream + ingest (`ResultLocalPath`); **`submitTrackedTask`**.
 * `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
-* `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; HTTP mounts use **`protocol.Path*`** (`handlePeerIDAction`, schema notify re-validates).
+* `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; **`HandleAddPeer`** requires CN (owner full add; gossip clamps higher seq); HTTP mounts use **`protocol.Path*`** (`handlePeerIDAction`, schema notify re-validates).
+* `vfs_sync.downloadWorker` — fallback skips source peer; **`ErrBlobDiscarded`** → debug only (callPeer keeps peer online).
 * `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap.
 
 ### P2P — `internal/p2p/`
@@ -82,9 +84,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **`RequireHTTPStatus`** / **`OpenHTTPBody`** for non-`doJSON` paths; `QUICManager` takes a typed `Logger` and accepts on its shutdown ctx; `RoundTrip` = `tryDirectAddresses` → `tryRelay`.
 
 ### Storage / Compute / Protocol
-* `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
+* `UpsertAndSubscribe` (returns error) / `ErrBlobDiscarded` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
+* Physical CAS: `BlobExists` Stats disk when cache hits; `DeleteBlob` clears cache on `IsNotExist` (idempotent).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
-* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
+* `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` (returns error) / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
 * `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`/`PeerLocal*`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
 * `compute`: `serviceTypeBuilders` → `BuildHandler` (`BuildHTTPHandler`; `BuildGRPCHandler` legacy alias); `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
 * `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`; bbolt types are `bbolt.Tx` / `bbolt.DB`.
@@ -140,8 +143,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | OTel bid export | `telemetry.ExportBidAsync` / `InitFromEnv` / `SetBidExporter` |
 | Pipeline/service apply | `applyPipelineAction` / `applyServiceAction` / `submitTrackedTask` |
 | Service gossip | `NotifyService` / `NotifyServiceToPeer` |
-| Blob fetch / CAS | `fetchBlobFromPeer` / `SaveVerifiedPhysicalBlob` / `UpsertAndSubscribe` / `deleteBlobIfOrphan` / `IsValidCASHash` / `StageAndRewrite` / `protocol.RewriteLocalFilePaths` |
-| VFS local ops | `LocalVFSUpload` / `ResolveLocalBlob` / `StageLocalFile` / `StageAndRewrite` |
+| Blob fetch / CAS | `fetchBlobFromPeer` / `SaveVerifiedPhysicalBlob` / `UpsertAndSubscribe` / `ErrBlobDiscarded` / `deleteBlobIfOrphan` / `IsValidCASHash` / `StageAndRewrite` (error) / `protocol.RewriteLocalFilePaths` (error) |
+| VFS local ops | `LocalVFSUpload` / `ResolveLocalBlob` / `StageLocalFile` / `StageAndRewrite` (error) |
 | VFS URI | `protocol.VFSURI` / `ParseVFSURI` / `IsStageableLocalPath` |
 | HTTP paths / relay | `protocol.Path*` / `QueryService` / `WithServiceQuery` / `NewRelayRequest` / `RequestPathWithQuery` / `MaxRelayBodyBytes` |
 | RPC / dial / handler timeouts | `protocol.RPCTimeout*` / `DialTimeout*` / `HolePunch*` / `HandlerDial*` / `PeerRPC*` |

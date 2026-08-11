@@ -46,7 +46,11 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		utils.RespondMessage(w, http.StatusOK, "Metadata updated")
 		return
 	}
-	updated := se.upsertIndex(notification.File)
+	updated, err := se.upsertIndex(notification.File)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to update metadata")
+		return
+	}
 	if updated && se.IsSubscribed(notification.File.Name) {
 		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
 

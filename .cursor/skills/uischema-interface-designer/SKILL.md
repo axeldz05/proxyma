@@ -10,20 +10,20 @@ Esta skill define la especificación estándar del contrato declarativo **`uisch
 **SSOT scope:** admin domains/actions (storage, peers, cluster, telemetry, service-management). Compute labs (`clipboard.sync`, etc.) usan `protocol.ServiceSchema` / `services.json` — contrato paralelo, no mezclar.
 
 Cada `ActionDetail` declara:
-* `UnixAction` — string IPC del demonio (vacío = solo local, p.ej. `cluster.join`, `edit_pipeline`)
-* `Hidden` — acciones IPC internas (`service.detail`, `service.stream`, `validate_pipeline`) excluidas de CLI/Android export
+* `UnixAction` — string IPC del demonio (vacío = solo local / CLI escape, p.ej. `cluster.join`, `edit_pipeline`)
+* `Hidden` — excluidas de `VisibleRegistry` / GetRegistryJSON: IPC internas (`service.detail`, `service.stream`, `validate_pipeline`) **y** escapes sin UnixAction (`cluster.join`, `service.edit_pipeline`)
 * `Surfaces` — opcional; restringe superficies UI
 
 **Flujo de dispatch (interpreter genérico):**
 ```
 Registry (domain.action + UnixAction + SuccessMessage)
-  → Cobra: VisibleRegistry("cli")
+  → Cobra: cliRegistry() = VisibleRegistry("cli") + Hidden CLI escapes
   → CLI: NormalizeActionArgs → ValidateActionArgs → cliEscapes[key] OR InvokeDomainActionPrepared
   → Bind L3 (JNI/wrappers): NormalizeActionArgs → ValidateActionArgs → InvokeDomainActionPrepared
   → Bind L2 Prepared: offlineHooks? → CallUnixUnary / unix IPC
   → Daemon: unixHandlers[UnixAction]
 ```
-Android (cuando exista UI): mismas piezas — `VisibleRegistry` + forms/`Parameters` + `ProjectRows` + **`InvokeDomainAction`**; wrappers tipados opcionales; **no** switch hardcodeado por `domain.action` en Compose.
+Android (cuando exista UI): mismas piezas — `VisibleRegistry` + forms/`Parameters` + `ProjectRows` + **`InvokeDomainAction`**; wrappers tipados opcionales; **no** switch hardcodeado por `domain.action` en Compose. Escapes Hidden no aparecen en export genérico.
 
 Payload KV/JSON: `uischema.NormalizePayloadJSON` (SSOT; CLI `ParseInputsToJSON` es thin wrapper).
 

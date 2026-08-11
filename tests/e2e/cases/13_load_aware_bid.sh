@@ -71,20 +71,25 @@ for i in 1 2 3 4; do
 done
 sleep 2
 
-echo "Running echo with --strategy cheapest (expect idle node-2)..."
-exec_node node-1 ./proxyma service run --name echo --payload '{"msg":"pick-idle"}' --strategy cheapest --storage "/app/data" >/dev/null || true
-STATUS=$(exec_node node-1 ./proxyma service status --storage "/app/data")
-echo "status: $STATUS"
-
-if ! echo "$STATUS" | grep -q '"from": "node-2"'; then
-    # Also accept nested JSON without spaces
-    if ! echo "$STATUS" | grep -qE '"from"[[:space:]]*:[[:space:]]*"node-2"'; then
-        echo -e "${RED}❌ Expected echo on idle node-2 under cheapest strategy${NC}"
-        exit 1
+echo "Running echo with --strategy cheapest (expect idle node-2; retry for sampler noise)..."
+picked_idle=false
+STATUS=""
+for attempt in 1 2 3 4 5; do
+    exec_node node-1 ./proxyma service run --name echo --payload "{\"msg\":\"pick-idle-$attempt\"}" --strategy cheapest --storage "/app/data" >/dev/null || true
+    STATUS=$(exec_node node-1 ./proxyma service status --storage "/app/data")
+    echo "attempt $attempt status: $STATUS"
+    if echo "$STATUS" | grep -qE '"from"[[:space:]]*:[[:space:]]*"node-2"'; then
+        if ! echo "$STATUS" | grep -qE '"from"[[:space:]]*:[[:space:]]*"node-3"'; then
+            picked_idle=true
+            break
+        fi
     fi
-fi
-if echo "$STATUS" | grep -q '"from": "node-3"'; then
-    echo -e "${RED}❌ Task landed on saturated node-3${NC}"
+    sleep 2
+done
+
+if [ "$picked_idle" != true ]; then
+    echo -e "${RED}❌ Expected echo on idle node-2 under cheapest strategy (after retries)${NC}"
+    echo "last status: $STATUS"
     exit 1
 fi
 

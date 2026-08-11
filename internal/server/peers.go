@@ -47,13 +47,24 @@ func (s *Server) SetAddress(addr string) {
 }
 
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
-	if s.Peers.AddPeer(peerID, addressRecord) {
+	updated, evicted := s.Peers.AddPeer(peerID, addressRecord)
+	for _, id := range evicted {
+		if s.Storage != nil {
+			_ = s.Storage.DeletePeer(id)
+		}
+		if s.peerClient != nil {
+			s.peerClient.RemovePeerRoute(id)
+		}
+	}
+	if updated {
 		if s.Storage != nil {
 			if err := s.Storage.SavePeer(peerID, addressRecord); err != nil {
 				s.Config.Logger.Error("Failed to save peer to DB", "peerID", peerID, "error", err)
 			}
 		}
-		s.peerClient.UpdatePeerRoute(peerID, addressRecord)
+		if s.peerClient != nil {
+			s.peerClient.UpdatePeerRoute(peerID, addressRecord)
+		}
 		go s.syncCatalogToPeer(peerID)
 	}
 }

@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"proxyma/internal/protocol"
+	"proxyma/internal/storage"
 )
 
 // Named peer RPC timeouts (policy SSOT).
@@ -29,6 +31,11 @@ const (
 func (s *Server) callPeer(ctx context.Context, peerID string, fn func(ctx context.Context, peerID string) error) error {
 	err := fn(ctx, peerID)
 	if err != nil {
+		// Peer responded; blob was dropped locally due to VFS race — not unreachable.
+		if errors.Is(err, storage.ErrBlobDiscarded) {
+			s.SetPeerOnline(peerID, true)
+			return err
+		}
 		s.SetPeerOffline(peerID, err)
 		return err
 	}

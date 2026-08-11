@@ -2,6 +2,9 @@ package server_test
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func withPeerTLS(req *http.Request, peerID string) *http.Request {
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{{
+			Subject: pkix.Name{CommonName: peerID},
+		}},
+	}
+	return req
+}
 
 func TestServiceSubscriptionReceivesAddAndRemoveNotify(t *testing.T) {
 	t.Parallel()
@@ -31,6 +43,7 @@ func TestServiceSubscriptionReceivesAddAndRemoveNotify(t *testing.T) {
 		})
 		req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req = withPeerTLS(req, nodeID)
 		rec := httptest.NewRecorder()
 		sv.HandleServiceNotify(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code)
@@ -63,6 +76,7 @@ func TestServiceSubscriptionPatternMatch(t *testing.T) {
 		Schema: protocol.ServiceSchema{Name: "vision.detect", Description: "ok"},
 	})
 	req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
+	req = withPeerTLS(req, "peer-c")
 	rec := httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -74,6 +88,7 @@ func TestServiceSubscriptionPatternMatch(t *testing.T) {
 		Schema: protocol.ServiceSchema{Name: "audio.transcribe", Description: "no"},
 	})
 	req, _ = http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
+	req = withPeerTLS(req, "peer-c")
 	rec = httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.NotContains(t, sv.GetClusterServices("peer-c"), "audio.transcribe")
@@ -92,8 +107,29 @@ func TestServiceNotifyWithoutSubscriptionAcceptsAll(t *testing.T) {
 		Schema: protocol.ServiceSchema{Name: "any-svc", Description: "legacy"},
 	})
 	req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
+	req = withPeerTLS(req, "peer-x")
 	rec := httptest.NewRecorder()
 	sv.HandleServiceNotify(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, sv.GetClusterServices("peer-x"), "any-svc")
+}
+
+func TestServiceNotifyRejectsCNMismatch(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "svc-sub-cn")
+	sv, err := server.New(cfg, nil)
+	require.NoError(t, err)
+	require.NoError(t, sv.LocalServiceSubscribe("ocr", true))
+
+	body, _ := json.Marshal(protocol.ServiceNotification{
+		Action: protocol.ActionAdd,
+		NodeID: "victim",
+		Schema: protocol.ServiceSchema{Name: "ocr", Description: "spoof"},
+	})
+	req, _ := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
+	req = withPeerTLS(req, "attacker")
+	rec := httptest.NewRecorder()
+	sv.HandleServiceNotify(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.NotContains(t, sv.GetClusterServices("victim"), "ocr")
 }

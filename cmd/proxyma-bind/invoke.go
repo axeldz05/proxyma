@@ -153,7 +153,7 @@ func NormalizeActionArgs(domain, action string, args map[string]string) (map[str
 		if out["name"] == "" && out["path"] != "" {
 			out["name"] = filepath.Base(out["path"])
 		}
-	case "service.run", "service.run_pipeline":
+	case "service.run", "service.run_pipeline", "service.stream":
 		svc := firstNonEmpty(out["service"], out["name"], out["id"])
 		out["service"] = svc
 		if out["name"] == "" {
@@ -187,6 +187,9 @@ func NormalizeActionArgs(domain, action string, args map[string]string) (map[str
 			schema.ID = out["id"]
 			normalized, _ := json.Marshal(schema)
 			out["schema"] = string(normalized)
+		}
+		if strings.TrimSpace(out["schema"]) == "" {
+			return nil, fmt.Errorf("schema or schema-file required")
 		}
 	}
 	return out, nil

@@ -190,15 +190,28 @@ type StreamEventListener interface {
 
 // StreamService runs a streaming task notifying listener of chunks in real time.
 func StreamService(name string, payloadJson string, listener StreamEventListener) string {
-	unixAct, ok := uischema.UnixActionFor("service", "stream")
-	if !ok {
+	detail, ok := uischema.FindAction("service", "stream")
+	if !ok || detail.UnixAction == "" {
 		return BindErrorJSON(fmt.Errorf("no unix action for service.stream"))
 	}
+	norm, err := NormalizeActionArgs("service", "stream", map[string]string{
+		"name":    name,
+		"payload": payloadJson,
+	})
+	if err != nil {
+		return BindErrorJSON(err)
+	}
+	norm, err = uischema.ValidateActionArgs(detail, norm)
+	if err != nil {
+		return BindErrorJSON(err)
+	}
+	svc := norm["service"]
+	payload := norm["payload"]
 	dispatchUnixStreamOrLocal(
-		unixAct,
-		map[string]string{"service": name, "payload": payloadJson},
+		detail.UnixAction,
+		norm,
 		func(s *server.Server, onChunk func(map[string]any)) error {
-			return s.LocalServiceStreamRun(name, payloadJson, onChunk)
+			return s.LocalServiceStreamRun(svc, payload, onChunk)
 		},
 		func(chunkJSON string) {
 			if listener != nil {

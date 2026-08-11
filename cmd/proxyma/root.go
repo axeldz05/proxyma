@@ -29,8 +29,8 @@ func init() {
 	defaultStorage := getDefaultStorage()
 	rootCmd.PersistentFlags().StringVar(&cliStorage, "storage", defaultStorage, "Path to the local node's directory")
 
-	// Dynamically register Cobra commands from SSOT Registry (visible CLI actions only)
-	for _, domain := range uischema.VisibleRegistry("cli") {
+	// Dynamically register Cobra commands from SSOT Registry (visible CLI + Hidden escapes)
+	for _, domain := range cliRegistry() {
 		domainCopy := domain
 		domainCmd := &cobra.Command{
 			Use:   domainCopy.Name,

@@ -46,11 +46,15 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 	if outputName == "" {
 		outputName = outputHash + ".pdf"
 	}
-	outputMeta := s.Storage.UpsertAndSubscribe(protocol.IndexEntry{
+	outputMeta, err := s.Storage.UpsertAndSubscribe(protocol.IndexEntry{
 		Name: outputName,
 		Hash: outputHash,
 		Size: outputSize,
 	}, false)
+	if err != nil {
+		s.Config.Logger.Error("Failed to upsert task output metadata", "name", outputName, "error", err)
+		return
+	}
 
 	if targetPeerID == "" || targetPeerID == s.Config.ID {
 		rawLocalPath := protocol.ResultLocalPath(resp.Outputs)
@@ -66,7 +70,7 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 	}
 
 	dlCtx, dlCancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
-	err := s.fetchBlobFromPeer(dlCtx, targetPeerID, outputMeta)
+	err = s.fetchBlobFromPeer(dlCtx, targetPeerID, outputMeta)
 	dlCancel()
 	if err == nil {
 		localPath := s.Storage.GetBlobPath(outputHash)
@@ -80,6 +84,8 @@ func (s *Server) ingestTaskOutputs(resp *protocol.ServiceTaskResponse, targetPee
 		}
 	} else {
 		s.Config.Logger.Error("Failed to auto-download output blob", "hash", outputHash, "error", err)
+		resp.Status = "failed"
+		resp.Error = fmt.Sprintf("output blob download failed: %v", err)
 	}
 }
 
@@ -183,7 +189,7 @@ func (s *Server) LocalServiceStreamRun(serviceName string, payloadStr string, ch
 	}
 
 	if err := <-errChan; err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 			return nil
 		}
 		return err
