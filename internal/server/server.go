@@ -14,6 +14,7 @@ import (
 	"proxyma/internal/storage"
 	"proxyma/internal/telemetry"
 	"proxyma/internal/utils"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,10 +95,8 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	s.Compute.SetAddress(cfg.Address)
 	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
 		for peerID, record := range s.GetPeersRecordCopy() {
-			for _, peerAddress := range record.Addresses {
-				if rawSource == peerAddress {
-					return s.enqueueDownload(DownloadJob{File: file, Source: peerID})
-				}
+			if slices.Contains(record.Addresses, rawSource) {
+				return s.enqueueDownload(DownloadJob{File: file, Source: peerID})
 			}
 		}
 		return fmt.Errorf("peer of address %s not found", rawSource)
