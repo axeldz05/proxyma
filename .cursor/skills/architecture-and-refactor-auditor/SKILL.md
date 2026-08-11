@@ -65,7 +65,9 @@ Directrices de arquitectura, límites de paquetes y mapa de helpers SSOT actuale
 * `pipeline_validate.go` — **`ValidatePipelineSchema` / `PipelineHasCycle`**.
 * `timeouts.go` — `RPCTimeout*` / `DialTimeout*` / `HolePunch*` / `HandlerDial*`.
 * `uischema` — Registry, `ValidateActionArgs`, **`NormalizePayloadJSON`**, `ProjectRows` / `FormatBytes`.
-* `utils/http_utils.go` — `RespondJSON` / `DecodeJSONOrError`.
+* `utils/http_utils.go` — `RespondJSON` / `RespondMessage` / `RespondStatus` / `DecodeJSONOrError`.
+* `addr.go` — `SchemeAddr` / `HTTPSAddr` / **`PeerLocalDomain` / `PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL`**.
+* `paths.go` — `Path*` / **`QueryService` / `WithServiceQuery`**.
 
 ---
 
@@ -93,6 +95,11 @@ Si al cambiar una implementación o agregar una variante hay que tocar **más de
 | Dial / punch / handler timeouts | `protocol.DialTimeout*` / `HolePunch*` / `HandlerDial*` |
 | Schema streaming CLI | `GetServiceSchema` |
 | TLS config | `p2p.LoadNodeTLS` |
+| Peer `.proxyma.local` URL | `protocol.PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL` |
+| Service query string | `protocol.QueryService` / `WithServiceQuery` |
+| Leave/Offline body | `protocol.PeerIDRequest` |
+| HTTP ack envelopes | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
+| Test insecure HTTP | `testutil.InsecureTLSConfig` / `InsecureHTTPClient` |
 
 ---
 

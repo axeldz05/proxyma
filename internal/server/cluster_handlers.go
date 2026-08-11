@@ -131,5 +131,5 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Config.Logger.Info("Successfully rotated CA and certificates dynamically.")
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "rotated"})
+	utils.RespondStatus(w, http.StatusOK, "rotated")
 }

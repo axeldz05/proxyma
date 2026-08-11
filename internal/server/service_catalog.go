@@ -116,7 +116,7 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 		return nil, err
 	}
 	go s.NotifyService(schema, protocol.ActionAdd)
-	return map[string]string{"message": fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
+	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
 }
 
 func (s *Server) LocalServiceRemove(name string) (any, error) {
@@ -125,7 +125,7 @@ func (s *Server) LocalServiceRemove(name string) (any, error) {
 		return nil, err
 	}
 	go s.NotifyService(schema, protocol.ActionRemove)
-	return map[string]string{"message": fmt.Sprintf("Service '%s' removed successfully.", name)}, nil
+	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' removed successfully.", name)}, nil
 }
 
 func (s *Server) notifyService(ctx context.Context, peerID string, schema protocol.ServiceSchema, action string) error {

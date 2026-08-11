@@ -28,6 +28,20 @@ func RespondError(w http.ResponseWriter, status int, message string) {
 	RespondJSON(w, status, map[string]string{"error": message})
 }
 
+// RespondMessage writes {"message":...} (same wire shape as protocol.APIMessage).
+func RespondMessage(w http.ResponseWriter, status int, message string) {
+	RespondJSON(w, status, struct {
+		Message string `json:"message"`
+	}{Message: message})
+}
+
+// RespondStatus writes {"status":...} (same wire shape as protocol.APIStatus).
+func RespondStatus(w http.ResponseWriter, status int, statusToken string) {
+	RespondJSON(w, status, struct {
+		Status string `json:"status"`
+	}{Status: statusToken})
+}
+
 // DecodeJSONOrError decodes the request body and returns false with a Bad Request response if decoding fails.
 func DecodeJSONOrError[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	payload, err := DecodeJSON[T](r)
@@ -42,7 +56,7 @@ func DecodeJSONOrError[T any](w http.ResponseWriter, r *http.Request) (T, bool) 
 func GetRequiredQueryParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	val := r.URL.Query().Get(name)
 	if val == "" {
-		RespondError(w, http.StatusBadRequest, "Missing '" + name + "' query parameter")
+		RespondError(w, http.StatusBadRequest, "Missing '"+name+"' query parameter")
 		return "", false
 	}
 	return val, true

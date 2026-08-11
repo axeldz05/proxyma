@@ -29,7 +29,9 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Golden rule (duplication)**: If changing one behavior requires touching **>2 code zones**, compress into a shared helper. Do **not** copy service CRUD, peer fan-out, relay forward, blob fetch/stage, or unix dial stacks.
 * **Continuous granularity (3 tiers)**: Unix: `DialUnix` → Write/Read/Scan → `sendUnixSocketCommand` / `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`. Same shape for gossip (`enqueueOutbox` → `notifyWithOutbox` → `notifyService`) and tests (`InitClusterCA` → `IssueNode` → `NewNodeTLS`).
 * **Tables over switches**: gossip kind → `catalogKinds`; endpoint auth → `httpRoutes` / `routeAuth`; service type → `protocol.serviceTypeSpecs` + `compute.serviceTypeBuilders`. Never add a parallel `switch`.
-* **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`.
+* **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`. Peer virtual hosts: `PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL`.
+* **Service query / HTTP acks**: `QueryService` + `WithServiceQuery`; `APIMessage` / `APIStatus` / `APITaskAck` + `utils.RespondMessage` / `RespondStatus`.
+* **Leave/Offline**: `protocol.PeerIDRequest` on `PeerClient` (same as HTTP handlers).
 * **Error wording**: validation text lives in `protocol/errors.go`; validators may stay per-layer, the message must not be retyped.
 * **No parallel maps on one key**: per-entity state goes in one struct under one lock (`peerState`), not N maps with N mutexes.
 * **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors (`storage.NewStorageEngine` and `server.New` return `(T, error)`); Bolt failures propagate instead of collapsing into a bool.
@@ -56,7 +58,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **`offlineHooks`** map in `invoke.go` (service.add/remove/detail → compute L2); not inside `unixHandlers`.
 * Socket via **`protocol.UnixSockPath`**; `ParameterDetail` = `uischema.ParameterDetail`.
 * Execution SSOT: `server.CallUnixUnary` (same bodies as unix listener).
-* `LocalServiceDetail` via bind schema paths; `BindErrorJSON` / `IsBindError` (StartNode/ChangeStorage too).
+* `LocalServiceDetail` via bind schema paths; `BindErrorJSON` / `IsBindError` on `StartNode`.
 * `GetServiceSchema` offline arm; `resolveServiceSchema` / `GetServiceDetails`; `RunPipeline` → `RunService`.
 
 ### Server — `internal/server/`
@@ -83,10 +85,10 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
 * `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
-* `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
-* `compute`: `serviceTypeBuilders` → `BuildHandler`; `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
+* `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`/`PeerLocal*`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
+* `compute`: `serviceTypeBuilders` → `BuildHandler` (`BuildHTTPHandler`; `BuildGRPCHandler` legacy alias); `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
 * `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`; bbolt types are `bbolt.Tx` / `bbolt.DB`.
-* `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` — but tests whose subject *is* a TLS/storage step keep using the L1.
+* `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` / **`InsecureTLSConfig` / `InsecureHTTPClient`** — but tests whose subject *is* a TLS/storage step keep using the L1.
 * **Admin UI SSOT**: `shared/uischema.Registry` (`UnixAction`, `Hidden`, `VisibleRegistry`, `FindAction`, **`ValidateActionArgs`**, **`NormalizePayloadJSON`**, **`ProjectRows`/`FormatBytes`/`BandwidthStatsRows`**, shared `vfsNameParam`/`svcNameParam`/`pipelineIDParam`). Compute `ServiceSchema` remains a separate contract.
 
 ### Bindings / Android
@@ -125,10 +127,14 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Service type alias / streaming / builder | `protocol.serviceTypeSpecs` / `compute.serviceTypeBuilders` |
 | Handler timeout / stream client / exec check | `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` |
 | Node URL (IPv6-safe) | `protocol.SchemeAddr` / `HTTPSAddr` / `HTTPSAddrPort` |
+| Peer `.proxyma.local` URL | `protocol.PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL` |
+| Service `?service=` query | `protocol.QueryService` / `WithServiceQuery` |
+| HTTP ack message/status | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
+| Leave/Offline RPC body | `protocol.PeerIDRequest` |
 | Unexpected HTTP status | `utils.HTTPStatusError` / `HTTPErrorFromResponse` / `p2p.RequireHTTPStatus` / `OpenHTTPBody` |
 | Required unix args / relay cap | `requireUnixArgs` / `rejectOversizedRelay` |
 | TLS rotation payload | `protocol.RotateTLSPayload` |
-| Test storage / CA / node TLS | `testutil.NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` |
+| Test storage / CA / node TLS | `testutil.NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` / `InsecureTLSConfig` / `InsecureHTTPClient` |
 | Service subscribe | `LocalServiceSubscribe` / `SetServiceSubscription` / `IsServiceSubscribed` / `MatchServicePattern` |
 | Bid strategy | `NormalizeSortStrategy` / `LocalServiceRun(..., strategy)` / `--strategy` |
 | OTel bid export | `telemetry.ExportBidAsync` / `InitFromEnv` / `SetBidExporter` |
@@ -137,7 +143,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Blob fetch / CAS | `fetchBlobFromPeer` / `SaveVerifiedPhysicalBlob` / `UpsertAndSubscribe` / `deleteBlobIfOrphan` / `IsValidCASHash` / `StageAndRewrite` / `protocol.RewriteLocalFilePaths` |
 | VFS local ops | `LocalVFSUpload` / `ResolveLocalBlob` / `StageLocalFile` / `StageAndRewrite` |
 | VFS URI | `protocol.VFSURI` / `ParseVFSURI` / `IsStageableLocalPath` |
-| HTTP paths / relay | `protocol.Path*` / `NewRelayRequest` / `RequestPathWithQuery` / `MaxRelayBodyBytes` |
+| HTTP paths / relay | `protocol.Path*` / `QueryService` / `WithServiceQuery` / `NewRelayRequest` / `RequestPathWithQuery` / `MaxRelayBodyBytes` |
 | RPC / dial / handler timeouts | `protocol.RPCTimeout*` / `DialTimeout*` / `HolePunch*` / `HandlerDial*` / `PeerRPC*` |
 | Default TCP port | `protocol.DefaultTCPPort` |
 | Unix sock path | `protocol.SockFileName` / `UnixSockPath` |

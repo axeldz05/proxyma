@@ -3,7 +3,6 @@ package server_test
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -413,11 +412,7 @@ func TestUnauthorizedAccessIsRejectedAndPairingIsAllowed(t *testing.T) {
 	t.Parallel()
 	sv := NewServer(t, testutil.DefaultConfig(t, "1"), nil)
 
-	clientWithoutCert := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	clientWithoutCert := testutil.InsecureHTTPClient()
 
 	t.Run("Protected routes reject naked clients", func(t *testing.T) {
 		resp, err := clientWithoutCert.Get(sv.Config.Address + protocol.PathPeers)
@@ -488,11 +483,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 
 	_, secret, err := p2p.ParseSmartToken(inviteResp.Token)
 	require.NoError(t, err)
-	nakedClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	nakedClient := testutil.InsecureHTTPClient()
 
 	dummyNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer dummyNode.Close()
@@ -653,11 +644,7 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	dummyNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer dummyNode.Close()
 
-	nakedClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	nakedClient := testutil.InsecureHTTPClient()
 	joinReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", Address: dummyNode.URL}
 	joinBody, _ := json.Marshal(joinReq)
 
@@ -1017,7 +1004,7 @@ func TestAnnouncePresenceFallbackError(t *testing.T) {
 func TestOfflineNotificationAndSelfHealing(t *testing.T) {
 	t.Parallel()
 	mockClient := &testutil.MockPeerClient{
-		OnOffline: func(ctx context.Context, peerID string, req map[string]string) error {
+		OnOffline: func(ctx context.Context, peerID string, req protocol.PeerIDRequest) error {
 			return nil
 		},
 	}
@@ -1232,10 +1219,7 @@ func TestAnnounceEndpointEnforcesMTLS(t *testing.T) {
 	srv := NewServer(t, testutil.DefaultConfig(t, "sponsor-node"), nil)
 
 	// Make an HTTP POST request to /peers/announce WITHOUT client certificates
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	client := &http.Client{Transport: tr}
+	client := testutil.InsecureHTTPClient()
 
 	reqBody := protocol.AddPeerRequest{
 		ID: "malicious-node",

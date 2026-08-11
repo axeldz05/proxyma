@@ -125,8 +125,8 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 	}
 }
 
-// Handler generator for JSON HTTP webhooks (legacy name: BuildGRPCHandler).
-func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+// BuildHTTPHandler creates a ServiceHandler for unary JSON HTTP webhooks.
+func BuildHTTPHandler(endpointURL string, timeout time.Duration) ServiceHandler {
 	client := p2p.NewHTTPClient(nil, timeout)
 
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
@@ -140,9 +140,9 @@ func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 	}
 }
 
-// BuildHTTPHandler is the preferred name for unary JSON HTTP webhooks.
-func BuildHTTPHandler(endpointURL string, timeout time.Duration) ServiceHandler {
-	return BuildGRPCHandler(endpointURL, timeout)
+// BuildGRPCHandler is the legacy name for BuildHTTPHandler.
+func BuildGRPCHandler(endpointURL string, timeout time.Duration) ServiceHandler {
+	return BuildHTTPHandler(endpointURL, timeout)
 }
 
 // BuildGRPCBidiHandler creates a ServiceHandler for HTTP NDJSON bidirectional streaming (legacy name).

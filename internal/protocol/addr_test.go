@@ -48,3 +48,40 @@ func TestHTTPSAddrPort(t *testing.T) {
 		t.Errorf("IPv6 literal must be bracketed, got %q", got)
 	}
 }
+
+func TestPeerLocalHost(t *testing.T) {
+	if got := protocol.PeerLocalHost("node-a"); got != "node-a.proxyma.local" {
+		t.Errorf("PeerLocalHost = %q", got)
+	}
+}
+
+func TestParsePeerLocalHost(t *testing.T) {
+	id, ok := protocol.ParsePeerLocalHost("alice.proxyma.local")
+	if !ok || id != "alice" {
+		t.Errorf("ParsePeerLocalHost(alice) = %q, %v", id, ok)
+	}
+	if _, ok := protocol.ParsePeerLocalHost("example.com"); ok {
+		t.Error("expected non-peer host to fail")
+	}
+	if _, ok := protocol.ParsePeerLocalHost(".proxyma.local"); ok {
+		t.Error("expected empty peer id to fail")
+	}
+	if _, ok := protocol.ParsePeerLocalHost("a.b.proxyma.local"); ok {
+		t.Error("expected multi-label peer id to fail")
+	}
+}
+
+func TestPeerHTTPURL(t *testing.T) {
+	if got := protocol.PeerHTTPURL("node", "some/api"); got != "http://node.proxyma.local/some/api" {
+		t.Errorf("PeerHTTPURL = %q", got)
+	}
+	if got := protocol.PeerHTTPURL("node", "/some/api"); got != "http://node.proxyma.local/some/api" {
+		t.Errorf("PeerHTTPURL with leading slash = %q", got)
+	}
+}
+
+func TestPeerHTTPSURL(t *testing.T) {
+	if got := protocol.PeerHTTPSURL("node", "/services/callback"); got != "https://node.proxyma.local/services/callback" {
+		t.Errorf("PeerHTTPSURL = %q", got)
+	}
+}

@@ -2,12 +2,25 @@ package testutil
 
 import (
 	"crypto/tls"
+	"net/http"
 	"testing"
 
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 )
+
+// InsecureTLSConfig returns a TLS config that skips certificate verification (L1, tests only).
+func InsecureTLSConfig() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test harness only
+}
+
+// InsecureHTTPClient returns an HTTP client that skips TLS verification (L2).
+func InsecureHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: InsecureTLSConfig()},
+	}
+}
 
 // NodeTLS is one node's cryptographic material inside a test cluster. Paths stay
 // exposed so a test can re-issue, rotate or corrupt a single step by hand instead

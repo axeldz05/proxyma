@@ -647,6 +647,23 @@ type RotateTLSPayload struct {
 	NodeCert string `json:"node_cert"`
 }
 
+// APIMessage is the wire shape for success responses with a human-readable message.
+type APIMessage struct {
+	Message string `json:"message"`
+}
+
+// APIStatus is the wire shape for success responses with a machine status token.
+type APIStatus struct {
+	Status string `json:"status"`
+}
+
+// APITaskAck is the wire shape for task submit/callback acknowledgements.
+type APITaskAck struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	JobID   string `json:"job_id"`
+}
+
 type PeerStatus struct {
 	ID      string `json:"id"`
 	Address string `json:"address"`

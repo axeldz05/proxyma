@@ -89,7 +89,7 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
-	serviceName, ok := utils.GetRequiredQueryParam(w, r, "service")
+	serviceName, ok := utils.GetRequiredQueryParam(w, r, protocol.QueryService)
 	if !ok {
 		return
 	}

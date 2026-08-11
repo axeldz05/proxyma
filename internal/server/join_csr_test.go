@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"proxyma/internal/p2p"
@@ -34,9 +33,7 @@ func TestJoinWithValidCSRSucceeds(t *testing.T) {
 	csrPEM, _, err := p2p.GenerateNodeCSR("joiner-node")
 	require.NoError(t, err)
 
-	nakedClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
+	nakedClient := testutil.InsecureHTTPClient()
 	joinReq := protocol.JoinRequest{
 		Secret:  secret,
 		CSR:     string(csrPEM),
@@ -72,9 +69,7 @@ func TestJoinRejectsBadCSRAfterValidInvite(t *testing.T) {
 	_, secret, err := p2p.ParseSmartToken(inviteResp.Token)
 	require.NoError(t, err)
 
-	nakedClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
+	nakedClient := testutil.InsecureHTTPClient()
 	joinReq := protocol.JoinRequest{
 		Secret:  secret,
 		CSR:     "not-a-real-csr",
@@ -109,9 +104,7 @@ func TestClusterJoinRejectsCSRCommonNameMismatch(t *testing.T) {
 	csrPEM, _, err := p2p.GenerateNodeCSR("imposter")
 	require.NoError(t, err)
 
-	nakedClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
+	nakedClient := testutil.InsecureHTTPClient()
 	joinReq := protocol.JoinRequest{
 		Secret:  secret,
 		CSR:     string(csrPEM),

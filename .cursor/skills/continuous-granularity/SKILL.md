@@ -69,6 +69,19 @@ Level 1: Low-level primitives   (e.g. DialUnix, WriteUnixRequest, SavePhysicalBl
 | L2 | `ForwardRelay` |
 | L3 | `sendRelayMessage` / RoundTrip Phase 2 rebuild `http.Response` / join fallback |
 
+### Peer local URL / service query
+| Tier | API |
+|------|-----|
+| L1 | `PeerLocalDomain` / `PeerLocalHost` / `ParsePeerLocalHost` / `QueryService` |
+| L2 | `PeerHTTPURL` / `PeerHTTPSURL` / `WithServiceQuery` |
+| L3 | `validateAndBuildURL` / ReplyTo in task dispatch |
+
+### Test TLS insecure
+| Tier | API |
+|------|-----|
+| L1 | `InsecureTLSConfig` |
+| L2 | `InsecureHTTPClient` |
+
 ### Service metadata
 | Tier | API |
 |------|-----|

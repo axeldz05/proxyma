@@ -32,9 +32,7 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.RespondJSON(w, http.StatusCreated, map[string]string{
-		"message": "Blob uploaded successfully",
-	})
+	utils.RespondMessage(w, http.StatusCreated, "Blob uploaded successfully")
 }
 
 // handleNotification handles notifications from peers about new files
@@ -45,7 +43,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 	}
 	if notification.File.Deleted {
 		se.ProcessRemoteDeletion(notification.File)
-		utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
+		utils.RespondMessage(w, http.StatusOK, "Metadata updated")
 		return
 	}
 	updated := se.upsertIndex(notification.File)
@@ -58,11 +56,11 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 				utils.RespondError(w, http.StatusForbidden, "Network rejected the source")
 				return
 			}
-			utils.RespondJSON(w, http.StatusAccepted, map[string]string{"message": "Downloading file"})
+			utils.RespondMessage(w, http.StatusAccepted, "Downloading file")
 			return
 		}
 	}
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Metadata updated"})
+	utils.RespondMessage(w, http.StatusOK, "Metadata updated")
 }
 
 func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +89,7 @@ func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) 
 	}
 	s.SetSubscription(fileName, true)
 	s.logger.Info("Subscription added", "file", fileName)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Subscribed to " + fileName})
+	utils.RespondMessage(w, http.StatusOK, "Subscribed to "+fileName)
 }
 
 func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
@@ -110,5 +108,5 @@ func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "File deleted successfully"})
+	utils.RespondMessage(w, http.StatusOK, "File deleted successfully")
 }

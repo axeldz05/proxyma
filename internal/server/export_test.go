@@ -15,13 +15,6 @@ func (s *Server) SetPendingInviteExpiration(secret string, t time.Time) {
 	s.Invites.Add(secret, t)
 }
 
-func (s *Server) GetHTTPServerAddr() string {
-	if s.httpServer == nil {
-		return ""
-	}
-	return s.httpServer.Addr
-}
-
 func (s *Server) ServerTLSConfig() *tls.Config {
 	s.tlsMutex.RLock()
 	defer s.tlsMutex.RUnlock()

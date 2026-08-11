@@ -124,7 +124,7 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.AddPeer(req.ID, req.Address)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", req.Address)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully added"})
+	utils.RespondMessage(w, http.StatusOK, "Peer successfully added")
 }
 
 func (s *Server) handlePeerIDAction(w http.ResponseWriter, r *http.Request, logMsg, respMsg string, after func(id string)) {
@@ -137,7 +137,7 @@ func (s *Server) handlePeerIDAction(w http.ResponseWriter, r *http.Request, logM
 	}
 	after(req.ID)
 	s.Config.Logger.Info(logMsg, "peer_id", req.ID)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": respMsg})
+	utils.RespondMessage(w, http.StatusOK, respMsg)
 }
 
 func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +151,7 @@ func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
 	s.RemovePeer(req.ID)
 	go s.RotateCAAndResignPeers()
 	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "Peer successfully removed"})
+	utils.RespondMessage(w, http.StatusOK, "Peer successfully removed")
 }
 
 func (s *Server) HandleOfflinePeer(w http.ResponseWriter, r *http.Request) {

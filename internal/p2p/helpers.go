@@ -40,7 +40,7 @@ func validateAndBuildURL(peerID, path string) (string, error) {
 		return u.ResolveReference(rel).String(), nil
 	}
 	path = strings.TrimPrefix(path, "/")
-	return fmt.Sprintf("http://%s.proxyma.local/%s", peerID, path), nil
+	return protocol.PeerHTTPURL(peerID, path), nil
 }
 
 func prepareBody(body any) (io.Reader, string, error) {

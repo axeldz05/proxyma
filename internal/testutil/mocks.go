@@ -9,22 +9,22 @@ import (
 )
 
 type MockPeerClient struct {
-	OnFetchManifest       func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
-	OnAnnounce            func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
-	OnNotify              func(ctx context.Context, addr string, n protocol.PeerNotification) error
-	OnNotifyServiceUpdate func(ctx context.Context, addr string, n protocol.ServiceNotification) error
-	OnAddPeer             func(addr string, payload *bytes.Buffer) error
-	OnDownloadBlob        func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
-	OnDiscoverServices    func(ctx context.Context, addr string) ([]string, error)
-	OnSubmitTask          func(ctx context.Context, addr string, req protocol.TaskRequest) error
-	OnFetchServiceBid     func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
-	OnSendTaskResponse    func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
-	OnPollRelay           func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
-	OnReplyRelay          func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
-	OnLeave               func(ctx context.Context, peerID string, leaveReq map[string]string) error
-	OnOffline             func(ctx context.Context, peerID string, offlineReq map[string]string) error
-	OnRequestProbe        func(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
-	OnRotateTLS           func(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
+	OnFetchManifest        func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
+	OnAnnounce             func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
+	OnNotify               func(ctx context.Context, addr string, n protocol.PeerNotification) error
+	OnNotifyServiceUpdate  func(ctx context.Context, addr string, n protocol.ServiceNotification) error
+	OnAddPeer              func(addr string, payload *bytes.Buffer) error
+	OnDownloadBlob         func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
+	OnDiscoverServices     func(ctx context.Context, addr string) ([]string, error)
+	OnSubmitTask           func(ctx context.Context, addr string, req protocol.TaskRequest) error
+	OnFetchServiceBid      func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
+	OnSendTaskResponse     func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	OnPollRelay            func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
+	OnReplyRelay           func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
+	OnLeave                func(ctx context.Context, peerID string, leaveReq protocol.PeerIDRequest) error
+	OnOffline              func(ctx context.Context, peerID string, offlineReq protocol.PeerIDRequest) error
+	OnRequestProbe         func(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
+	OnRotateTLS            func(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	OnNotifyPipelineSchema func(ctx context.Context, addr string, n protocol.PipelineNotification) error
 }
 
@@ -109,14 +109,14 @@ func (m *MockPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, res
 	return nil
 }
 
-func (m *MockPeerClient) Leave(ctx context.Context, peerID string, leaveReq map[string]string) error {
+func (m *MockPeerClient) Leave(ctx context.Context, peerID string, leaveReq protocol.PeerIDRequest) error {
 	if m.OnLeave != nil {
 		return m.OnLeave(ctx, peerID, leaveReq)
 	}
 	return nil
 }
 
-func (m *MockPeerClient) Offline(ctx context.Context, peerID string, offlineReq map[string]string) error {
+func (m *MockPeerClient) Offline(ctx context.Context, peerID string, offlineReq protocol.PeerIDRequest) error {
 	if m.OnOffline != nil {
 		return m.OnOffline(ctx, peerID, offlineReq)
 	}
@@ -149,10 +149,9 @@ func (m *MockPeerClient) StreamService(ctx context.Context, peerID string, servi
 }
 
 func (m *MockPeerClient) UpdatePeerRoute(peerID string, record protocol.AddressRecord) {}
-func (m *MockPeerClient) RemovePeerRoute(peerID string)                                 {}
-func (m *MockPeerClient) SetNodeID(id string)                                           {}
-func (m *MockPeerClient) SetOwnAddress(addr string)                                     {}
-func (m *MockPeerClient) UpdateSponsorAddress(addr string)                              {}
-func (m *MockPeerClient) CloseIdleConnections()                                         {}
-func (m *MockPeerClient) SetQUICManager(qm *p2p.QUICManager)                             {}
-
+func (m *MockPeerClient) RemovePeerRoute(peerID string)                                {}
+func (m *MockPeerClient) SetNodeID(id string)                                          {}
+func (m *MockPeerClient) SetOwnAddress(addr string)                                    {}
+func (m *MockPeerClient) UpdateSponsorAddress(addr string)                             {}
+func (m *MockPeerClient) CloseIdleConnections()                                        {}
+func (m *MockPeerClient) SetQUICManager(qm *p2p.QUICManager)                           {}

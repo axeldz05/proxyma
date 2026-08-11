@@ -153,7 +153,7 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 		},
 	}
 
-	handler := compute.BuildGRPCHandler(mockServer.URL, 2*time.Second)
+	handler := compute.BuildHTTPHandler(mockServer.URL, 2*time.Second)
 	err := engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 

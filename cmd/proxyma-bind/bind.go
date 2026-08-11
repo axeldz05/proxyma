@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -165,7 +164,8 @@ func bindOKJSON(res any) string {
 
 // BindMessageJSON returns a success envelope with a message field.
 func BindMessageJSON(msg string) string {
-	return fmt.Sprintf(`{"message": %q}`, msg)
+	b, _ := json.Marshal(protocol.APIMessage{Message: msg})
+	return string(b)
 }
 
 // dispatchUnixLocalOrOffline is L3: in-process localCall, else unix, else optional offline fallback.
@@ -434,94 +434,6 @@ func GetTotalReceived() int64 {
 	}
 	_, totalRecv := s.GetTotalBandwidth()
 	return totalRecv
-}
-
-// ChangeStorageLocation stops node, copies directory, updates configs and restarts node.
-func ChangeStorageLocation(newPath string) string {
-	s := getSrv()
-	if s == nil {
-		return BindErrorJSON(fmt.Errorf("node is not running"))
-	}
-
-	newStorage := filepath.Join(newPath, "proxyma_data")
-
-	StopNode()
-
-	if _, err := os.Stat(appStorage); err == nil {
-		err = copyDir(appStorage, newStorage)
-		if err != nil {
-			// Restart on old storage
-			_ = StartNode(appStorage, true)
-			return BindErrorJSON(fmt.Errorf("failed to copy data: %v", err))
-		}
-	}
-
-	oldStorage := appStorage
-	appStorage = newStorage
-
-	startErr := StartNode(appStorage, true)
-	if startErr != "" {
-		appStorage = oldStorage
-		_ = StartNode(appStorage, true)
-		return BindErrorJSON(fmt.Errorf("failed to start on new storage: %s", ParseBindError(startErr)))
-	}
-
-	return ""
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Close() }()
-
-	_, err = io.Copy(out, in)
-	if err != nil {
-		return err
-	}
-	return out.Sync()
-}
-
-func copyDir(src string, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(dst, srcInfo.Mode())
-	if err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			err = copyDir(srcPath, dstPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			err = copyFile(srcPath, dstPath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // GetUISchemaJSON exports the full single-source-of-truth UI Schema registry as JSON.

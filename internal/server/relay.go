@@ -211,7 +211,7 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 	// Send the response to the waiting forward handler
 	select {
 	case waiter <- resp:
-		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "delivered"})
+		utils.RespondStatus(w, http.StatusOK, "delivered")
 	default:
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to deliver response")
 	}

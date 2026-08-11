@@ -70,10 +70,6 @@ func (se *StorageEngine) SavePhysicalBlob(content io.Reader) (string, int64, err
 	return se.physical.SaveBlob(content)
 }
 
-func (se *StorageEngine) ReadPhysicalBlob(hash string, w io.Writer) error {
-	return se.physical.ReadBlob(hash, w)
-}
-
 func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		if isSubscribed {

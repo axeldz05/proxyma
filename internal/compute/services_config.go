@@ -174,7 +174,7 @@ var serviceTypeBuilders = map[protocol.ServiceType]func(exec string) (ServiceHan
 		return BuildScriptHandler(exec), nil
 	},
 	protocol.ServiceTypeGRPC: func(exec string) (ServiceHandler, error) {
-		return BuildGRPCHandler(exec, protocol.HandlerDialUnary), nil
+		return BuildHTTPHandler(exec, protocol.HandlerDialUnary), nil
 	},
 	protocol.ServiceTypeGRPCBidi: buildStreamOrScript,
 	protocol.ServiceTypeBidi:     buildStreamOrScript,

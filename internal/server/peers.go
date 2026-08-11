@@ -31,7 +31,7 @@ func (s *Server) RemovePeer(peerID string) {
 }
 
 func (s *Server) announceOffline(ctx context.Context) {
-	payload := map[string]string{"id": s.Config.ID}
+	payload := protocol.PeerIDRequest{ID: s.Config.ID}
 	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 		return s.peerClient.Offline(ctx, peerID, payload)
 	})

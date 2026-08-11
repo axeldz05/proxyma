@@ -53,9 +53,14 @@ After compression, altering that behavior should touch **one** SSOT (plus thin c
 | File/image UI | `ServiceParameter.UIHint` — consumers do not re-sniff names |
 | Bandwidth JSON | `protocol.BandwidthStats` only |
 | TLS construction | `p2p.LoadNodeTLS` |
+| Peer `.proxyma.local` URL | `protocol.PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL` |
+| Service query string | `protocol.QueryService` / `WithServiceQuery` |
+| Leave/Offline body | `protocol.PeerIDRequest` |
+| HTTP ack envelopes | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
+| Test insecure HTTP | `testutil.InsecureTLSConfig` / `InsecureHTTPClient` |
 | HTTP stream handlers | `BuildHTTP*` / `BuildHandler` (`server_stream`, `http_bidi`, …) |
 | WebRTC DataChannel JSON | `compute.BuildWebRTCHandler` + `ServiceTypeWebRTC` |
-| HTTP JSON helpers | `utils.RespondJSON` / `DecodeJSONOrError` |
+| HTTP JSON helpers | `utils.RespondJSON` / `RespondMessage` / `RespondStatus` / `DecodeJSONOrError` |
 
 ## What to Avoid
 * Class hierarchies from domain nouns before code exists.

@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
-	"strings"
 	"sync"
 	"time"
 
@@ -111,13 +110,12 @@ func (r *P2PRoundTripper) logDebug(msg string, args ...any) {
 
 func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.logDebug("P2P router called", "host", req.URL.Host)
-	if !strings.HasSuffix(req.URL.Host, ".proxyma.local") {
+	peerID, ok := protocol.ParsePeerLocalHost(req.URL.Hostname())
+	if !ok {
 		r.logDebug("Skipping routing: host does not match proxyma.local suffix", "host", req.URL.Host)
 		return r.Base.RoundTrip(req)
 	}
 	r.logDebug("Host matches proxyma.local suffix, resolving peer", "host", req.URL.Host)
-
-	peerID := strings.TrimSuffix(req.URL.Hostname(), ".proxyma.local")
 
 	r.mu.RLock()
 	record, exists := r.routes[peerID]
@@ -440,26 +438,6 @@ func splitDirectAddresses(addrs []string) (hostnames, ipAddrs []string) {
 		ipAddrs = append(ipAddrs, raw)
 	}
 	return hostnames, ipAddrs
-}
-
-// CancelReadCloser wraps an io.ReadCloser to call a cancel function when closed.
-type CancelReadCloser struct {
-	io.ReadCloser
-	Cancel context.CancelFunc
-}
-
-func (c *CancelReadCloser) Close() error {
-	err := c.ReadCloser.Close()
-	c.Cancel()
-	return err
-}
-
-// NewCancelReadCloser creates a new CancelReadCloser.
-func NewCancelReadCloser(body io.ReadCloser, cancel context.CancelFunc) io.ReadCloser {
-	return &CancelReadCloser{
-		ReadCloser: body,
-		Cancel:     cancel,
-	}
 }
 
 func (r *P2PRoundTripper) CloseIdleConnections() {

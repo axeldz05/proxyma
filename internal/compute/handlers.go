@@ -57,10 +57,10 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 		utils.RespondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	utils.RespondJSON(w, http.StatusAccepted, map[string]string{
-		"status":  "accepted",
-		"message": "Task received and queued for processing",
-		"job_id":  taskReq.TaskID,
+	utils.RespondJSON(w, http.StatusAccepted, protocol.APITaskAck{
+		Status:  "accepted",
+		Message: "Task received and queued for processing",
+		JobID:   taskReq.TaskID,
 	})
 }
 
@@ -71,9 +71,9 @@ func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Req
 	}
 	s.setTaskStatus(webhookPayload)
 	s.logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{
-		"status":  "ok",
-		"message": "Webhook received",
-		"job_id":  webhookPayload.TaskID,
+	utils.RespondJSON(w, http.StatusOK, protocol.APITaskAck{
+		Status:  "ok",
+		Message: "Webhook received",
+		JobID:   webhookPayload.TaskID,
 	})
 }

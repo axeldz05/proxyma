@@ -100,7 +100,7 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string, sortStra
 		TaskID:          taskID,
 		Service:         serviceName,
 		RequesterNodeID: s.Config.ID,
-		ReplyTo:         fmt.Sprintf("https://%s.proxyma.local%s", s.Config.ID, protocol.PathServicesCallback),
+		ReplyTo:         protocol.PeerHTTPSURL(s.Config.ID, protocol.PathServicesCallback),
 		Payload:         payload,
 	}
 

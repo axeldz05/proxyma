@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"proxyma/internal/protocol"
-	"strings"
 )
 
 type PeerClient interface {
@@ -24,8 +23,8 @@ type PeerClient interface {
 	FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error)
 	PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
 	ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
-	Leave(ctx context.Context, peerID string, leaveReq map[string]string) error
-	Offline(ctx context.Context, peerID string, offlineReq map[string]string) error
+	Leave(ctx context.Context, peerID string, leaveReq protocol.PeerIDRequest) error
+	Offline(ctx context.Context, peerID string, offlineReq protocol.PeerIDRequest) error
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 	RotateTLS(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error)
@@ -117,17 +116,11 @@ func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerID string) ([
 }
 
 func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerID string, req protocol.TaskRequest) error {
-	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathServicesSubmit)+"?service="+req.Service, req, http.StatusAccepted)
+	return doVoid(ctx, c, "POST", peerID, protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesSubmit), req.Service), req, http.StatusAccepted)
 }
 
 func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, urlStr string, resp protocol.ServiceTaskResponse) error {
-	importString := ""
-	if strings.Contains(urlStr, "?") {
-		importString = "&"
-	} else {
-		importString = "?"
-	}
-	return doVoid(ctx, c, "POST", urlStr+importString+"service="+resp.Service, "", resp, 0)
+	return doVoid(ctx, c, "POST", protocol.WithServiceQuery(urlStr, resp.Service), "", resp, 0)
 }
 
 func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
@@ -154,11 +147,11 @@ func (c *HTTPPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, res
 	return doVoid(ctx, c, "POST", sponsorAddr, protocol.PathRel(protocol.PathRelayReply), resp, http.StatusOK)
 }
 
-func (c *HTTPPeerClient) Leave(ctx context.Context, peerID string, leaveReq map[string]string) error {
+func (c *HTTPPeerClient) Leave(ctx context.Context, peerID string, leaveReq protocol.PeerIDRequest) error {
 	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathPeersLeave), leaveReq, http.StatusOK)
 }
 
-func (c *HTTPPeerClient) Offline(ctx context.Context, peerID string, offlineReq map[string]string) error {
+func (c *HTTPPeerClient) Offline(ctx context.Context, peerID string, offlineReq protocol.PeerIDRequest) error {
 	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathPeersOffline), offlineReq, http.StatusOK)
 }
 
@@ -175,7 +168,7 @@ func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, servi
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sendRequest(ctx, "POST", peerID, protocol.PathRel(protocol.PathServicesStream)+"?service="+serviceName, bodyReader, contentType)
+	resp, err := c.sendRequest(ctx, "POST", peerID, protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName), bodyReader, contentType)
 	if err != nil {
 		return nil, err
 	}
