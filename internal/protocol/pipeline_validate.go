@@ -59,7 +59,7 @@ func PipelineHasCycle(schema PipelineSchema) bool {
 // lookup soft-skips port checks when a service schema is unknown (ok=false).
 func ValidatePipelineSchema(schema PipelineSchema, lookup func(string) (ServiceSchema, bool)) error {
 	if schema.ID == "" {
-		return fmt.Errorf("pipeline ID cannot be empty")
+		return ErrEmptyPipelineID
 	}
 	if len(schema.Steps) == 0 {
 		return fmt.Errorf("pipeline must have at least one step")

@@ -71,26 +71,38 @@ func (s *Server) httpRoutes() []httpRoute {
 	}
 }
 
-// routeAuth returns the auth policy declared for path (authMTLS when unknown, so
-// an unmounted or mistyped path never falls open).
-func (s *Server) routeAuth(path string) authMode {
-	for _, r := range s.httpRoutes() {
-		if r.Path == path {
-			return r.Auth
+// routePolicy is the per-path slice of httpRoute consulted on every request.
+type routePolicy struct {
+	auth      authMode
+	relayAnon bool
+}
+
+// routeIndex memoizes the policy lookup. Only the policy is cached, never the
+// handlers: httpRoutes builds bound method values, so rebuilding it per request
+// allocated one closure per route on the mTLS hot path, and callers still get
+// freshly bound handlers every time MountHandlers runs.
+func (s *Server) routeIndex() map[string]routePolicy {
+	s.routeIndexOnce.Do(func() {
+		routes := s.httpRoutes()
+		idx := make(map[string]routePolicy, len(routes))
+		for _, r := range routes {
+			idx[r.Path] = routePolicy{auth: r.Auth, relayAnon: r.RelayAnon}
 		}
-	}
-	return authMTLS
+		s.routePolicies = idx
+	})
+	return s.routePolicies
+}
+
+// routeAuth returns the auth policy declared for path (authMTLS when unknown, so
+// an unmounted, mistyped or subtree path never falls open).
+func (s *Server) routeAuth(path string) authMode {
+	return s.routeIndex()[path].auth
 }
 
 // relayAllowsAnonymous reports whether path may be relayed for a caller without
 // a peer certificate.
 func (s *Server) relayAllowsAnonymous(path string) bool {
-	for _, r := range s.httpRoutes() {
-		if r.Path == path {
-			return r.RelayAnon
-		}
-	}
-	return false
+	return s.routeIndex()[path].relayAnon
 }
 
 func (s *Server) MountHandlers() http.Handler {

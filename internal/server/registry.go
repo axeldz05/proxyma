@@ -9,33 +9,48 @@ import (
 	"proxyma/internal/protocol"
 )
 
+// peerState is everything the registry knows about one peer. One entry per peer under a
+// single lock replaces five parallel maps, so a peer can never be observed half-updated
+// and a new per-peer attribute is one field instead of a map plus a mutex plus a purge.
+type peerState struct {
+	record protocol.AddressRecord
+	// hasRecord separates a registered peer from an entry created by a certificate,
+	// a service push or an offline mark. Presence in the map is NOT proof of
+	// registration: mTLSGuard and the relay ask GetPeerRecord for that, and a peer
+	// that only ever presented a certificate must not pass as registered.
+	hasRecord bool
+	online    bool
+	lastError string
+	services  map[string]protocol.ServiceSchema
+	cert      *x509.Certificate
+}
+
 // PeerRegistry manages all cluster peers, their status, and their registered service schemas.
 type PeerRegistry struct {
-	logger            *slog.Logger
-	nodeID            string
-	peers             map[string]protocol.AddressRecord
-	peersMu           sync.RWMutex
-	activePeers       map[string]bool
-	activePeersMu     sync.RWMutex
-	peerErrors        map[string]string
-	peerErrorsMu      sync.RWMutex
-	clusterServices   map[string]map[string]protocol.ServiceSchema
-	clusterServicesMu sync.RWMutex
-	peerCerts         map[string]*x509.Certificate
-	peerCertsMu       sync.RWMutex
+	logger *slog.Logger
+	nodeID string
+	mu     sync.RWMutex
+	peers  map[string]*peerState
 }
 
 // NewPeerRegistry creates and initializes a new PeerRegistry.
 func NewPeerRegistry(logger *slog.Logger, nodeID string) *PeerRegistry {
 	return &PeerRegistry{
-		logger:          logger,
-		nodeID:          nodeID,
-		peers:           make(map[string]protocol.AddressRecord),
-		activePeers:     make(map[string]bool),
-		peerErrors:      make(map[string]string),
-		clusterServices: make(map[string]map[string]protocol.ServiceSchema),
-		peerCerts:       make(map[string]*x509.Certificate),
+		logger: logger,
+		nodeID: nodeID,
+		peers:  make(map[string]*peerState),
 	}
+}
+
+// stateLocked returns the entry for peerID, creating an empty one when absent.
+// Caller must hold mu for writing.
+func (pr *PeerRegistry) stateLocked(peerID string) *peerState {
+	st, ok := pr.peers[peerID]
+	if !ok {
+		st = &peerState{}
+		pr.peers[peerID] = st
+	}
+	return st
 }
 
 // AddPeer adds or updates a peer's address record. It returns true if the peer record was actually updated.
@@ -44,34 +59,28 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 		return false
 	}
 
-	pr.peersMu.Lock()
-	defer pr.peersMu.Unlock()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
 
 	// Clean up stale peers with the same primary address
 	if len(addressRecord.Addresses) > 0 {
 		newPrimaryAddr := addressRecord.Addresses[0]
 		var staleIDs []string
-		for id, existingRecord := range pr.peers {
-			if id != peerID && len(existingRecord.Addresses) > 0 && existingRecord.Addresses[0] == newPrimaryAddr {
+		for id, st := range pr.peers {
+			if id != peerID && st.hasRecord && len(st.record.Addresses) > 0 && st.record.Addresses[0] == newPrimaryAddr {
 				staleIDs = append(staleIDs, id)
 			}
 		}
 
-		if len(staleIDs) > 0 {
-			for _, staleID := range staleIDs {
-				delete(pr.peers, staleID)
-			}
-			for _, staleID := range staleIDs {
-				pr.purgePeerMaps(staleID)
-			}
-			for _, staleID := range staleIDs {
-				pr.logger.Info("Removing stale peer replaced by new peer ID at same address", "stalePeerID", staleID, "newPeerID", peerID, "address", newPrimaryAddr)
-			}
+		for _, staleID := range staleIDs {
+			delete(pr.peers, staleID)
+			pr.logger.Info("Removing stale peer replaced by new peer ID at same address", "stalePeerID", staleID, "newPeerID", peerID, "address", newPrimaryAddr)
 		}
 	}
 
-	existing, exists := pr.peers[peerID]
-	if exists {
+	st := pr.stateLocked(peerID)
+	if st.hasRecord {
+		existing := st.record
 		if addressRecord.Sequence < existing.Sequence {
 			pr.logger.Debug("Ignoring older peer address record", "peerID", peerID, "currentSeq", existing.Sequence, "newSeq", addressRecord.Sequence)
 			return false
@@ -92,53 +101,27 @@ func (pr *PeerRegistry) AddPeer(peerID string, addressRecord protocol.AddressRec
 		}
 	}
 
-	pr.peers[peerID] = addressRecord
-	pr.markOnlineClearError(peerID)
+	st.record = addressRecord
+	st.hasRecord = true
+	markOnlineLocked(st)
 
 	pr.logger.Info("peerID added to peers", "peerID", peerID, "node", pr.nodeID)
 	return true
 }
 
-// purgePeerLocked removes peerID from all registry maps. Callers must hold peersMu when deleting from peers;
-// other map locks are taken internally.
-func (pr *PeerRegistry) purgePeerMaps(peerID string) {
-	pr.activePeersMu.Lock()
-	delete(pr.activePeers, peerID)
-	pr.activePeersMu.Unlock()
-
-	pr.peerErrorsMu.Lock()
-	delete(pr.peerErrors, peerID)
-	pr.peerErrorsMu.Unlock()
-
-	pr.clusterServicesMu.Lock()
-	delete(pr.clusterServices, peerID)
-	pr.clusterServicesMu.Unlock()
-
-	pr.peerCertsMu.Lock()
-	delete(pr.peerCerts, peerID)
-	pr.peerCertsMu.Unlock()
-}
-
-// RemovePeer removes a peer and its status/services from the registry.
+// RemovePeer removes a peer and its status, services and certificate from the registry.
 func (pr *PeerRegistry) RemovePeer(peerID string) {
-	pr.peersMu.Lock()
+	pr.mu.Lock()
 	delete(pr.peers, peerID)
-	pr.peersMu.Unlock()
-
-	pr.purgePeerMaps(peerID)
+	pr.mu.Unlock()
 
 	pr.logger.Info("peerID removed from peers", "peerID", peerID)
 }
 
-// markOnlineClearError marks peer online and clears any stored error.
-func (pr *PeerRegistry) markOnlineClearError(peerID string) {
-	pr.activePeersMu.Lock()
-	pr.activePeers[peerID] = true
-	pr.activePeersMu.Unlock()
-
-	pr.peerErrorsMu.Lock()
-	delete(pr.peerErrors, peerID)
-	pr.peerErrorsMu.Unlock()
+// markOnlineLocked marks the peer online and clears any stored error.
+func markOnlineLocked(st *peerState) {
+	st.online = true
+	st.lastError = ""
 }
 
 // SetPeerOnline marks a peer as online or offline.
@@ -147,47 +130,57 @@ func (pr *PeerRegistry) SetPeerOnline(peerID string, online bool) {
 		pr.SetPeerOffline(peerID, nil)
 		return
 	}
-	pr.markOnlineClearError(peerID)
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	markOnlineLocked(pr.stateLocked(peerID))
 }
 
 // SetPeerOffline marks a peer as offline and stores the connection error.
 func (pr *PeerRegistry) SetPeerOffline(peerID string, err error) {
-	pr.activePeersMu.Lock()
-	pr.activePeers[peerID] = false
-	pr.activePeersMu.Unlock()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
 
-	pr.peerErrorsMu.Lock()
+	st := pr.stateLocked(peerID)
+	st.online = false
 	if err != nil {
-		pr.peerErrors[peerID] = "offline or could not reach: " + err.Error()
+		st.lastError = "offline or could not reach: " + err.Error()
 	} else {
-		pr.peerErrors[peerID] = "offline"
+		st.lastError = "offline"
 	}
-	pr.peerErrorsMu.Unlock()
 }
 
 // GetPeerError retrieves the connection error for a specific peer.
 func (pr *PeerRegistry) GetPeerError(peerID string) string {
-	pr.peerErrorsMu.RLock()
-	defer pr.peerErrorsMu.RUnlock()
-	return pr.peerErrors[peerID]
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	if st, ok := pr.peers[peerID]; ok {
+		return st.lastError
+	}
+	return ""
 }
 
 // IsPeerOnline checks if a peer is online.
 func (pr *PeerRegistry) IsPeerOnline(peerID string) bool {
-	pr.activePeersMu.RLock()
-	defer pr.activePeersMu.RUnlock()
-	return pr.activePeers[peerID]
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	if st, ok := pr.peers[peerID]; ok {
+		return st.online
+	}
+	return false
 }
 
-// primaryPeerAddrs projects peers to their primary address under peersMu (caller must hold RLock).
-func primaryPeerAddrs(peers map[string]protocol.AddressRecord, filter func(protocol.AddressRecord) bool) map[string]string {
+// primaryPeerAddrs projects registered peers to their primary address (caller must hold mu).
+func primaryPeerAddrs(peers map[string]*peerState, filter func(protocol.AddressRecord) bool) map[string]string {
 	out := make(map[string]string)
-	for k, v := range peers {
-		if filter != nil && !filter(v) {
+	for id, st := range peers {
+		if !st.hasRecord {
 			continue
 		}
-		if len(v.Addresses) > 0 {
-			out[k] = v.Addresses[0]
+		if filter != nil && !filter(st.record) {
+			continue
+		}
+		if len(st.record.Addresses) > 0 {
+			out[id] = st.record.Addresses[0]
 		}
 	}
 	return out
@@ -195,52 +188,60 @@ func primaryPeerAddrs(peers map[string]protocol.AddressRecord, filter func(proto
 
 // GetPeersCopy returns a mapping of all peer IDs to their primary address.
 func (pr *PeerRegistry) GetPeersCopy() map[string]string {
-	pr.peersMu.RLock()
-	defer pr.peersMu.RUnlock()
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
 	return primaryPeerAddrs(pr.peers, nil)
 }
 
-// GetPeerRecord retrieves the address record of a specific peer.
+// GetPeerRecord retrieves the address record of a specific peer. ok is false for a peer
+// that never announced an address, even if the registry holds other state for it.
 func (pr *PeerRegistry) GetPeerRecord(peerID string) (protocol.AddressRecord, bool) {
-	pr.peersMu.RLock()
-	defer pr.peersMu.RUnlock()
-	record, exists := pr.peers[peerID]
-	return record, exists
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	st, ok := pr.peers[peerID]
+	if !ok || !st.hasRecord {
+		return protocol.AddressRecord{}, false
+	}
+	return st.record, true
 }
 
 // GetPeersRecordCopy returns a copy of all peer address records.
 func (pr *PeerRegistry) GetPeersRecordCopy() map[string]protocol.AddressRecord {
-	pr.peersMu.RLock()
-	defer pr.peersMu.RUnlock()
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
 	snapshot := make(map[string]protocol.AddressRecord, len(pr.peers))
-	maps.Copy(snapshot, pr.peers)
+	for id, st := range pr.peers {
+		if st.hasRecord {
+			snapshot[id] = st.record
+		}
+	}
 	return snapshot
 }
 
 // GetSponsorPeers returns a mapping of all peer IDs to their primary address if they are Sponsors.
 func (pr *PeerRegistry) GetSponsorPeers() map[string]string {
-	pr.peersMu.RLock()
-	defer pr.peersMu.RUnlock()
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
 	return primaryPeerAddrs(pr.peers, func(v protocol.AddressRecord) bool { return v.IsSponsor })
 }
 
 // GetClusterServices returns the registered services of a specific peer.
 func (pr *PeerRegistry) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
-	pr.clusterServicesMu.RLock()
-	defer pr.clusterServicesMu.RUnlock()
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
 	services := make(map[string]protocol.ServiceSchema)
-	if peerServices, ok := pr.clusterServices[peerID]; ok {
-		maps.Copy(services, peerServices)
+	if st, ok := pr.peers[peerID]; ok {
+		maps.Copy(services, st.services)
 	}
 	return services
 }
 
 // GetServiceSchema searches all peers for the given service schema.
 func (pr *PeerRegistry) GetServiceSchema(serviceName string) (protocol.ServiceSchema, bool) {
-	pr.clusterServicesMu.RLock()
-	defer pr.clusterServicesMu.RUnlock()
-	for _, peerServices := range pr.clusterServices {
-		if schema, ok := peerServices[serviceName]; ok {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	for _, st := range pr.peers {
+		if schema, ok := st.services[serviceName]; ok {
 			return schema, true
 		}
 	}
@@ -249,32 +250,36 @@ func (pr *PeerRegistry) GetServiceSchema(serviceName string) (protocol.ServiceSc
 
 // UpdatePeerService updates a peer service schema.
 func (pr *PeerRegistry) UpdatePeerService(peerID string, action string, schema protocol.ServiceSchema) {
-	pr.clusterServicesMu.Lock()
-	defer pr.clusterServicesMu.Unlock()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
 
-	if pr.clusterServices[peerID] == nil {
-		pr.clusterServices[peerID] = make(map[string]protocol.ServiceSchema)
+	st := pr.stateLocked(peerID)
+	if st.services == nil {
+		st.services = make(map[string]protocol.ServiceSchema)
 	}
 
 	switch action {
 	case protocol.ActionAdd, protocol.ActionModify:
-		pr.clusterServices[peerID][schema.Name] = schema
+		st.services[schema.Name] = schema
 		pr.logger.Info("Cluster service registered", "service", schema.Name, "peer", peerID)
 	case protocol.ActionRemove:
-		delete(pr.clusterServices[peerID], schema.Name)
+		delete(st.services, schema.Name)
 		pr.logger.Info("Cluster service removed", "service", schema.Name, "peer", peerID)
 	}
 }
 
 func (pr *PeerRegistry) SetPeerCertificate(peerID string, cert *x509.Certificate) {
-	pr.peerCertsMu.Lock()
-	defer pr.peerCertsMu.Unlock()
-	pr.peerCerts[peerID] = cert
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.stateLocked(peerID).cert = cert
 }
 
 func (pr *PeerRegistry) GetPeerCertificate(peerID string) (*x509.Certificate, bool) {
-	pr.peerCertsMu.RLock()
-	defer pr.peerCertsMu.RUnlock()
-	cert, exists := pr.peerCerts[peerID]
-	return cert, exists
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	st, ok := pr.peers[peerID]
+	if !ok || st.cert == nil {
+		return nil, false
+	}
+	return st.cert, true
 }

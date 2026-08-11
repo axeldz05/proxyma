@@ -66,7 +66,7 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	if parsedUrl, err := url.Parse(req.Address.Addresses[0]); err == nil {
 		port := parsedUrl.Port()
 		if port != "" {
-			perceivedAddr := parsedUrl.Scheme + "://" + remoteIP + ":" + port
+			perceivedAddr := protocol.SchemeAddr(parsedUrl.Scheme, remoteIP, port)
 
 			// Add perceivedAddr if it's not already in the list
 			exists := false

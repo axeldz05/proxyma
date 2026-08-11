@@ -24,7 +24,7 @@ var unixHandlers = map[string]UnixActionHandler{}
 func requireUnixArgs(args map[string]string, names ...string) error {
 	for _, name := range names {
 		if args[name] == "" {
-			return fmt.Errorf("missing %s parameter", name)
+			return protocol.MissingParamError(name)
 		}
 	}
 	return nil

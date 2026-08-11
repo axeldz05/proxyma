@@ -29,7 +29,9 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Golden rule (duplication)**: If changing one behavior requires touching **>2 code zones**, compress into a shared helper. Do **not** copy service CRUD, peer fan-out, relay forward, blob fetch/stage, or unix dial stacks.
 * **Continuous granularity (3 tiers)**: Unix: `DialUnix` → Write/Read/Scan → `sendUnixSocketCommand` / `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`. Same shape for gossip (`enqueueOutbox` → `notifyWithOutbox` → `notifyService`) and tests (`InitClusterCA` → `IssueNode` → `NewNodeTLS`).
 * **Tables over switches**: gossip kind → `catalogKinds`; endpoint auth → `httpRoutes` / `routeAuth`; service type → `protocol.serviceTypeSpecs` + `compute.serviceTypeBuilders`. Never add a parallel `switch`.
-* **Node addresses**: `protocol.HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never `fmt.Sprintf("https://%s:%s", …)`.
+* **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`.
+* **Error wording**: validation text lives in `protocol/errors.go`; validators may stay per-layer, the message must not be retyped.
+* **No parallel maps on one key**: per-entity state goes in one struct under one lock (`peerState`), not N maps with N mutexes.
 * **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors; Bolt failures propagate instead of collapsing into a bool.
 * **UI hints**: `protocol.InferUIHint` / `EffectiveUIHint`; Android uses `FormParameter.isFilePicker()` — no name sniffing.
 * **Bind errors**: `BindErrorJSON` / `ParseBindError` / `IsBindError` only (no double-wrap, no `"error:"` prefix).
@@ -57,7 +59,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ### Server — `internal/server/`
 * `server.go` lifecycle; `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
 * `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction` + **`requireUnixArgs`**; `unix_listener.go` accept loop only.
-* `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`.
+* `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`. **`routeIndex`** memoizes policy with `sync.Once` (policy only, never handlers); subtree paths keep the default.
+* `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not.
 * `catalog_kinds.go` — `catalogKinds` (`Kind` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; `outbox.go` → **`notifyWithOutbox`**.
 * `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
@@ -77,7 +80,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `UpsertAndSubscribe` / `deleteBlobIfOrphan`; bolt JSON + `boltPutFlag` / `boltHasKey`; bucket names in `storage/buckets.go` (`allBuckets`).
 * `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON`; `ReadJSONFile` / `WriteJSONFile`.
 * `compute.EstimateTaskCost`; `protocol.Path*` / `PathRel` / `MaxRelayBodyBytes`, `RPCTimeout*`, **`DialTimeout*` / `HolePunch*` / `HandlerDial*`**, `DefaultTCPPort`, **`DefaultInviteMinutes`**, **`SockFileName` / `UnixSockPath`**, **`ValidatePipelineSchema` / `PipelineHasCycle`**, `NormalizeServiceSchema`, `DescribeParameter`, `MissingRequired`, `ValidateValue(+Options)`, `ActionAdd`/`Remove`, `ResultLocalPath`, `VFSURI` / `IsStageableLocalPath` / `RewriteLocalFilePaths` / `InferUIHint` / `IsFilePickerHint`, `RelayRequest.OriginPeerID`.
-* `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`HTTPSAddr`), `config.go`, `logring.go` — `protocol.go` keeps only types.
+* `protocol` layout: `service_types.go` (`serviceTypeSpecs`), `addr.go` (`SchemeAddr`/`HTTPSAddr`), `errors.go` (validation wording), `config.go`, `logring.go` — `protocol.go` keeps only types.
 * `compute`: `serviceTypeBuilders` → `BuildHandler`; `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` / `utils.HTTPErrorFromResponse`.
 * `storage`: `VFS.Upsert` returns `(bool, error)`; write through `StorageEngine.upsertIndex`.
 * `internal/testutil/cluster.go`: `NewStorageEngine` / `InitClusterCA` / `IssueNode` / `NewNodeTLS` — but tests whose subject *is* a TLS/storage step keep using the L1.
@@ -113,10 +116,12 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
 | Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
 | Notify outbox | `notifyWithOutbox` (L2) / `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (Bolt `notify_outbox`) |
-| Endpoint + auth policy | `httpRoutes` / `routeAuth` / `relayAllowsAnonymous` |
+| Endpoint + auth policy | `httpRoutes` / `routeIndex` / `routeAuth` / `relayAllowsAnonymous` |
+| Per-peer state | `peerState` in `registry.go` (one lock; `hasRecord` = registered) |
+| Validation error wording | `protocol.ParamTypeError` / `ParamOptionError` / `MissingParamError` / `ErrEmptyPipelineID` |
 | Service type alias / streaming / builder | `protocol.serviceTypeSpecs` / `compute.serviceTypeBuilders` |
 | Handler timeout / stream client / exec check | `withHandlerTimeout` / `streamHTTPClient` / `requireHTTPExec` |
-| Node HTTPS URL (IPv6-safe) | `protocol.HTTPSAddr` / `HTTPSAddrPort` |
+| Node URL (IPv6-safe) | `protocol.SchemeAddr` / `HTTPSAddr` / `HTTPSAddrPort` |
 | Unexpected HTTP status | `utils.HTTPStatusError` / `HTTPErrorFromResponse` / `p2p.RequireHTTPStatus` / `OpenHTTPBody` |
 | Required unix args / relay cap | `requireUnixArgs` / `rejectOversizedRelay` |
 | TLS rotation payload | `protocol.RotateTLSPayload` |

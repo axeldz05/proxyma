@@ -30,6 +30,16 @@ func TestHTTPSAddr(t *testing.T) {
 	}
 }
 
+func TestSchemeAddr(t *testing.T) {
+	if got := protocol.SchemeAddr("http", "10.0.0.1", "8080"); got != "http://10.0.0.1:8080" {
+		t.Errorf("unexpected address %q", got)
+	}
+	// A peer announcing over IPv6 must not produce https://fe80::1:8443.
+	if got := protocol.SchemeAddr("https", "fe80::1", "8443"); got != "https://[fe80::1]:8443" {
+		t.Errorf("IPv6 literal must be bracketed, got %q", got)
+	}
+}
+
 func TestHTTPSAddrPort(t *testing.T) {
 	if got := protocol.HTTPSAddrPort("10.0.0.1", 8080); got != "https://10.0.0.1:8080" {
 		t.Errorf("unexpected address %q", got)

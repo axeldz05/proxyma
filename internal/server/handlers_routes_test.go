@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"proxyma/internal/protocol"
@@ -53,6 +54,23 @@ func TestRouteAuthPolicy(t *testing.T) {
 	}
 	if s.relayAllowsAnonymous(protocol.PathRelayForward) {
 		t.Error("relay forward must not be relayable without a certificate")
+	}
+}
+
+// routeAuth matches paths exactly, but ServeMux treats a trailing slash as a
+// subtree pattern, so a request to /download/<hash> never finds its route entry
+// and falls back to authMTLS. That default is fail-closed, which means a subtree
+// route declaring a laxer policy would silently not get it.
+func TestSubtreeRoutesKeepDefaultPolicy(t *testing.T) {
+	s := &Server{}
+	for _, r := range s.httpRoutes() {
+		if !strings.HasSuffix(r.Path, "/") {
+			continue
+		}
+		if r.Auth != authMTLS || r.RelayAnon {
+			t.Errorf("subtree route %q declares a policy the exact-match guard cannot apply; "+
+				"give it a concrete path or teach routeIndex about prefixes", r.Path)
+		}
 	}
 }
 

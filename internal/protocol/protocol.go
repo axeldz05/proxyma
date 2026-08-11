@@ -290,11 +290,11 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 	switch p.Type {
 	case ParamTypeString, ParamTypeFile:
 		if _, ok := value.(string); !ok {
-			return fmt.Errorf("invalid type for parameter '%s': expected string", paramName)
+			return ParamTypeError(paramName, "string")
 		}
 	case ParamTypeBool:
 		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("invalid type for parameter '%s': expected bool", paramName)
+			return ParamTypeError(paramName, "bool")
 		}
 	case ParamTypeInt:
 		switch v := value.(type) {
@@ -302,17 +302,17 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 			// ok
 		case float64:
 			if v != float64(int64(v)) {
-				return fmt.Errorf("invalid type for parameter '%s': expected int, got float", paramName)
+				return ParamTypeError(paramName, "int, got float")
 			}
 		default:
-			return fmt.Errorf("invalid type for parameter '%s': expected int", paramName)
+			return ParamTypeError(paramName, "int")
 		}
 	case ParamTypeFloat:
 		switch value.(type) {
 		case float32, float64, int, int32, int64:
 			// ok
 		default:
-			return fmt.Errorf("invalid type for parameter '%s': expected float", paramName)
+			return ParamTypeError(paramName, "float")
 		}
 	default:
 		return fmt.Errorf("unknown schema type '%s' for parameter '%s'", p.Type, paramName)
@@ -327,7 +327,7 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("invalid value for parameter '%s': %q not in options %v", paramName, s, p.Options)
+		return ParamOptionError(paramName, s, p.Options)
 	}
 	return nil
 }

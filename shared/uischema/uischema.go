@@ -584,11 +584,11 @@ func validateAdminParam(p ParameterDetail, v string) error {
 	switch p.Type {
 	case "bool":
 		if v != "true" && v != "false" && v != "1" && v != "0" {
-			return fmt.Errorf("invalid type for parameter '%s': expected bool", p.Name)
+			return protocol.ParamTypeError(p.Name, "bool")
 		}
 	case "int":
 		if !intStringOK(v) {
-			return fmt.Errorf("invalid type for parameter '%s': expected int", p.Name)
+			return protocol.ParamTypeError(p.Name, "int")
 		}
 	case "string", "file", "":
 		// ok
@@ -601,7 +601,7 @@ func validateAdminParam(p ParameterDetail, v string) error {
 	if optionAllowed(p.Name, p.Options, v) {
 		return nil
 	}
-	return fmt.Errorf("invalid value for parameter '%s': %q not in options %v", p.Name, v, p.Options)
+	return protocol.ParamOptionError(p.Name, v, p.Options)
 }
 
 func intStringOK(v string) bool {

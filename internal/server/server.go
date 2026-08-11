@@ -36,6 +36,9 @@ type Server struct {
 	done          chan struct{}
 	shutdownOnce  sync.Once
 
+	routeIndexOnce sync.Once
+	routePolicies  map[string]routePolicy
+
 	isSponsor       bool
 	checkNATOnce    sync.Once
 	serverTLSConfig *tls.Config

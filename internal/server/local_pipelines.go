@@ -65,7 +65,7 @@ func (s *Server) LocalPipelineAdd(schemaJSON string) error {
 
 func (s *Server) LocalPipelineRemove(id string) error {
 	if id == "" {
-		return fmt.Errorf("pipeline ID cannot be empty")
+		return protocol.ErrEmptyPipelineID
 	}
 	schema := protocol.PipelineSchema{ID: id}
 	if err := s.applyPipelineAction(schema, protocol.ActionRemove); err != nil {
@@ -81,7 +81,7 @@ func (s *Server) LocalPipelineList() []protocol.PipelineSchema {
 
 func (s *Server) LocalPipelineGet(id string) (protocol.PipelineSchema, error) {
 	if id == "" {
-		return protocol.PipelineSchema{}, fmt.Errorf("pipeline ID cannot be empty")
+		return protocol.PipelineSchema{}, protocol.ErrEmptyPipelineID
 	}
 	if schema, ok := s.Compute.GetPipeline(id); ok {
 		return schema, nil

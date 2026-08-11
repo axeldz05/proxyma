@@ -187,7 +187,7 @@ func (s *Server) LocalVFSUpload(name, filePath string) error {
 // LocalVFSSubscribe sets subscription and optionally kicks announce+sync in background.
 func (s *Server) LocalVFSSubscribe(name string, subscribe bool) error {
 	if name == "" {
-		return fmt.Errorf("missing name parameter")
+		return protocol.MissingParamError("name")
 	}
 	s.Storage.SetSubscription(name, subscribe)
 	if subscribe {

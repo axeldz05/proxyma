@@ -77,7 +77,7 @@ func ResolveTaskResultPath(runJSON string) string {
 // ResolveLocalBlob fetches a VFS file on demand and returns its local blob path (L2).
 func ResolveLocalBlob(name string) string {
 	if name == "" {
-		return BindErrorJSON(fmt.Errorf("missing name parameter"))
+		return BindErrorJSON(protocol.MissingParamError("name"))
 	}
 	if errStr := FetchFileOnDemand(name); IsBindError(errStr) {
 		return errStr

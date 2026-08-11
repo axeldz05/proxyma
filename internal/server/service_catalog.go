@@ -70,7 +70,7 @@ func (s *Server) LocalServiceDiscover() ([]string, error) {
 // LocalServiceDetail resolves a service schema locally or via cluster bidding (SSOT).
 func (s *Server) LocalServiceDetail(name string) (schema protocol.ServiceSchema, addr string, err error) {
 	if name == "" {
-		return schema, "", fmt.Errorf("missing name parameter")
+		return schema, "", protocol.MissingParamError("name")
 	}
 	var exists bool
 	schema, exists = s.Compute.GetService(name)
