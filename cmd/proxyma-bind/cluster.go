@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,19 +88,51 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 	}
 
 	certsDir := filepath.Join(appStorage, "certs")
-	_ = os.RemoveAll(certsDir)
-	_ = os.MkdirAll(certsDir, 0755)
+	stagingDir := filepath.Join(appStorage, "certs.staging")
+	_ = os.RemoveAll(stagingDir)
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		return bindErrorJSON(fmt.Errorf("failed to create staging certs dir: %w", err))
+	}
 
-	caPath, _ := p2p.CACertPaths(certsDir)
-	certPath, keyPath := p2p.NodeCertPaths(certsDir, nodeID)
+	caPath, _ := p2p.CACertPaths(stagingDir)
+	certPath, keyPath := p2p.NodeCertPaths(stagingDir, nodeID)
 
 	if err := p2p.WriteNodePEMs(caPath, certPath, keyPath, []byte(caCert), []byte(cert), privKeyPEM); err != nil {
+		_ = os.RemoveAll(stagingDir)
 		return bindErrorJSON(fmt.Errorf("failed to write node PEMs: %w", err))
 	}
+
+	backupDir := filepath.Join(appStorage, "certs.bak")
+	_ = os.RemoveAll(backupDir)
+	if _, err := os.Stat(certsDir); err == nil {
+		if err := os.Rename(certsDir, backupDir); err != nil {
+			_ = os.RemoveAll(stagingDir)
+			return bindErrorJSON(fmt.Errorf("failed to backup existing certs: %w", err))
+		}
+	}
+	if err := os.Rename(stagingDir, certsDir); err != nil {
+		_ = os.Rename(backupDir, certsDir) // best-effort restore
+		_ = os.RemoveAll(stagingDir)
+		return bindErrorJSON(fmt.Errorf("failed to install new certs: %w", err))
+	}
+	_ = os.RemoveAll(backupDir)
+
+	// Paths must point at the installed certs dir (not staging).
+	caPath, _ = p2p.CACertPaths(certsDir)
+	certPath, keyPath = p2p.NodeCertPaths(certsDir, nodeID)
 
 	workersCount := cfg.Workers
 	if workersCount <= 0 {
 		workersCount = 4
+	}
+
+	bootstrap := successfulAddr
+	if u, err := url.Parse(successfulAddr); err == nil && u.Hostname() == "0.0.0.0" {
+		port := u.Port()
+		if port == "" {
+			port = protocol.DefaultTCPPort
+		}
+		bootstrap = protocol.HTTPSAddr(nodeID, port)
 	}
 
 	newCfg := protocol.NodeConfig{
@@ -108,7 +141,7 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) s
 		StoragePath:   appStorage,
 		Workers:       workersCount,
 		CAPath:        caPath,
-		BootstrapNode: strings.Replace(successfulAddr, "0.0.0.0", "node-1", 1),
+		BootstrapNode: bootstrap,
 	}
 
 	err = protocol.SaveConfig(newCfg)

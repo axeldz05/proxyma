@@ -10,7 +10,7 @@ const (
 
 	DialTimeoutJoin       = 3 * time.Second  // cluster join HTTP client
 	DialTimeoutRouteProbe = 3 * time.Second  // TCP reachability before direct route (≠ PeerRPCProbe)
-	HolePunchAttempt      = 3 * time.Second  // outer hole-punch budget in router
+	HolePunchAttempt      = 8 * time.Second  // outer hole-punch budget (≥ HolePunchWait)
 	HolePunchWait         = 8 * time.Second  // inner punch wait; PeerRPCQUICWait aliases this
 	PrewarmHolePunch      = 25 * time.Second // pre-warm InitiateHolePunch context
 

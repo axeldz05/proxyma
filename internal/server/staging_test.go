@@ -126,36 +126,28 @@ func TestLocalServiceRunAutoFetchesRemoteOutputBlob(t *testing.T) {
 	require.Equal(t, outContent, got)
 }
 
-func TestDispatchTaskLeavesNonexistentLocalPathUnchanged(t *testing.T) {
+func TestDispatchTaskRejectsMissingLocalPath(t *testing.T) {
 	t.Parallel()
 
 	provider := NewServer(t, testutil.DefaultConfig(t, "miss-provider"), nil)
 	consumer := NewServer(t, testutil.DefaultConfig(t, "miss-consumer"), nil)
 	linkClusterPeers(t, provider, consumer)
 
-	var seen string
 	require.NoError(t, provider.Compute.RegisterNewService(protocol.ServiceSchema{
 		Name: "echo-path",
 	}, compute.BuildUnaryHandler(func(_ context.Context, payload map[string]any) (map[string]any, error) {
-		seen, _ = payload["file"].(string)
 		return map[string]any{}, nil
 	})))
 
 	missing := filepath.Join(t.TempDir(), "does-not-exist.bin")
-	taskID := "miss-task"
-	require.NoError(t, consumer.DispatchTask(provider.Config.ID, protocol.TaskRequest{
-		TaskID:  taskID,
+	err := consumer.DispatchTask(provider.Config.ID, protocol.TaskRequest{
+		TaskID:  "miss-task",
 		Service: "echo-path",
 		Payload: map[string]any{"file": missing},
 		ReplyTo: consumer.Config.Address + protocol.PathServicesCallback,
-	}))
-
-	require.Eventually(t, func() bool {
-		r, ok := provider.Compute.GetTaskResponse(taskID)
-		return ok && r.Status == "completed"
-	}, 3*time.Second, 50*time.Millisecond)
-
-	require.Equal(t, missing, seen)
+	})
+	require.Error(t, err, "missing local paths that look like filesystem paths must fail staging")
+	require.Contains(t, err.Error(), "does-not-exist.bin")
 }
 
 func TestWebRTCSignalingRoundTripOverMTLS(t *testing.T) {

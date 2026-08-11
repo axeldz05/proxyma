@@ -1,6 +1,7 @@
 package p2p_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -179,4 +180,49 @@ func TestRelayFallbackPreservesURLQuery(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	require.Equal(t, protocol.PathServicesStream+"?service=ocr", forwarded.Path)
+}
+
+func TestP2PRoundTripperPreservesBodyAfterFailedRelay(t *testing.T) {
+	t.Parallel()
+
+	var gotBody string
+	directSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("direct-ok"))
+	}))
+	defer directSrv.Close()
+
+	sponsorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == protocol.PathRelayForward {
+			http.Error(w, "relay down", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer sponsorSrv.Close()
+
+	router := &p2p.P2PRoundTripper{
+		SponsorAddress: sponsorSrv.URL,
+		Base:           http.DefaultTransport,
+	}
+	router.UpdatePeerRoute("node-target", protocol.AddressRecord{
+		Addresses: []string{
+			"http://unreachable.invalid:9",
+			directSrv.URL,
+		},
+		Sequence: 1,
+	})
+
+	client := &http.Client{Transport: router}
+	req, err := http.NewRequest(http.MethodPost, "http://node-target.proxyma.local/upload", bytes.NewBufferString(`{"blob":"payload"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, `{"blob":"payload"}`, gotBody, "body must survive failed relay for Phase-3 direct dial")
 }

@@ -15,7 +15,9 @@ type IndexStore interface {
 	Upsert(entry protocol.IndexEntry) (bool, error)
 	// UpsertAutoVersion bumps Version atomically when Version<=0.
 	UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error)
-	Snapshot() map[string]protocol.IndexEntry
+	// Snapshot returns the full index. On load failure it must return an error —
+	// never an empty map that would look like an empty VFS (orphan GC hazard).
+	Snapshot() (map[string]protocol.IndexEntry, error)
 }
 
 type VFS struct {
@@ -83,10 +85,13 @@ func (v *VFS) UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry,
 	return entry, err
 }
 
-func (v *VFS) Snapshot() map[string]protocol.IndexEntry {
+func (v *VFS) Snapshot() (map[string]protocol.IndexEntry, error) {
 	snapshot, err := boltLoadMapJSON[protocol.IndexEntry](v.index, vfsIndexBucket)
-	if err != nil || snapshot == nil {
-		return make(map[string]protocol.IndexEntry)
+	if err != nil {
+		return nil, err
 	}
-	return snapshot
+	if snapshot == nil {
+		return make(map[string]protocol.IndexEntry), nil
+	}
+	return snapshot, nil
 }

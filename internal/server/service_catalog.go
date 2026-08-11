@@ -157,6 +157,8 @@ func (s *Server) LocalServiceSubscribe(pattern string, subscribe bool) error {
 	if pattern == "" {
 		return fmt.Errorf("missing service subscription pattern")
 	}
-	s.Storage.SetServiceSubscription(pattern, subscribe)
+	if err := s.Storage.SetServiceSubscription(pattern, subscribe); err != nil {
+		return err
+	}
 	return nil
 }

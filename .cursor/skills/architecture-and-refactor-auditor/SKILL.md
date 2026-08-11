@@ -42,8 +42,10 @@ Directrices de arquitectura, límites de paquetes y mapa de helpers SSOT actuale
 * `peer_rpc.go` — **`callPeer` / `forEachPeer`** + `PeerRPC*` (`PeerRPCQUICWait` = `HolePunchWait`).
 * `vfs_sync.go` — sync, `downloadWorker`, **`fetchBlobFromPeer`**.
 * `compute_bridge.go` — bids, `DispatchTask`, QUIC ensure.
-* `handlers.go` — mTLS HTTP; invite HTTP → `LocalInviteGenerate`.
-* `relay.go`, `nat.go`, `bandwidth.go`, `tls_rotation.go`, `registry.go`, `invite.go`.
+* `handlers.go` — mTLS HTTP; invite HTTP → `LocalInviteGenerate` (CA-key gated).
+* `peer_rpc.go` — `callPeer` / `errPeerSkipped` / `forEachPeer`.
+* `vfs_sync.go` — sync, `downloadWorker`, **`fetchBlobFromPeer`**; Snapshot errors abort sync.
+* `tls_rotation.go` — push acks before local reload.
 
 ### 4. P2P — `internal/p2p`
 * `p2p_client.go` — `PeerClient` **incluye** routing: `UpdatePeerRoute`, `SetNodeID`, `SetOwnAddress`, `CloseIdleConnections`, `SetQUICManager` (sin type assertions).
@@ -92,6 +94,8 @@ Si al cambiar una implementación o agregar una variante hay que tocar **más de
 | Bind offline fallbacks | `offlineHooks` in `invoke.go` (compute L2) |
 | Socket path | `protocol.UnixSockPath` |
 | Invite TTL | `protocol.DefaultInviteMinutes` |
+| Invite mint / join | `hasCAKey` + `LocalInviteGenerate`; join `CheckAndConsume` |
+| VFS snapshot | `IndexStore.Snapshot() (map, error)` — never empty-on-error for GC |
 | Dial / punch / handler timeouts | `protocol.DialTimeout*` / `HolePunch*` / `HandlerDial*` |
 | Schema streaming CLI | `GetServiceSchema` |
 | TLS config | `p2p.LoadNodeTLS` |

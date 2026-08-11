@@ -82,6 +82,12 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Never trust self-claimed IsSponsor; sticky only if we already knew them as sponsor
+	// (e.g. from a prior trusted announce response from the CA).
+	req.Address.IsSponsor = false
+	if existing, exists := s.Peers.GetPeerRecord(req.ID); exists {
+		req.Address.IsSponsor = existing.IsSponsor
+	}
 	s.AddPeer(req.ID, req.Address)
 
 	sponsorAddr := s.Config.Address
@@ -100,7 +106,7 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, _ := json.Marshal(payload)
 		s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 			if peerID == newID {
-				return nil
+				return errPeerSkipped
 			}
 			if err := s.peerClient.AddPeer(peerID, bytes.NewBuffer(bodyBytes)); err != nil {
 				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerID, "newPeer", newAddress, "error", err)
@@ -128,11 +134,19 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addr := req.Address
+	existing, exists := s.Peers.GetPeerRecord(req.ID)
 	if cn != req.ID {
-		// Gossip fan-out: non-owners must not hijack primary via a higher sequence.
-		if existing, exists := s.Peers.GetPeerRecord(req.ID); exists && addr.Sequence > existing.Sequence {
+		// Gossip fan-out: non-owners must not hijack primary via a higher sequence
+		// or elevate IsSponsor (that flag is privilege-bearing for CA rotation).
+		if exists && addr.Sequence > existing.Sequence {
 			addr.Sequence = existing.Sequence
 		}
+		addr.IsSponsor = exists && existing.IsSponsor
+	} else if exists {
+		// Owner re-announce: sticky sponsor only; never accept self-elevation.
+		addr.IsSponsor = existing.IsSponsor
+	} else {
+		addr.IsSponsor = false
 	}
 	s.AddPeer(req.ID, addr)
 	s.Config.Logger.Info("New peer registered", "peer_id", req.ID, "address", addr)

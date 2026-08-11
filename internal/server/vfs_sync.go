@@ -9,15 +9,24 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"sort"
+	"sync"
 )
 
 func (s *Server) ExecuteSync() error {
+	var (
+		mu       sync.Mutex
+		lastErr  error
+		anyOK    bool
+	)
 	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync}, func(ctx context.Context, peerID string) error {
 		s.ensureQUICSession(peerID)
 		ctx = context.WithValue(ctx, p2p.BypassHolePunchKey{}, true)
 		manifest, err := s.peerClient.FetchManifest(ctx, peerID)
 		if err != nil {
 			s.Config.Logger.Warn("Sync skipped for peer: couldn't fetch manifest", "peer", peerID, "error", err)
+			mu.Lock()
+			lastErr = err
+			mu.Unlock()
 			return err
 		}
 		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
@@ -25,7 +34,15 @@ func (s *Server) ExecuteSync() error {
 		// Push local entries the peer lacks (or has older). Critical after partition
 		// heal: the isolated node can reach the sponsor, but the sponsor often cannot
 		// dial the reconnected peer (DNS lag / stale IP) and has no relay of its own.
-		for name, local := range s.Storage.GetVFSSnapshot() {
+		snapshot, snapErr := s.Storage.GetVFSSnapshot()
+		if snapErr != nil {
+			s.Config.Logger.Error("Sync aborted: cannot load local VFS snapshot", "error", snapErr)
+			mu.Lock()
+			lastErr = snapErr
+			mu.Unlock()
+			return snapErr
+		}
+		for name, local := range snapshot {
 			remote, ok := manifest[name]
 			if ok && !local.Deleted && remote.Hash == local.Hash && remote.Version >= local.Version {
 				continue
@@ -48,9 +65,15 @@ func (s *Server) ExecuteSync() error {
 				s.Config.Logger.Warn("Download enqueue skipped", "peer", peerID, "file", file.Name, "error", err)
 			}
 		}
+		mu.Lock()
+		anyOK = true
+		mu.Unlock()
 		return nil
 	})
-	return nil
+	if anyOK {
+		return nil
+	}
+	return lastErr
 }
 
 func (s *Server) downloadWorker() {
@@ -141,7 +164,11 @@ func (s *Server) FetchFileOnDemand(name string) error {
 }
 
 func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
-	snapshot := s.Storage.GetVFSSnapshot()
+	snapshot, err := s.Storage.GetVFSSnapshot()
+	if err != nil {
+		s.Config.Logger.Error("Failed to load VFS snapshot for list", "error", err)
+		return nil
+	}
 	upSpeed, downSpeed := s.GetCurrentBandwidth()
 
 	var list []protocol.VFSFileStatus
@@ -179,7 +206,14 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 // announceAndSync announces to bootstrap (if set) then runs ExecuteSync.
 func (s *Server) announceAndSync() error {
 	if s.Config.BootstrapNode != "" {
-		_ = s.AnnouncePresence(s.Config.BootstrapNode)
+		if err := s.AnnouncePresence(s.Config.BootstrapNode); err != nil {
+			s.Config.Logger.Warn("Announce before sync failed", "bootstrap", s.Config.BootstrapNode, "error", err)
+			syncErr := s.ExecuteSync()
+			if syncErr != nil {
+				return fmt.Errorf("announce failed: %v; sync failed: %w", err, syncErr)
+			}
+			return fmt.Errorf("announce failed: %w", err)
+		}
 	}
 	return s.ExecuteSync()
 }
@@ -202,7 +236,9 @@ func (s *Server) LocalVFSSubscribe(name string, subscribe bool) error {
 	if name == "" {
 		return protocol.MissingParamError("name")
 	}
-	s.Storage.SetSubscription(name, subscribe)
+	if err := s.Storage.SetSubscription(name, subscribe); err != nil {
+		return err
+	}
 	if subscribe {
 		go func() { _ = s.announceAndSync() }()
 	}

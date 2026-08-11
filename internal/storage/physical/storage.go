@@ -76,15 +76,25 @@ func (st *Storage) SaveBlob(content io.Reader) (string, int64, error) {
 	}
 	generatedHash := hex.EncodeToString(hasher.Sum(nil))
 	fullpath := filepath.Join(st.baseDir, generatedHash)
-	_, err = os.Stat(fullpath)
+	fi, err := os.Stat(fullpath)
 	if err := file.Close(); err != nil {
 		return "", 0, fmt.Errorf("failed to close file safely: %w", err)
 	}
 
-	if os.IsNotExist(err) {
-		err = os.Rename(file.Name(), fullpath)
-		if err != nil {
-			return "", 0, err
+	if err != nil && !os.IsNotExist(err) {
+		return "", 0, fmt.Errorf("stat blob destination: %w", err)
+	}
+	if err == nil {
+		if fi.IsDir() {
+			return "", 0, fmt.Errorf("blob destination is a directory: %s", generatedHash)
+		}
+		// CAS object already present — idempotent success.
+	} else {
+		if renameErr := os.Rename(file.Name(), fullpath); renameErr != nil {
+			// Concurrent SaveBlob of same content may have won the rename.
+			if _, statErr := os.Stat(fullpath); statErr != nil {
+				return "", 0, renameErr
+			}
 		}
 	}
 

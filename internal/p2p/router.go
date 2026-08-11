@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -90,9 +91,12 @@ func (r *P2PRoundTripper) sendRelayMessage(ctx context.Context, sponsorAddr stri
 
 func (r *P2PRoundTripper) RemovePeerRoute(peerID string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.routes != nil {
 		delete(r.routes, peerID)
+	}
+	r.mu.Unlock()
+	if r.QM != nil {
+		r.QM.CloseAndRemoveSession(peerID, 0, "peer removed")
 	}
 }
 
@@ -126,8 +130,12 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("unknown peer ID in routing: %s", peerID)
 	}
 
-	// Clone the request so we don't modify the original
+	// Clone the request so we don't modify the original. Buffer the body once so
+	// relay / direct / QUIC fallbacks can each re-read it after a failed phase.
 	clone := req.Clone(req.Context())
+	if err := bufferRequestBody(clone); err != nil {
+		return nil, fmt.Errorf("buffer request body: %w", err)
+	}
 
 	// Try existing QUIC session first
 	if resp, handled := r.tryExistingSession(clone, req, peerID); handled {
@@ -203,6 +211,9 @@ func (r *P2PRoundTripper) tryDirectAddresses(clone *http.Request, peerID string,
 			continue
 		}
 
+		if err := resetRequestBody(clone); err != nil {
+			return nil, err
+		}
 		clone.URL.Scheme = parsedAddr.Scheme
 		clone.URL.Host = parsedAddr.Host
 		r.logDebug("Routing direct request", "url", clone.URL.String())
@@ -268,8 +279,47 @@ func (r *P2PRoundTripper) dialDirect(clone *http.Request, peerID string, parsedA
 // body the relay refuses.
 var errRelayPayloadTooLarge = errors.New("payload exceeds relay size limit")
 
+// bufferRequestBody materializes clone.Body so later routing phases can replay it.
+func bufferRequestBody(clone *http.Request) error {
+	if clone.Body == nil || clone.Body == http.NoBody {
+		return nil
+	}
+	if clone.GetBody != nil {
+		return nil
+	}
+	bodyBytes, err := io.ReadAll(clone.Body)
+	_ = clone.Body.Close()
+	if err != nil {
+		return err
+	}
+	clone.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	clone.ContentLength = int64(len(bodyBytes))
+	clone.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+	}
+	return nil
+}
+
+func resetRequestBody(clone *http.Request) error {
+	if clone.GetBody == nil {
+		return nil
+	}
+	body, err := clone.GetBody()
+	if err != nil {
+		return err
+	}
+	if clone.Body != nil {
+		_ = clone.Body.Close()
+	}
+	clone.Body = body
+	return nil
+}
+
 // tryRelay tunnels the request through the sponsor.
 func (r *P2PRoundTripper) tryRelay(clone *http.Request, peerID, sponsorAddr string) (protocol.RelayResponse, error) {
+	if err := resetRequestBody(clone); err != nil {
+		return protocol.RelayResponse{}, fmt.Errorf("reset relay body: %w", err)
+	}
 	relayReq := NewRelayRequest(peerID, clone.Method, RequestPathWithQuery(clone.URL), nil, nil)
 	if clone.Body != nil {
 		bodyBytes, err := io.ReadAll(clone.Body)
@@ -364,6 +414,9 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(clone *http.Request, req *http.Re
 }
 
 func (r *P2PRoundTripper) sendRequestOverQUIC(sess *quic.Conn, req *http.Request, clone *http.Request) (*http.Response, error) {
+	if err := resetRequestBody(clone); err != nil {
+		return nil, err
+	}
 	stream, err := sess.OpenStreamSync(req.Context())
 	if err != nil {
 		return nil, err

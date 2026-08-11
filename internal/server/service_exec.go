@@ -130,6 +130,18 @@ func (s *Server) LocalServiceRun(serviceName string, payloadStr string, sortStra
 		return protocol.ServiceTaskResponse{}, err
 	}
 	s.ingestTaskOutputs(&resp, targetPeerID)
+	if resp.Status == "failed" {
+		errMsg := resp.Error
+		if errMsg == "" && resp.Outputs != nil {
+			if e, ok := resp.Outputs["error"].(string); ok {
+				errMsg = e
+			}
+		}
+		if errMsg == "" {
+			errMsg = "task failed"
+		}
+		return resp, fmt.Errorf("%s", errMsg)
+	}
 	return resp, nil
 }
 

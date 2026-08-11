@@ -77,7 +77,7 @@ func TestFilePropagationAcrossCluster(t *testing.T) {
 	fileName := "shared.txt"
 	fileContent := "content to propagate"
 	for _, srv := range servers {
-		srv.Storage.SetSubscription(fileName, true)
+		_ = srv.Storage.SetSubscription(fileName, true)
 	}
 
 	expectedHash := UploadFileSimulated(t, servers[0], fileName, fileContent)
@@ -172,8 +172,8 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 	sv2.AddPeer("1", protocol.AddressRecord{Addresses: []string{sv1.Config.Address}})
 
 	fileName := "test14.txt"
-	sv1.Storage.SetSubscription(fileName, true)
-	sv2.Storage.SetSubscription(fileName, true)
+	_ = sv1.Storage.SetSubscription(fileName, true)
+	_ = sv2.Storage.SetSubscription(fileName, true)
 
 	fileContent := "hello from test14!!"
 	UploadFileSimulated(t, sv1, fileName, fileContent)
@@ -297,11 +297,12 @@ func TestFileParameterTypeValidatesAsString(t *testing.T) {
 	})
 	require.NoError(t, provider.Compute.RegisterNewService(schema, handler))
 
-	// Valid: string path should pass validation (DispatchTask returns nil)
+	// Valid: string value should pass validation (DispatchTask returns nil).
+	// Use a non-filesystem-looking string so staging does not fail-closed on Stat.
 	validTask := protocol.TaskRequest{
 		TaskID:  "file-valid",
 		Service: "compressor",
-		Payload: map[string]any{"input": "/vfs/document.pdf"},
+		Payload: map[string]any{"input": "document.pdf"},
 	}
 	err := provider.DispatchTask(provider.Config.Address, validTask)
 	require.NoError(t, err, "file param with valid string path should pass validation")
@@ -351,7 +352,7 @@ func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 
 	srv := NewServer(t, cfg, mockClient)
 	for i := range 5 {
-		srv.Storage.SetSubscription(fmt.Sprintf("file_%d.txt", i), true)
+		_ = srv.Storage.SetSubscription(fmt.Sprintf("file_%d.txt", i), true)
 	}
 	srv.AddPeer("peer1", protocol.AddressRecord{Addresses: []string{"https://fake:8080"}})
 	start := time.Now()
@@ -359,7 +360,8 @@ func TestServerWorkerPoolLimitsConcurrency(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		snapshot := srv.Storage.GetVFSSnapshot()
+		snapshot, err := srv.Storage.GetVFSSnapshot()
+		require.NoError(t, err)
 		if len(snapshot) < 5 {
 			return false
 		}
@@ -401,7 +403,7 @@ func TestServerExecuteSyncRespectsTimeouts(t *testing.T) {
 	start := time.Now()
 
 	err := srv.ExecuteSync()
-	require.NoError(t, err)
+	require.Error(t, err, "ExecuteSync must surface deadline when every peer sync fails")
 
 	duration := time.Since(start)
 
@@ -535,8 +537,8 @@ func TestNodeAnnounceAndSyncPropagation(t *testing.T) {
 	newcomer := NewServer(t, testutil.DefaultConfig(t, "newcomer-node"), nil)
 
 	fileName := "sync_target.txt"
-	sponsor.Storage.SetSubscription(fileName, true)
-	newcomer.Storage.SetSubscription(fileName, true)
+	_ = sponsor.Storage.SetSubscription(fileName, true)
+	_ = newcomer.Storage.SetSubscription(fileName, true)
 
 	fileContent := "Data that newcomer needs to download"
 	expectedHash := UploadFileSimulated(t, sponsor, fileName, fileContent)
@@ -596,7 +598,7 @@ func TestDownloadWorkerProcessesDeletion(t *testing.T) {
 	}
 
 	srv := NewServer(t, cfg, mockClient)
-	srv.Storage.SetSubscription(fileName, true)
+	_ = srv.Storage.SetSubscription(fileName, true)
 	srv.AddPeer("peer1", protocol.AddressRecord{Addresses: []string{"https://fake:8080"}})
 
 	// Phase 1: Sync the file so the blob exists locally
@@ -703,7 +705,7 @@ func TestSnapshotReflectsFullClusterState(t *testing.T) {
 	// All nodes subscribe to all files
 	for _, srv := range servers {
 		for _, f := range files {
-			srv.Storage.SetSubscription(f.Name, true)
+			_ = srv.Storage.SetSubscription(f.Name, true)
 		}
 	}
 
@@ -1895,6 +1897,7 @@ func TestSchemaNotifyRejectsInvalidPipeline(t *testing.T) {
 	registerCycleCheckServices(t, srv)
 
 	payload := protocol.PipelineNotification{
+		NodeID: srv.Config.ID,
 		Schema: cyclicPipeline(),
 		Action: protocol.ActionAdd,
 	}
@@ -1921,7 +1924,7 @@ func TestSchemaNotifyRejectsInvalidPipeline(t *testing.T) {
 			{FromStep: "a", FromPort: "out", ToStep: "b", ToPort: "invented"},
 		},
 	}
-	body2, _ := json.Marshal(protocol.PipelineNotification{Schema: invalidPort, Action: protocol.ActionAdd})
+	body2, _ := json.Marshal(protocol.PipelineNotification{NodeID: srv.Config.ID, Schema: invalidPort, Action: protocol.ActionAdd})
 	req2, err := http.NewRequest(http.MethodPost, srv.Config.Address+protocol.PathSchemasNotify, bytes.NewReader(body2))
 	require.NoError(t, err)
 	req2.Header.Set("Content-Type", "application/json")

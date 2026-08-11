@@ -2,8 +2,10 @@ package server_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -28,12 +30,38 @@ func (ts *TestServer) ExpireInvite(secret string) {
 	ts.SetPendingInviteExpiration(secret, time.Now().Add(-1*time.Minute))
 }
 
+func copyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	in, err := os.Open(src)
+	require.NoError(t, err)
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	require.NoError(t, err)
+	defer func() { _ = out.Close() }()
+	_, err = io.Copy(out, in)
+	require.NoError(t, err)
+}
+
 func NewServer(t *testing.T, cfg protocol.NodeConfig, mockClient p2p.PeerClient) *TestServer {
-	caPath := filepath.Dir(cfg.StoragePath)
-	testutil.InitClusterCA(t, caPath)
-	node := testutil.IssueNode(t, caPath, cfg.StoragePath, cfg.ID)
-	cfg.CAPath = node.CACertPath
-	serverTLS, clientTLS := node.ServerTLS, node.ClientTLS
+	// Shared CA lives at the per-test parent so helpers that call IssueNode(Dir(StoragePath))
+	// still find it. Each node also keeps a private copy under StoragePath/certs so
+	// rotation pushes cannot clobber a shared ca.crt mid-flight.
+	sharedCA := filepath.Dir(cfg.StoragePath)
+	if _, err := os.Stat(filepath.Join(sharedCA, "ca.crt")); err != nil {
+		testutil.InitClusterCA(t, sharedCA)
+	}
+	nodeCerts := filepath.Join(cfg.StoragePath, "certs")
+	require.NoError(t, os.MkdirAll(nodeCerts, 0755))
+
+	node := testutil.IssueNode(t, sharedCA, nodeCerts, cfg.ID)
+	sharedCACert, sharedCAKey := p2p.CACertPaths(sharedCA)
+	localCACert, localCAKey := p2p.CACertPaths(nodeCerts)
+	copyFile(t, sharedCACert, localCACert)
+	copyFile(t, sharedCAKey, localCAKey)
+
+	cfg.CAPath = localCACert
+	serverTLS, clientTLS, err := p2p.LoadNodeTLS(localCACert, node.CertPath, node.KeyPath)
+	require.NoError(t, err)
 
 	customTransport := &http.Transport{
 		TLSClientConfig:   clientTLS,

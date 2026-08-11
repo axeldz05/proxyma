@@ -72,10 +72,12 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
 * `service_exec.go` — Run/Stream + ingest (`ResultLocalPath`); **`submitTrackedTask`**.
-* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
-* `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; **`HandleAddPeer`** requires CN (owner full add; gossip clamps higher seq); HTTP mounts use **`protocol.Path*`** (`handlePeerIDAction`, schema notify re-validates).
+* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`errPeerSkipped`** (no liveness update) + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`.
+* `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; **`HandleAddPeer`** requires CN (owner sticky IsSponsor only; gossip cannot elevate); schema/hole-punch CN-bound like services; HTTP mounts use **`protocol.Path*`**.
+* Invites/rotate: **`hasCAKey`** gates mint; join **`CheckAndConsume`**; rotate requires peer push acks before local TLS reload.
 * `vfs_sync.downloadWorker` — fallback skips source peer; **`ErrBlobDiscarded`** → debug only (callPeer keeps peer online).
-* `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap.
+* VFS: **`Snapshot() (map, error)`** — orphan GC aborts on error; `physical.Storage` by pointer; stage fail-closed on missing local paths.
+* `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap; relay reply CN must match target.
 
 ### P2P — `internal/p2p/`
 * `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`.
@@ -174,8 +176,8 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Key Workflows
 
 ### Pairing
-1. `LocalInviteGenerate` → `(token, expires)` + `protocol.DefaultInviteMinutes`.
-2. Join CSR → `/cluster/join` (or `ForwardRelay`).
+1. `LocalInviteGenerate` → `(token, expires)` + `protocol.DefaultInviteMinutes` (**CA key required**).
+2. Join CSR → `/cluster/join` with **`CheckAndConsume`** (or `ForwardRelay`).
 3. `mTLSGuard` on inter-node HTTP (`peerCNFromRequest`).
 
 ### VFS / Compute

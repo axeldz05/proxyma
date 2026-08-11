@@ -209,7 +209,11 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 }
 
 func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema protocol.PipelineSchema) {
-	pipelineCtx := loadPipelineCtx(t.Payload)
+	pipelineCtx, err := loadPipelineCtx(t.Payload)
+	if err != nil {
+		c.sendPipelineError(t, fmt.Errorf("invalid pipeline context: %w", err))
+		return
+	}
 	if pipelineCtx.Outputs == nil {
 		pipelineCtx.Outputs = make(map[string]map[string]any)
 	}
@@ -367,7 +371,11 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 }
 
 func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.PipelineSchema) {
-	pipelineCtx := loadPipelineCtx(t.Payload)
+	pipelineCtx, err := loadPipelineCtx(t.Payload)
+	if err != nil {
+		c.sendPipelineError(t, fmt.Errorf("invalid pipeline context: %w", err))
+		return
+	}
 
 	if pipelineCtx.CurrentStep < len(schema.Steps) {
 		nextStep := schema.Steps[pipelineCtx.CurrentStep]
@@ -508,17 +516,23 @@ func (c *ComputeEngine) MarkTaskAsFailed(req protocol.TaskRequest, reason string
 		TaskID:  req.TaskID,
 		Service: req.Service,
 		Status:  "failed",
+		Error:   reason,
 		Outputs: map[string]any{"error": reason},
 	})
 }
 
-func loadPipelineCtx(payload map[string]any) protocol.PipelineContext {
+func loadPipelineCtx(payload map[string]any) (protocol.PipelineContext, error) {
 	var pipelineCtx protocol.PipelineContext
 	if rawPipeline, ok := payload["$pipeline"]; ok {
-		b, _ := json.Marshal(rawPipeline)
-		_ = json.Unmarshal(b, &pipelineCtx)
+		b, err := json.Marshal(rawPipeline)
+		if err != nil {
+			return pipelineCtx, fmt.Errorf("marshal pipeline context: %w", err)
+		}
+		if err := json.Unmarshal(b, &pipelineCtx); err != nil {
+			return pipelineCtx, fmt.Errorf("unmarshal pipeline context: %w", err)
+		}
 	}
-	return pipelineCtx
+	return pipelineCtx, nil
 }
 
 func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {
@@ -530,7 +544,7 @@ func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {
 		count++
 		if resp, ok := value.(protocol.ServiceTaskResponse); ok {
 			if resp.Status == "completed" || resp.Status == "failed" {
-				if taskIDStr, ok := key.(string); ok {
+				if taskIDStr, ok := key.(string); ok && taskIDStr != response.TaskID {
 					keysToDelete = append(keysToDelete, taskIDStr)
 				}
 			}

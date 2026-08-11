@@ -64,39 +64,54 @@ func (nm *NATMapper) Start() {
 }
 
 func (nm *NATMapper) runMapper() {
-	dev, err := nm.discoverGateway()
-	// Gateway discovery blocks on the network for seconds, so the owner may already
-	// be gone. Returning silently keeps the goroutine from outliving it and from
-	// logging into a closed sink.
-	if nm.stopped() {
-		return
-	}
-	if err != nil {
-		if nm.logger != nil {
-			nm.logger.Warn("Failed to discover NAT gateway (UPnP/NAT-PMP might be disabled on your router)", "error", err)
-		}
-		return
-	}
-
-	nm.mu.Lock()
-	nm.natDev = dev
-	nm.mu.Unlock()
-
-	if nm.logger != nil {
-		nm.logger.Info("NAT gateway discovered", "type", dev.Type())
-	}
-
-	nm.refreshMappings()
-
-	ticker := time.NewTicker(15 * time.Minute)
-	defer ticker.Stop()
-
+	backoff := time.Second
+	const maxBackoff = 5 * time.Minute
 	for {
-		select {
-		case <-nm.ctx.Done():
+		if nm.stopped() {
 			return
-		case <-ticker.C:
-			nm.refreshMappings()
+		}
+		dev, err := nm.discoverGateway()
+		if nm.stopped() {
+			return
+		}
+		if err != nil {
+			if nm.logger != nil {
+				nm.logger.Warn("Failed to discover NAT gateway (UPnP/NAT-PMP might be disabled on your router); retrying",
+					"error", err, "retryIn", backoff)
+			}
+			select {
+			case <-nm.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		nm.mu.Lock()
+		nm.natDev = dev
+		nm.mu.Unlock()
+
+		if nm.logger != nil {
+			nm.logger.Info("NAT gateway discovered", "type", dev.Type())
+		}
+
+		nm.refreshMappings()
+
+		ticker := time.NewTicker(15 * time.Minute)
+		for {
+			select {
+			case <-nm.ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				nm.refreshMappings()
+			}
 		}
 	}
 }
@@ -113,14 +128,14 @@ func (nm *NATMapper) refreshMappings() {
 	}
 
 	if tcpPort > 0 {
-		nm.mapPort(dev, "tcp", tcpPort, "proxyma-tcp", func(ext int) { nm.tcpMappedPort = ext })
+		nm.mapPort(dev, "tcp", tcpPort, "proxyma-tcp", func(ext int) { nm.tcpMappedPort = ext }, func() { nm.tcpMappedPort = 0 })
 	}
 	if udpPort > 0 {
-		nm.mapPort(dev, "udp", udpPort, "proxyma-udp", func(ext int) { nm.udpMappedPort = ext })
+		nm.mapPort(dev, "udp", udpPort, "proxyma-udp", func(ext int) { nm.udpMappedPort = ext }, func() { nm.udpMappedPort = 0 })
 	}
 }
 
-func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, setMapped func(int)) {
+func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, setMapped func(int), clearMapped func()) {
 	extPort, err := dev.AddPortMapping(proto, port, desc, 30*time.Minute)
 	// AddPortMapping talks to the router, so re-check the lifetime before reporting.
 	if nm.stopped() {
@@ -133,6 +148,9 @@ func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, s
 		if nm.logger != nil {
 			nm.logger.Warn("Failed to map "+strings.ToUpper(proto)+" port", "internalPort", port, "error", err)
 		}
+		nm.mu.Lock()
+		clearMapped()
+		nm.mu.Unlock()
 		return
 	}
 	nm.mu.Lock()

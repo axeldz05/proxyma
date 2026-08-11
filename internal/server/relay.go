@@ -43,8 +43,13 @@ func rejectOversizedRelay(w http.ResponseWriter, size int, what string) bool {
 type RelayManager struct {
 	server  *Server
 	queues  map[string]chan protocol.RelayRequest
-	waiters map[string]chan protocol.RelayResponse
+	waiters map[string]*relayWaiter
 	mu      sync.RWMutex
+}
+
+type relayWaiter struct {
+	ch           chan protocol.RelayResponse
+	expectedPeer string
 }
 
 // NewRelayManager creates a new RelayManager.
@@ -52,7 +57,7 @@ func NewRelayManager(server *Server) *RelayManager {
 	return &RelayManager{
 		server:  server,
 		queues:  make(map[string]chan protocol.RelayRequest),
-		waiters: make(map[string]chan protocol.RelayResponse),
+		waiters: make(map[string]*relayWaiter),
 	}
 }
 
@@ -75,12 +80,16 @@ func (rm *RelayManager) GetOrCreateQueue(peerID string) (chan protocol.RelayRequ
 }
 
 // RegisterWaiter creates and registers a response waiter channel for a request ID.
-func (rm *RelayManager) RegisterWaiter(reqID string) chan protocol.RelayResponse {
+// expectedPeer is the only CN allowed to deliver HandleRelayReply for this ReqID.
+func (rm *RelayManager) RegisterWaiter(reqID, expectedPeer string) chan protocol.RelayResponse {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	waiter := make(chan protocol.RelayResponse, 1)
+	waiter := &relayWaiter{
+		ch:           make(chan protocol.RelayResponse, 1),
+		expectedPeer: expectedPeer,
+	}
 	rm.waiters[reqID] = waiter
-	return waiter
+	return waiter.ch
 }
 
 // RemoveWaiter unregisters a response waiter channel.
@@ -90,12 +99,15 @@ func (rm *RelayManager) RemoveWaiter(reqID string) {
 	delete(rm.waiters, reqID)
 }
 
-// GetWaiter retrieves a registered response waiter channel.
-func (rm *RelayManager) GetWaiter(reqID string) (chan protocol.RelayResponse, bool) {
+// GetWaiter retrieves a registered response waiter and the peer CN allowed to reply.
+func (rm *RelayManager) GetWaiter(reqID string) (ch chan protocol.RelayResponse, expectedPeer string, ok bool) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	waiter, exists := rm.waiters[reqID]
-	return waiter, exists
+	if !exists {
+		return nil, "", false
+	}
+	return waiter.ch, waiter.expectedPeer, true
 }
 
 func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +178,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waiter := s.Relays.RegisterWaiter(req.ReqID)
+	waiter := s.Relays.RegisterWaiter(req.ReqID, req.Target)
 	defer s.Relays.RemoveWaiter(req.ReqID)
 
 	// Send to queue (non-blocking if full)
@@ -202,9 +214,21 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waiter, exists := s.Relays.GetWaiter(resp.ReqID)
+	cn, ok := peerCNFromRequest(r)
+	if !ok {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return
+	}
+
+	waiter, expectedPeer, exists := s.Relays.GetWaiter(resp.ReqID)
 	if !exists {
 		utils.RespondError(w, http.StatusNotFound, "ReqID not found or expired")
+		return
+	}
+	if expectedPeer != "" && cn != expectedPeer {
+		s.Config.Logger.Warn("Reject relay reply: CN does not match target peer for ReqID",
+			"reqID", resp.ReqID, "cn", cn, "expected", expectedPeer)
+		utils.RespondError(w, http.StatusForbidden, "certificate CN must match relay target peer")
 		return
 	}
 

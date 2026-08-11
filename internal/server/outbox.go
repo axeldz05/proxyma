@@ -85,6 +85,12 @@ func (s *Server) flushOutbox() {
 	if s.Storage == nil {
 		return
 	}
+	// Single-flight: overlapping ticker ticks must not double-deliver.
+	if !s.outboxFlushMu.TryLock() {
+		return
+	}
+	defer s.outboxFlushMu.Unlock()
+
 	rawEntries, err := s.Storage.ListOutboxRaw()
 	if err != nil || len(rawEntries) == 0 {
 		return

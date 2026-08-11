@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"time"
@@ -8,8 +9,14 @@ import (
 
 type LocalService = protocol.LocalService
 
+var errNotCAAuthority = errors.New("only the CA authority node can mint invites")
+
 // LocalInviteGenerate creates an invite token and returns it with its expiry (SSOT).
+// Only the node that holds ca.key may mint invites (cluster expansion privilege).
 func (s *Server) LocalInviteGenerate(validForMinutes int) (token string, expires time.Time, err error) {
+	if !s.hasCAKey() {
+		return "", time.Time{}, errNotCAAuthority
+	}
 	if validForMinutes <= 0 {
 		validForMinutes = protocol.DefaultInviteMinutes
 	}

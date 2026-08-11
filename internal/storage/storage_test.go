@@ -77,7 +77,7 @@ func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 
 	engine := testutil.NewStorageEngine(t, cfg)
 
-	engine.SetSubscription(fileName, true)
+	_ = engine.SetSubscription(fileName, true)
 
 	remoteManifest := map[string]protocol.IndexEntry{
 		fileName: {Name: fileName, Hash: expectedHash, Version: 1, Size: int64(len(fileContent))},
@@ -110,7 +110,7 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 
 	engine := testutil.NewStorageEngine(t, cfg)
 
-	engine.SetSubscription(fileAName, true)
+	_ = engine.SetSubscription(fileAName, true)
 	remoteManifest := map[string]protocol.IndexEntry{
 		fileAName: {Name: fileAName, Hash: hashA, Version: 1},
 		fileBName: {Name: fileBName, Hash: hashB, Version: 1},
@@ -159,7 +159,8 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 	err = engine.DeleteLocalFile(fileC)
 	require.NoError(t, err)
 
-	snapshot := engine.GetVFSSnapshot()
+	snapshot, err := engine.GetVFSSnapshot()
+	require.NoError(t, err)
 
 	require.Len(t, snapshot, 3, "Snapshot must contain all tracked files including tombstones")
 
@@ -273,7 +274,7 @@ func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
 	engine := testutil.NewStorageEngine(t, cfg)
 
 	fileName := "deleted_file.txt"
-	engine.SetSubscription(fileName, true)
+	_ = engine.SetSubscription(fileName, true)
 
 	remoteManifest := map[string]protocol.IndexEntry{
 		fileName: {Name: fileName, Hash: "hash-deleted", Version: 2, Deleted: true},
@@ -304,7 +305,7 @@ func TestHandleNotificationRespectsSubscription(t *testing.T) {
 
 	subscribedFile := "subscribed.txt"
 	unsubscribedFile := "unsubscribed.txt"
-	engine.SetSubscription(subscribedFile, true)
+	_ = engine.SetSubscription(subscribedFile, true)
 
 	tests := []struct {
 		name           string
@@ -409,7 +410,8 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 	wg.Wait()
 
 	// Verify consistent state: all files should exist in VFS
-	snapshot := engine.GetVFSSnapshot()
+	snapshot, err := engine.GetVFSSnapshot()
+	require.NoError(t, err)
 	require.Equal(t, goroutines, len(snapshot), "All files should be tracked in VFS")
 }
 
@@ -606,7 +608,8 @@ func TestStageLocalFileDistinctLogicalNamesForSameBasename(t *testing.T) {
 	require.Equal(t, int64(len("content-B")), sizeB)
 	require.NotEqual(t, hashA, hashB)
 
-	snap := engine.GetVFSSnapshot()
+	snap, err := engine.GetVFSSnapshot()
+	require.NoError(t, err)
 	var names []string
 	for name, entry := range snap {
 		if entry.Deleted {

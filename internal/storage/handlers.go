@@ -5,6 +5,7 @@ import (
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
 	"proxyma/internal/utils"
+	"strings"
 )
 
 func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -52,12 +53,20 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if updated && se.IsSubscribed(notification.File.Name) {
-		hasBlob, _ := se.HasPhysicalBlob(notification.File.Hash)
+		hasBlob, blobErr := se.HasPhysicalBlob(notification.File.Hash)
+		if blobErr != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "Failed to check local blob")
+			return
+		}
 
 		if !hasBlob {
 			err := se.onDownloadNeeded(notification.File, notification.Source)
 			if err != nil {
-				utils.RespondError(w, http.StatusForbidden, "Network rejected the source")
+				if strings.Contains(err.Error(), "queue full") {
+					utils.RespondError(w, http.StatusServiceUnavailable, "Download queue full")
+					return
+				}
+				utils.RespondError(w, http.StatusBadGateway, "Could not enqueue download from source")
 				return
 			}
 			utils.RespondMessage(w, http.StatusAccepted, "Downloading file")
@@ -91,13 +100,22 @@ func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	s.SetSubscription(fileName, true)
+	if err := s.SetSubscription(fileName, true); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to persist subscription")
+		return
+	}
 	s.logger.Info("Subscription added", "file", fileName)
 	utils.RespondMessage(w, http.StatusOK, "Subscribed to "+fileName)
 }
 
 func (s *StorageEngine) HandleManifest(w http.ResponseWriter, r *http.Request) {
-	utils.RespondJSON(w, http.StatusOK, s.vfs.Snapshot())
+	snapshot, err := s.vfs.Snapshot()
+	if err != nil {
+		s.logger.Error("Failed to load VFS snapshot for manifest", "error", err)
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to load VFS manifest")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +126,11 @@ func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	err := s.DeleteLocalFile(fileName)
 	if err != nil {
-		utils.RespondError(w, http.StatusNotFound, err.Error())
+		if strings.Contains(err.Error(), "not found") {
+			utils.RespondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		utils.RespondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

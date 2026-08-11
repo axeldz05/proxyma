@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"sync"
 )
 
 // tlsClientMaterial is an immutable client cert + verify pair swapped on rotation (H1).
@@ -163,16 +164,26 @@ func (s *Server) RotateCAAndResignPeers() {
 		return
 	}
 
+	var (
+		pushMu   sync.Mutex
+		pushFail int
+	)
 	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 		cert, hasCert := s.Peers.GetPeerCertificate(peerID)
 		if !hasCert {
-			s.Config.Logger.Warn("No client certificate cached for peer, cannot re-sign. They must re-join.", "peerID", peerID)
-			return nil
+			s.Config.Logger.Error("No client certificate cached for peer; aborting local TLS reload", "peerID", peerID)
+			pushMu.Lock()
+			pushFail++
+			pushMu.Unlock()
+			return errPeerSkipped
 		}
 
 		newCertPEM, err := p2p.ReSignPeerCertificate(cert.PublicKey, peerID, s.Config.CAPath, caKeyPath)
 		if err != nil {
 			s.Config.Logger.Error("Failed to re-sign peer certificate", "peerID", peerID, "error", err)
+			pushMu.Lock()
+			pushFail++
+			pushMu.Unlock()
 			return err
 		}
 
@@ -182,13 +193,22 @@ func (s *Server) RotateCAAndResignPeers() {
 		})
 		if err != nil {
 			s.Config.Logger.Error("Failed to push rotated TLS certs to peer", "peerID", peerID, "error", err)
+			pushMu.Lock()
+			pushFail++
+			pushMu.Unlock()
 			return err
 		}
 		s.Config.Logger.Info("Successfully pushed rotated TLS certs to peer", "peerID", peerID)
 		return nil
 	})
 
-	// 4. Finally, reload our own TLS snapshots
+	if pushFail > 0 {
+		s.Config.Logger.Error("CA rotation push incomplete; keeping pre-rotation TLS in memory so peers are not locked out",
+			"failedPeers", pushFail)
+		return
+	}
+
+	// 4. Reload local TLS only after every registered peer acknowledged the new material.
 	err = s.ReloadTLSConfig(s.Config.CAPath, ownCertFile, ownKeyFile)
 	if err != nil {
 		s.Config.Logger.Error("Failed to reload own TLS config after rotation", "error", err)

@@ -99,3 +99,42 @@ func TestBurstPingsNoopOnNil(t *testing.T) {
 	p2p.BurstPings(nil, nil, "x", 5, time.Millisecond)
 	p2p.BurstPings(nil, &net.UDPAddr{}, "x", 0, 0)
 }
+
+func TestHolePunchPingDemuxDoesNotSteal(t *testing.T) {
+	t.Parallel()
+
+	raw, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+
+	wrapped := p2p.NewHolePunchPacketConn(raw)
+	waitA := wrapped.RegisterPingWait("peer-a")
+	waitB := wrapped.RegisterPingWait("peer-b")
+	defer wrapped.UnregisterPingWait("peer-a")
+	defer wrapped.UnregisterPingWait("peer-b")
+
+	go func() {
+		_ = wrapped.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 64)
+		_, _, _ = wrapped.ReadFrom(buf)
+	}()
+
+	peer, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = peer.Close() })
+	dst := raw.LocalAddr().(*net.UDPAddr)
+
+	_, err = peer.WriteTo(p2p.HolePunchPingPayload("peer-b"), dst)
+	require.NoError(t, err)
+
+	select {
+	case <-waitB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer-b waiter did not receive its ping")
+	}
+	select {
+	case <-waitA:
+		t.Fatal("peer-a waiter must not be signaled by peer-b ping")
+	case <-time.After(50 * time.Millisecond):
+	}
+}

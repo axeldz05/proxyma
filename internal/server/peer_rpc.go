@@ -27,10 +27,17 @@ const (
 	TaskWaitTimeout  = protocol.RPCTimeoutTaskWait
 )
 
+// errPeerSkipped means fn intentionally did not contact the peer.
+// callPeer must not update online/offline liveness for skips.
+var errPeerSkipped = errors.New("peer skipped")
+
 // callPeer runs fn against one peer and updates online/offline liveness (L2).
 func (s *Server) callPeer(ctx context.Context, peerID string, fn func(ctx context.Context, peerID string) error) error {
 	err := fn(ctx, peerID)
 	if err != nil {
+		if errors.Is(err, errPeerSkipped) {
+			return err
+		}
 		// Peer responded; blob was dropped locally due to VFS race — not unreachable.
 		if errors.Is(err, storage.ErrBlobDiscarded) {
 			s.SetPeerOnline(peerID, true)

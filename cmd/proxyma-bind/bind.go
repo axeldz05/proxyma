@@ -104,7 +104,7 @@ func dispatchUnixStreamOrLocal(
 		}
 
 		streamErr := false
-		_ = ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
+		scanErr := ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
 			if !resp.Success {
 				streamErr = true
 				if onError != nil {
@@ -117,6 +117,12 @@ func dispatchUnixStreamOrLocal(
 			}
 			return true
 		})
+		if scanErr != nil {
+			streamErr = true
+			if onError != nil {
+				onError(scanErr.Error())
+			}
+		}
 		// Mirror local path: OnComplete only after a clean stream (no error).
 		if !streamErr && onComplete != nil {
 			onComplete()
@@ -229,17 +235,23 @@ func WriteUnixRequest(conn net.Conn, action string, args map[string]string) erro
 }
 
 // ReadUnixResponse reads one unary UnixResponse from conn (L1).
+// Each Read gets a fresh idle deadline so large/slow payloads are not cut off by
+// a single absolute timeout measured from the start of the call.
 func ReadUnixResponse(conn net.Conn) (protocol.UnixResponse, error) {
 	var resp protocol.UnixResponse
 	var respBytes []byte
 	buf := make([]byte, 4096)
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(protocol.RPCTimeoutTaskWait))
 		n, err := conn.Read(buf)
 		if n > 0 {
 			respBytes = append(respBytes, buf[:n]...)
 		}
 		if err != nil {
 			break
+		}
+		if len(respBytes) > 32<<20 {
+			return resp, fmt.Errorf("daemon response exceeds 32MB")
 		}
 	}
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
@@ -250,13 +262,19 @@ func ReadUnixResponse(conn net.Conn) (protocol.UnixResponse, error) {
 
 // ScanUnixNDJSON scans line-delimited UnixResponse messages (L1).
 func ScanUnixNDJSON(conn net.Conn, onLine func(protocol.UnixResponse) bool) error {
-	return utils.ScanNDJSON(conn, func(line []byte) bool {
+	var parseErr error
+	err := utils.ScanNDJSON(conn, func(line []byte) bool {
 		var resp protocol.UnixResponse
 		if err := json.Unmarshal(line, &resp); err != nil {
-			return true
+			parseErr = fmt.Errorf("invalid NDJSON stream chunk: %w", err)
+			return false
 		}
 		return onLine(resp)
 	})
+	if parseErr != nil {
+		return parseErr
+	}
+	return err
 }
 
 func sendUnixSocketCommand(storagePath string, action string, args map[string]string) (json.RawMessage, error) {

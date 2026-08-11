@@ -1,12 +1,22 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
+
+func (s *Server) hasCAKey() bool {
+	if s.Config.CAPath == "" {
+		return false
+	}
+	_, err := os.Stat(p2p.CAKeyPath(s.Config.CAPath))
+	return err == nil
+}
 
 func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	req, ok := utils.DecodeJSONOrError[protocol.JoinRequest](w, r)
@@ -14,6 +24,7 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fast-fail invalid/expired secrets before heavier validation.
 	if _, exists := s.Invites.Check(req.Secret); !exists {
 		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
 		return
@@ -46,10 +57,18 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Consume atomically before signing so concurrent joins cannot reuse one invite.
+	expiration, consumed := s.Invites.CheckAndConsume(req.Secret)
+	if !consumed {
+		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
+		return
+	}
+
 	caKeyPath := p2p.CAKeyPath(s.Config.CAPath)
 
 	newCertPEM, err := p2p.SignCSR([]byte(req.CSR), s.Config.CAPath, caKeyPath)
 	if err != nil {
+		s.Invites.Add(req.Secret, expiration)
 		s.Config.Logger.Error("Error signing CSR", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to generate certificate")
 		return
@@ -57,11 +76,10 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 
 	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
 	if err != nil {
+		s.Invites.Add(req.Secret, expiration)
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error reading CA")
 		return
 	}
-
-	s.Invites.Consume(req.Secret)
 
 	utils.RespondJSON(w, http.StatusOK, protocol.JoinResponse{
 		Certificate: string(newCertPEM),
@@ -72,6 +90,10 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
+	if !s.hasCAKey() {
+		utils.RespondError(w, http.StatusForbidden, "Only the CA authority node can mint invites")
+		return
+	}
 	req, ok := utils.DecodeJSONOrError[protocol.InviteRequest](w, r)
 	if !ok {
 		return
@@ -82,7 +104,13 @@ func (s *Server) HandleGenerateInvite(w http.ResponseWriter, r *http.Request) {
 	smartToken, expiration, err := s.LocalInviteGenerate(req.ValidForMinutes)
 	if err != nil {
 		s.Config.Logger.Error("Failed to generate smart token", "error", err)
-		utils.RespondError(w, http.StatusInternalServerError, "Internal error")
+		status := http.StatusInternalServerError
+		if errors.Is(err, errNotCAAuthority) {
+			status = http.StatusForbidden
+			utils.RespondError(w, status, err.Error())
+			return
+		}
+		utils.RespondError(w, status, "Internal error")
 		return
 	}
 
@@ -99,6 +127,8 @@ func (s *Server) HandleClusterRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// IsSponsor is privilege-bearing; only accept when we already marked the peer
+	// as sponsor via a trusted path (never self-claimed gossip elevation).
 	record, exists := s.Peers.GetPeerRecord(peerID)
 	if !exists || !record.IsSponsor {
 		s.Config.Logger.Warn("Reject CA rotation push: sender is not a registered Sponsor/CA authority", "peerID", peerID)

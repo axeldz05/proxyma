@@ -19,7 +19,7 @@ import (
 var ErrBlobDiscarded = errors.New("blob discarded due to obsolescence or deletion")
 
 type StorageEngine struct {
-	physical         storage.Storage
+	physical         *storage.Storage
 	vfs              IndexStore
 	subscriptions    *bbolt.DB
 	logger           *slog.Logger
@@ -48,7 +48,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 	}
 
 	engine := &StorageEngine{
-		physical:         *storage.NewStorage(path),
+		physical:         storage.NewStorage(path),
 		vfs:              NewVFS(db),
 		subscriptions:    db,
 		logger:           logger,
@@ -75,7 +75,7 @@ func (se *StorageEngine) SavePhysicalBlob(content io.Reader) (string, int64, err
 	return se.physical.SaveBlob(content)
 }
 
-func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
+func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) error {
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		if isSubscribed {
 			return boltPutFlag(tx, bucketSubscriptions, fileName)
@@ -84,7 +84,9 @@ func (se *StorageEngine) SetSubscription(fileName string, isSubscribed bool) {
 	})
 	if err != nil {
 		se.logger.Error("Failed to update subscription in DB", "file", fileName, "error", err)
+		return err
 	}
+	return nil
 }
 
 func (se *StorageEngine) IsSubscribed(fileName string) bool {
@@ -97,9 +99,9 @@ func (se *StorageEngine) IsSubscribed(fileName string) bool {
 }
 
 // SetServiceSubscription records interest in a service name or prefix pattern (e.g. "ocr", "vision.*").
-func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool) {
+func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool) error {
 	if pattern == "" {
-		return
+		return fmt.Errorf("empty service subscription pattern")
 	}
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		if subscribed {
@@ -109,7 +111,9 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 	})
 	if err != nil {
 		se.logger.Error("Failed to update service subscription", "pattern", pattern, "error", err)
+		return err
 	}
+	return nil
 }
 
 // HasServiceSubscriptions reports whether any service interest filters are active.
@@ -150,7 +154,7 @@ func (se *StorageEngine) IsServiceSubscribed(name string) bool {
 	return matched
 }
 
-func (se *StorageEngine) GetVFSSnapshot() map[string]protocol.IndexEntry {
+func (se *StorageEngine) GetVFSSnapshot() (map[string]protocol.IndexEntry, error) {
 	return se.vfs.Snapshot()
 }
 
@@ -214,10 +218,11 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) error {
 	if !updated {
 		return fmt.Errorf("failed to persist deletion tombstone for %s", fileName)
 	}
-	if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
-		return fmt.Errorf("file %s could not be deleted: %w", fileMeta.Name, err)
-	}
 	go se.notifyFunc(fileMeta)
+	if err := se.deleteBlobIfOrphan(entry.Hash, false); err != nil {
+		// Tombstone + notify already committed; surface GC failure without hiding the delete.
+		return fmt.Errorf("file %s tombstoned but blob GC failed: %w", fileMeta.Name, err)
+	}
 	return nil
 }
 
@@ -226,7 +231,7 @@ func (se *StorageEngine) DeleteLocalCache(fileName string) error {
 	if !exists {
 		return fmt.Errorf("file %s not found", fileName)
 	}
-	se.SetSubscription(fileName, false)
+	_ = se.SetSubscription(fileName, false)
 	_ = se.deleteBlobIfOrphan(entry.Hash, true)
 	return nil
 }
@@ -242,7 +247,9 @@ func (se *StorageEngine) UpsertAndSubscribe(entry protocol.IndexEntry, notify bo
 	} else if _, err = se.upsertIndex(entry); err != nil {
 		return entry, err
 	}
-	se.SetSubscription(entry.Name, true)
+	if err := se.SetSubscription(entry.Name, true); err != nil {
+		return entry, err
+	}
 	if notify {
 		go se.notifyFunc(entry)
 	}
@@ -351,16 +358,25 @@ func (se *StorageEngine) CleanupTempFiles() {
 
 // deleteBlobIfOrphan removes the physical blob when no VFS refs remain.
 // If subscribedOnly, only subscribed name refs count.
+// On Snapshot failure it refuses to delete (never treat a corrupt index as empty).
 func (se *StorageEngine) deleteBlobIfOrphan(hash string, subscribedOnly bool) error {
-	if se.countHashRefs(hash, subscribedOnly) > 0 {
+	refs, err := se.countHashRefs(hash, subscribedOnly)
+	if err != nil {
+		return fmt.Errorf("orphan check aborted: %w", err)
+	}
+	if refs > 0 {
 		return nil
 	}
 	return se.physical.DeleteBlob(hash)
 }
 
-func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) int {
+func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) (int, error) {
+	snapshot, err := se.vfs.Snapshot()
+	if err != nil {
+		return 0, err
+	}
 	refCount := 0
-	for name, entry := range se.vfs.Snapshot() {
+	for name, entry := range snapshot {
 		if entry.Deleted || entry.Hash != hash {
 			continue
 		}
@@ -369,7 +385,7 @@ func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) int {
 		}
 		refCount++
 	}
-	return refCount
+	return refCount, nil
 }
 
 func (se *StorageEngine) boltPutKeyed(bucket, key string, v any) error {

@@ -221,20 +221,21 @@ func TestRewriteLocalFilePaths(t *testing.T) {
 	}
 
 	m := map[string]any{
-		"input":    filePath,
-		"already":  "vfs://existing",
-		"missing":  filepath.Join(dir, "nope.txt"),
-		"dir":      subdir,
-		"label":    "not-a-path-value",
+		"input":     filePath,
+		"already":   "vfs://existing",
+		"label":     "not-a-path-value",
 		"nil_stage": nil,
 	}
 	require.NoError(t, protocol.RewriteLocalFilePaths(m, stage, false))
 	require.Equal(t, "vfs://hash99", m["input"])
 	require.Equal(t, "vfs://existing", m["already"])
-	require.Equal(t, filepath.Join(dir, "nope.txt"), m["missing"]) // stage skipped: file missing
-	require.Equal(t, subdir, m["dir"])
 	require.True(t, staged[filePath])
-	require.False(t, staged[subdir])
+
+	missing := map[string]any{"missing": filepath.Join(dir, "nope.txt")}
+	require.Error(t, protocol.RewriteLocalFilePaths(missing, stage, false))
+
+	dirMap := map[string]any{"dir": subdir}
+	require.Error(t, protocol.RewriteLocalFilePaths(dirMap, stage, false))
 
 	// annotateOutputs writes output metadata keys
 	out := map[string]any{"result": filePath}
@@ -243,6 +244,7 @@ func TestRewriteLocalFilePaths(t *testing.T) {
 	require.Equal(t, "hash99", out[protocol.OutputHashKey])
 	require.Equal(t, "doc.txt", out[protocol.OutputNameKey])
 	require.Equal(t, float64(5), out[protocol.OutputSizeKey])
+	require.Equal(t, "hash99", out["result_"+protocol.OutputHashKey])
 
 	// nil map / nil stage are no-ops
 	require.NoError(t, protocol.RewriteLocalFilePaths(nil, stage, false))
@@ -303,7 +305,7 @@ func TestRPCTimeouts(t *testing.T) {
 
 	require.Equal(t, 3*time.Second, protocol.DialTimeoutJoin)
 	require.Equal(t, 3*time.Second, protocol.DialTimeoutRouteProbe)
-	require.Equal(t, 3*time.Second, protocol.HolePunchAttempt)
+	require.Equal(t, 8*time.Second, protocol.HolePunchAttempt)
 	require.Equal(t, 8*time.Second, protocol.HolePunchWait)
 	require.Equal(t, 25*time.Second, protocol.PrewarmHolePunch)
 	require.Equal(t, 10*time.Second, protocol.HandlerDialUnary)

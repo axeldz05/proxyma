@@ -72,6 +72,7 @@ func UnixSockPath(storagePath string) string {
 }
 
 type PipelineNotification struct {
+	NodeID string         `json:"node_id,omitempty"`
 	Schema PipelineSchema `json:"schema"`
 	Action string         `json:"action"` // ActionAdd / ActionRemove
 }

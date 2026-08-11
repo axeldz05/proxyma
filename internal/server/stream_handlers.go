@@ -31,6 +31,9 @@ func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
+		return
+	}
 	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
 	if req.Action == protocol.ActionAdd {
 		if err := s.ValidatePipelineSchema(req.Schema); err != nil {
@@ -76,6 +79,9 @@ func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 	msg, ok := utils.DecodeJSONOrError[p2p.HolePunchMessage](w, r)
 	if !ok {
+		return
+	}
+	if !requirePeerCNMatchesBodyID(w, r, msg.SenderID) {
 		return
 	}
 

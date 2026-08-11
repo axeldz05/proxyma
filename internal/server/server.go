@@ -58,6 +58,8 @@ type Server struct {
 
 	webrtcPCs   sync.Map
 	webrtcPCSeq uint64
+
+	outboxFlushMu sync.Mutex
 }
 
 type DownloadJob struct {
