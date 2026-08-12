@@ -57,16 +57,14 @@ run_node node-2 service add \
     --param "file_hash:string"
 
 # Bring up Node 1
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 # Pair and join the cluster
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
 
 # Bring up secondary nodes
-$COMPOSE_CMD up -d node-2 node-3
-sleep 2
+start_nodes node-2 node-3
 
 # Upload files to node-1
 echo "Hello Proxyma Cluster!" > "$E2E_DATA_DIR/node-1/test_e2e.txt"
@@ -78,34 +76,25 @@ exec_node node-3 ./proxyma storage sync > /dev/null
 
 # Verify metadata sync on node-3 VFS
 echo "🔍 Checking metadata replication on node-3..."
-MAX_RETRIES=10
-FILE_FOUND=false
-MANIFEST=""
-for i in $(seq 1 $MAX_RETRIES); do
-    MANIFEST=$(call_api node-3 GET 8083 manifest) || MANIFEST=""
-    if echo "$MANIFEST" | grep -q "test_e2e.txt"; then
-        FILE_FOUND=true
-        break
-    fi
-    echo "   ... VFS not updated yet (retrying $i/$MAX_RETRIES)..."
-    sleep 2
-done
-
-if [ "$FILE_FOUND" != "true" ]; then
-    echo -e "${RED}❌ Error: File did not reach the VFS of node-3${NC}"
-    exit 1
-fi
+MANIFEST=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" test_e2e.txt \
+    call_api node-3 GET 8083 manifest)
 echo -e "${GREEN}✅ Metadata synchronized in VFS correctly.${NC}"
 
 # Get file hash
 FILE_HASH=$(echo "$MANIFEST" | grep -o '"test_e2e.txt":{"name":"test_e2e.txt","size":[^,]*,"hash":"[^"]*"' | grep -o '"hash":"[^"]*"' | cut -d'"' -f4)
+assert_not_empty "$FILE_HASH" "test_e2e.txt had no public VFS hash"
 
-# Verify that the blob was not physically downloaded without being subscribed
-if [ -f "$E2E_DATA_DIR/node-3/$FILE_HASH" ]; then
-    echo -e "${RED}❌ Logical error: Node 3 downloaded the blob without subscription.${NC}"
-    exit 1
+# Verify through the public download endpoint that unsubscribed metadata did not
+# cause a local blob download.
+set +e
+UNSUBSCRIBED_DOWNLOAD=$(call_api node-3 GET 8083 "download/$FILE_HASH" 2>&1)
+UNSUBSCRIBED_RC=$?
+set -e
+if [ "$UNSUBSCRIBED_RC" -eq 0 ]; then
+    fail_assertion "Node 3 exposed file content before subscription" \
+        "$UNSUBSCRIBED_DOWNLOAD"
 fi
-echo -e "${GREEN}✅ Node 3 ignored physical download (expected behavior).${NC}"
+echo -e "${GREEN}✅ Node 3 did not expose an unsubscribed blob.${NC}"
 
 # Subscribe node-3
 SUB_RES=$(call_api node-3 POST 8083 "subscribe?name=test_e2e.txt")
@@ -117,12 +106,11 @@ fi
 # Sync again to force physical download
 exec_node node-3 ./proxyma storage sync > /dev/null
 
-# Verify download and check hash
-call_api node-3 GET 8083 "download/$FILE_HASH" > "$E2E_DATA_DIR/node-3/downloaded_test.txt"
-if ! diff "$E2E_DATA_DIR/node-1/test_e2e.txt" "$E2E_DATA_DIR/node-3/downloaded_test.txt" > /dev/null; then
-    echo -e "${RED}❌ Error: Corrupted data in node-3 download.${NC}"
-    exit 1
-fi
+# Verify download content through the public mTLS endpoint.
+DOWNLOADED_TEXT=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" \
+    "Hello Proxyma Cluster!" call_api node-3 GET 8083 "download/$FILE_HASH")
+assert_equals "$DOWNLOADED_TEXT" "Hello Proxyma Cluster!" \
+    "Node 3 returned corrupted downloaded content"
 echo -e "${GREEN}✅ Download and cryptographic integrity confirmed.${NC}"
 
 # OCR Test
@@ -133,14 +121,22 @@ PDF_HASH=$(echo "$MANIFEST_N1" | grep -o '"test_e2e.pdf":{"name":"test_e2e.pdf",
 call_api node-2 POST 8082 "subscribe?name=test_e2e.pdf" > /dev/null
 exec_node node-2 ./proxyma storage sync > /dev/null
 
-# Send OCR task to node-2
-call_api node-2 POST 8082 "services/submit" -d "{\"service\":\"ocr\", \"task_id\":\"ocr_job_1\", \"requester_node_id\":\"host-test\", \"payload\":{\"file_hash\":\"$PDF_HASH\"}}" > /dev/null
+# Execute through the public requester CLI. This keeps the authenticated
+# requester identity consistent with the task envelope instead of posting a
+# forged requester_node_id directly to the provider.
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" ocr \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
+wait_for_peer "${E2E_PEER_TIMEOUT:-45}" node-2 node-3
+OCR_RUN=$(exec_node node-1 ./proxyma service run \
+    --name ocr \
+    --payload "{\"file_hash\":\"$PDF_HASH\"}" \
+    --storage /app/data)
+assert_contains "$OCR_RUN" '"status": "completed"' \
+    "Distributed OCR task did not complete"
 
 # Wait for OCR-processed PDF to appear in the manifest of node-3
 echo "⏱️ Waiting for OCR-processed PDF to appear in the manifest of node-3..."
-if ! wait_for_condition 30 2 "optimized.pdf" call_api node-3 GET 8083 manifest; then
-    echo -e "${RED}❌ Error: OCR failed or file did not propagate.${NC}"
-    exit 1
-fi
+wait_for_output "${E2E_VFS_TIMEOUT:-60}" optimized.pdf \
+    call_api node-3 GET 8083 manifest >/dev/null
 
 echo -e "${GREEN}🎉 Case 1 (Sync & OCR) completed successfully!${NC}"

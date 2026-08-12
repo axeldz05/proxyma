@@ -44,59 +44,59 @@ run_node node-3 service add \
     --name "echo" --storage "/app/data" --type "script" \
     --exec "python3 /app/data/scripts/echo.py" --desc "echo" --param "msg?:string"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
-$COMPOSE_CMD up -d node-2 node-3
-sleep 3
+start_nodes node-2 node-3
+
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" echo \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 echo "Running echo while both providers are up..."
-exec_node node-1 ./proxyma service run --name echo --payload '{"msg":"hi"}' --storage "/app/data" >/dev/null || true
-STATUS1=$(exec_node node-1 ./proxyma service status --storage "/app/data")
-echo "status1: $STATUS1"
-if ! echo "$STATUS1" | grep -q "completed"; then
-    echo -e "${RED}❌ Initial echo bid/run failed${NC}"
-    exit 1
-fi
+INITIAL_OUT=$(exec_node node-1 ./proxyma service run \
+    --name echo --payload '{"msg":"hi"}' --storage /app/data)
+assert_contains "$INITIAL_OUT" '"status": "completed"' \
+    "Initial echo bid/run did not complete"
 
 echo "🛑 Killing node-2 (primary provider candidate)..."
-$COMPOSE_CMD stop node-2
-sleep 2
+e2e_compose stop node-2 >/dev/null
 
 echo "Running echo after node-2 down (should bid to node-3)..."
-exec_node node-1 ./proxyma service run --name echo --payload '{"msg":"failover"}' --storage "/app/data" >/dev/null || true
-STATUS2=$(exec_node node-1 ./proxyma service status --storage "/app/data")
-echo "status2: $STATUS2"
+FAILOVER_OUT=$(exec_node node-1 ./proxyma service run \
+    --name echo --payload '{"msg":"failover"}' --storage /app/data)
+echo "failover response: $FAILOVER_OUT"
+printf '%s\n' "$FAILOVER_OUT" | python3 -c '
+import json
+import sys
 
-if echo "$STATUS2" | grep -q "failed"; then
-    # Accept explicit failure if cluster cannot rediscover — still assert no hang
-    echo -e "${YELLOW}⚠️ Echo failed after killing node-2 (explicit fail is acceptable)${NC}"
-    if ! echo "$STATUS2" | grep -qiE 'failed|no nodes|discover'; then
-        echo -e "${RED}❌ Unexpected failure mode${NC}"
-        exit 1
-    fi
-elif echo "$STATUS2" | grep -q "completed"; then
-    echo -e "${GREEN}✅ Failover to remaining provider succeeded${NC}"
-else
-    echo -e "${RED}❌ Unexpected status after provider kill${NC}"
-    exit 1
-fi
+response = json.load(sys.stdin)
+expected = {
+    "status": "completed",
+    "from": "node-3",
+    "echo": "failover",
+}
+actual = {
+    "status": response.get("status"),
+    "from": response.get("outputs", {}).get("from"),
+    "echo": response.get("outputs", {}).get("echo"),
+}
+if actual != expected:
+    raise SystemExit(f"unexpected surviving-provider response: {actual!r}")
+'
+echo -e "${GREEN}✅ Failover returned the exact node-3 response${NC}"
 
 echo "🛑 Stopping node-3 too — expect discovery failure..."
-$COMPOSE_CMD stop node-3
-sleep 1
+e2e_compose stop node-3 >/dev/null
 set +e
 FAIL_OUT=$(exec_node node-1 ./proxyma service run --name echo --payload '{"msg":"none"}' --storage "/app/data" 2>&1)
+FAIL_RC=$?
 set -e
 echo "no-provider output: $FAIL_OUT"
-if ! echo "$FAIL_OUT" | grep -qiE 'fail|error|no nodes|discover'; then
-    STATUS3=$(exec_node node-1 ./proxyma service status --storage "/app/data" 2>/dev/null || true)
-    if ! echo "$STATUS3" | grep -qiE 'failed|error'; then
-        echo -e "${RED}❌ Expected discovery failure with no providers${NC}"
-        exit 1
-    fi
+if [ "$FAIL_RC" -eq 0 ]; then
+    fail_assertion "Service run succeeded with no providers" "$FAIL_OUT"
 fi
+assert_contains "$FAIL_OUT" "no nodes available for service 'echo'" \
+    "No-provider run returned an unexpected error"
 
 echo -e "${GREEN}✅ Case 10 (service bid failover) passed${NC}"
 exit 0

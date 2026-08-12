@@ -1,0 +1,10 @@
+# Deterministic public-contract cases required on pull requests.
+08_pipeline_vfs_staging
+15_pipeline_multinode_dag
+16_pipeline_validation_cli
+17_pairing_security
+18_service_subscribe_notify
+19_offline_outbox_notify
+21_vfs_delete_tombstone
+22_peer_restart_persistence
+24_durable_download_restart

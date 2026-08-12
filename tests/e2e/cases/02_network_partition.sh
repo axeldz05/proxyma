@@ -35,14 +35,12 @@ bootstrap_node node-1 8081
 bootstrap_node node-2 8082
 bootstrap_node node-3 8083
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
 
-$COMPOSE_CMD up -d node-2 node-3
-sleep 2
+start_nodes node-2 node-3
 
 # Register container names and network
 NODE3_CONTAINER=$(docker compose -p $E2E_PROJECT_NAME -f $COMPOSE_FILE ps -q node-3)
@@ -57,11 +55,8 @@ exec_node node-2 ./proxyma storage sync > /dev/null
 exec_node node-3 ./proxyma storage sync > /dev/null
 
 # Confirm base state
-MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
-if ! echo "$MANIFEST_N3" | grep -q "base.txt"; then
-    echo -e "${RED}❌ Error: Base synchronization failed${NC}"
-    exit 1
-fi
+MANIFEST_N3=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" base.txt \
+    call_api node-3 GET 8083 manifest)
 echo -e "${GREEN}✅ Base state verified on all nodes.${NC}"
 
 # 2. Cause partition: Isolate node-3
@@ -101,33 +96,46 @@ echo -e "${GREEN}✅ Nodes isolated correctly. No metadata transfer.${NC}"
 # 5. Heal partition: Connect node-3
 echo "Reconnecting node-3 to network $NETWORK_NAME..."
 docker network connect "$NETWORK_NAME" "$NODE3_CONTAINER"
-sleep 2
 
-# 6. Sync healed cluster (retry: docker DNS / peer routes can lag briefly after reconnect)
+# 6. Sync healed cluster. Repeated public sync/list operations absorb Docker DNS
+# and route convergence without a fixed network-settling delay.
 echo "Triggering synchronization after reconnection..."
-for _ in 1 2 3; do
-    exec_node node-3 ./proxyma storage sync > /dev/null || true
-    exec_node node-1 ./proxyma storage sync > /dev/null || true
-    if wait_for_condition 5 1 "partition_b.txt" call_api node-1 GET 8081 manifest && \
-       wait_for_condition 5 1 "partition_a.txt" call_api node-3 GET 8083 manifest; then
-        break
-    fi
-    sleep 2
-done
+healed_cluster_converged() {
+    local manifest_node1 manifest_node3
+
+    exec_node node-3 ./proxyma storage sync >/dev/null 2>&1 || true
+    exec_node node-1 ./proxyma storage sync >/dev/null 2>&1 || true
+    manifest_node1=$(call_api node-1 GET 8081 manifest 2>&1) || {
+        printf '%s\n' "$manifest_node1"
+        return 1
+    }
+    manifest_node3=$(call_api node-3 GET 8083 manifest 2>&1) || {
+        printf '%s\n' "$manifest_node3"
+        return 1
+    }
+    printf '%s\n%s\n' "$manifest_node1" "$manifest_node3"
+    [[ "$manifest_node1" == *partition_a.txt* &&
+        "$manifest_node1" == *partition_b.txt* &&
+        "$manifest_node3" == *partition_a.txt* &&
+        "$manifest_node3" == *partition_b.txt* ]]
+}
+
+wait_until "${E2E_VFS_TIMEOUT:-60}" "public VFS convergence after partition heal" \
+    healed_cluster_converged >/dev/null
 
 # 7. Verify convergence
 echo "🔍 Verifying metadata convergence on node-1..."
-if ! wait_for_condition 10 2 "partition_a.txt" call_api node-1 GET 8081 manifest || \
-   ! wait_for_condition 10 2 "partition_b.txt" call_api node-1 GET 8081 manifest; then
-    echo -e "${RED}❌ Error: The cluster did not recover consistency after healing the partition.${NC}"
-    exit 1
-fi
+MANIFEST_N1=$(call_api node-1 GET 8081 manifest)
+assert_contains "$MANIFEST_N1" partition_a.txt \
+    "Healed node-1 manifest omitted partition_a.txt"
+assert_contains "$MANIFEST_N1" partition_b.txt \
+    "Healed node-1 manifest omitted partition_b.txt"
 
 # Verify on node-3
 MANIFEST_N3=$(call_api node-3 GET 8083 manifest)
-if ! echo "$MANIFEST_N3" | grep -q "partition_a.txt" || ! echo "$MANIFEST_N3" | grep -q "partition_b.txt"; then
-    echo -e "${RED}❌ Error: The reconnected node 3 did not receive the global metadata.${NC}"
-    exit 1
-fi
+assert_contains "$MANIFEST_N3" partition_a.txt \
+    "Healed node-3 manifest omitted partition_a.txt"
+assert_contains "$MANIFEST_N3" partition_b.txt \
+    "Healed node-3 manifest omitted partition_b.txt"
 
 echo -e "${GREEN}🎉 Case 2 (Network Partition) completed successfully!${NC}"

@@ -28,10 +28,11 @@ import sys, json, subprocess, os
 try:
     payload = json.load(sys.stdin)
     input_path = payload.get("input_path")
-    output_path = payload.get("output_path")
+    output_name = os.path.basename(payload.get("output_name", "optimized.pdf"))
+    output_path = os.path.join("/tmp", output_name)
     
-    if not input_path or not output_path:
-        print(json.dumps({"error": f"Missing input_path ({input_path}) or output_path ({output_path}) in payload: {json.dumps(payload)}"}))
+    if not input_path:
+        print(json.dumps({"error": f"Missing input_path in payload: {json.dumps(payload)}"}))
         sys.exit(1)
         
     if not os.path.exists(input_path):
@@ -69,18 +70,19 @@ run_node node-2 service add \
     --type "script" \
     --exec "python3 /app/data/scripts/ocr_service.py" \
     --desc "OCR my PDF" \
-    --param "lang?:string,force_ocr?:bool"
+    --param "input_path:file,output_name?:string,lang?:string,force_ocr?:bool"
 
 # Bring up Node 1
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 # Pair and join the cluster
 join_cluster node-2 node-1 8081
 
 # Bring up secondary node
-$COMPOSE_CMD up -d node-2
-sleep 2
+start_node node-2 8082
+
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" ocr \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 # Upload files to node-1 VFS
 echo "Uploading test_e2e.pdf to node-1..."
@@ -88,7 +90,9 @@ exec_node node-1 ./proxyma storage upload --name "test_e2e.pdf" --path "/app/dat
 
 # Run generic file-processing task from node-1
 echo "Running OCR service from node-1..."
-RUN_RES=$(exec_node node-1 ./proxyma service run --name ocr --inputs "input_path=/app/data/test_e2e.pdf,output_path=/tmp/optimized.pdf" --storage "/app/data")
+RUN_RES=$(exec_node node-1 ./proxyma service run --name ocr \
+    --inputs "input_path=/app/data/test_e2e.pdf,output_name=optimized.pdf" \
+    --storage "/app/data")
 echo "Result from run_file: $RUN_RES"
 
 # Check status using service status
@@ -117,7 +121,9 @@ echo -e "${GREEN}✅ Output file registered in requester VFS registry.${NC}"
 
 # Second run with explicit default-style output name
 echo "Running OCR service from node-1 with output_test_e2e.pdf name..."
-RUN_RES_EMPTY=$(exec_node node-1 ./proxyma service run --name ocr --inputs "input_path=/app/data/test_e2e.pdf,output_path=/tmp/output_test_e2e.pdf" --storage "/app/data")
+RUN_RES_EMPTY=$(exec_node node-1 ./proxyma service run --name ocr \
+    --inputs "input_path=/app/data/test_e2e.pdf,output_name=output_test_e2e.pdf" \
+    --storage "/app/data")
 echo "Result from second run: $RUN_RES_EMPTY"
 
 # Verify that output_test_e2e.pdf is registered in VFS

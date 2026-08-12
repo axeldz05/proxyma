@@ -2,66 +2,93 @@ networks:
   proxyma-net:
     driver: bridge
 
+x-proxyma-node: &proxyma-node
+  # Keep the historical node-3 tag because case 09 uses it for a relay-only
+  # docker run. Every service now consumes this one image.
+  image: proxyma-e2e-node-3
+  environment:
+    GOCOVERDIR: "/app/data/coverage"
+  user: "${HOST_UID}:${HOST_GID}"
+  networks:
+    - proxyma-net
+
 services:
   node-1:
-    image: proxyma-e2e-node-1
+    <<: *proxyma-node
     build:
       context: ../..
       dockerfile: Dockerfile
       args:
         COVER: "${COVER:-false}"
-    environment:
-      GOCOVERDIR: "/app/data/coverage"
-    user: "${HOST_UID}:${HOST_GID}"
-    networks:
-      - proxyma-net
     volumes:
       - "${E2E_DATA_DIR}/node-1:/app/data"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --cacert /app/data/certs/ca.crt
+          --cert /app/data/certs/node-1.crt
+          --key /app/data/certs/node-1.key
+          https://localhost:8081/telemetry >/dev/null
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   node-2:
-    image: proxyma-e2e-node-2
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-      args:
-        COVER: "${COVER:-false}"
-    environment:
-      GOCOVERDIR: "/app/data/coverage"
-    user: "${HOST_UID}:${HOST_GID}"
-    networks:
-      - proxyma-net
+    <<: *proxyma-node
     volumes:
       - "${E2E_DATA_DIR}/node-2:/app/data"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --cacert /app/data/certs/ca.crt
+          --cert /app/data/certs/node-2.crt
+          --key /app/data/certs/node-2.key
+          https://localhost:8082/telemetry >/dev/null
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   node-3:
-    image: proxyma-e2e-node-3
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-      args:
-        COVER: "${COVER:-false}"
-    environment:
-      GOCOVERDIR: "/app/data/coverage"
-    user: "${HOST_UID}:${HOST_GID}"
-    networks:
-      - proxyma-net
+    <<: *proxyma-node
     volumes:
       - "${E2E_DATA_DIR}/node-3:/app/data"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --cacert /app/data/certs/ca.crt
+          --cert /app/data/certs/node-3.crt
+          --key /app/data/certs/node-3.key
+          https://localhost:8083/telemetry >/dev/null
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   node-low-spec:
-    image: proxyma-e2e-node-2
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-      args:
-        COVER: "${COVER:-false}"
-    environment:
-      GOCOVERDIR: "/app/data/coverage"
-    user: "${HOST_UID}:${HOST_GID}"
-    networks:
-      - proxyma-net
+    <<: *proxyma-node
     volumes:
       - "${E2E_DATA_DIR}/node-2:/app/data"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --cacert /app/data/certs/ca.crt
+          --cert /app/data/certs/node-low-spec.crt
+          --key /app/data/certs/node-low-spec.key
+          https://localhost:8082/telemetry >/dev/null
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
     deploy:
       resources:
         limits:

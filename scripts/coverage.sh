@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Colores para la terminal
 GREEN='\033[0;32m'
@@ -13,22 +13,32 @@ PROJECT_ROOT="$SCRIPTPATH/.."
 
 cd "$PROJECT_ROOT"
 
+cleanup_coverage_data() {
+    rm -rf /tmp/proxyma-merged-covdata /tmp/proxyma-e2e
+}
+
+trap cleanup_coverage_data EXIT
+
 # Clean up any existing coverage files
 rm -f coverage-unit.out coverage-e2e.out coverage.out
-rm -rf /tmp/proxyma-merged-covdata /tmp/proxyma-e2e
+cleanup_coverage_data
 
 echo -e "${BLUE}======================================================${NC}"
 echo -e "${BLUE}📊 Unified Test Coverage Generator                     ${NC}"
 echo -e "${BLUE}======================================================${NC}"
 
 # 1. Build E2E images with coverage instrumentation
-echo -e "\n${BLUE}🐳 [1/5] Building E2E containers with coverage enabled...${NC}"
-COVER=true docker compose -f tests/e2e/docker-compose.e2e.yml build
+if [ "${E2E_SKIP_BUILD:-false}" = true ]; then
+    echo -e "\n${BLUE}🐳 [1/5] Using the prebuilt coverage-enabled E2E image...${NC}"
+else
+    echo -e "\n${BLUE}🐳 [1/5] Building the shared E2E image with coverage enabled...${NC}"
+    COVER=true docker compose -f tests/e2e/docker-compose.e2e.yml build node-1
+fi
 
 # 2. Run E2E tests and preserve coverage outputs
 echo -e "\n${BLUE}🛫 [2/5] Running E2E integration tests...${NC}"
-export KEEP_E2E_DATA=true
-if ! ./tests/e2e/run.sh; then
+export E2E_PROFILE="${E2E_PROFILE:-full}"
+if ! COVER=true KEEP_E2E_DATA=true E2E_SKIP_BUILD=true ./tests/e2e/run.sh; then
     echo -e "${RED}❌ E2E tests failed. Unified coverage canceled.${NC}"
     exit 1
 fi
@@ -66,5 +76,5 @@ go tool cover -func=coverage.out
 
 # Clean up temporary E2E directories
 echo -e "\n${YELLOW}🧹 Cleaning up temporary coverage and E2E data...${NC}"
-rm -rf /tmp/proxyma-merged-covdata /tmp/proxyma-e2e
+cleanup_coverage_data
 echo -e "${GREEN}✨ Clean complete. Combined profile saved to coverage.out${NC}"

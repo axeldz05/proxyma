@@ -53,47 +53,51 @@ run_node node-2 service add \
     --desc "Merge two same-basename inputs" \
     --param "input_a:file,input_b:file,output_path?:string"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
-$COMPOSE_CMD up -d node-2
-sleep 2
+start_node node-2 8082
+
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" merge_pdfs \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 echo "Running merge with two local out.pdf paths (must stage without collision)..."
-exec_node node-1 ./proxyma service run \
+RUN_RES=$(exec_node node-1 ./proxyma service run \
     --name merge_pdfs \
-    --inputs "input_a=/app/data/dirA/out.pdf,input_b=/app/data/dirB/out.pdf,output_path=/tmp/merged_out.txt" \
-    --storage "/app/data" >/dev/null
+    --inputs "input_a=/app/data/dirA/out.pdf,input_b=/app/data/dirB/out.pdf" \
+    --storage "/app/data")
+echo "run response: $RUN_RES"
 
-STATUS_RES=$(exec_node node-1 ./proxyma service status --storage "/app/data")
-echo "status: $STATUS_RES"
-if echo "$STATUS_RES" | grep -q "failed"; then
-    echo -e "${RED}❌ merge_pdfs task failed${NC}"
-    exit 1
-fi
-if ! echo "$STATUS_RES" | grep -q "completed"; then
-    echo -e "${RED}❌ merge_pdfs task did not complete${NC}"
-    exit 1
-fi
+OUTPUT_NAME=$(printf '%s\n' "$RUN_RES" | python3 -c '
+import json
+import sys
 
-MANIFEST=$(exec_node node-1 ./proxyma storage list --storage "/app/data")
-echo "manifest: $MANIFEST"
+response = json.load(sys.stdin)
+if response.get("status") != "completed":
+    raise SystemExit(f"merge task did not complete: {response!r}")
+print(response.get("outputs", {}).get("output_name", ""))
+')
+assert_not_empty "$OUTPUT_NAME" \
+    "merge_pdfs returned no public output name"
 
-# Expect stage/<hash>/out.pdf for each distinct content
-STAGE_LINES=$(echo "$MANIFEST" | grep -c 'stage/.*/out.pdf' || true)
-if [ "$STAGE_LINES" -lt 2 ]; then
-    echo -e "${RED}❌ Expected ≥2 stage/*/out.pdf entries, got $STAGE_LINES${NC}"
-    exit 1
-fi
+MANIFEST=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" "$OUTPUT_NAME" \
+    call_api node-1 GET 8081 manifest)
+OUTPUT_HASH=$(printf '%s\n' "$MANIFEST" | python3 -c '
+import json
+import sys
 
-# Distinct hashes (two different stage/<hash>/ prefixes)
-HASHES=$(echo "$MANIFEST" | grep -oE 'stage/[a-f0-9]+/out\.pdf' | sed 's|stage/\([a-f0-9]*\)/out.pdf|\1|' | sort -u)
-HASH_COUNT=$(echo "$HASHES" | grep -c . || true)
-if [ "$HASH_COUNT" -lt 2 ]; then
-    echo -e "${RED}❌ Expected two distinct stage hashes for out.pdf, got:${NC}"
-    echo "$HASHES"
-    exit 1
-fi
+manifest = json.load(sys.stdin)
+name = sys.argv[1]
+print(manifest.get(name, {}).get("hash", ""))
+' "$OUTPUT_NAME")
+assert_not_empty "$OUTPUT_HASH" \
+    "Requester manifest exposed no hash for the merged output"
 
-echo -e "${GREEN}✅ Case 20 (stage name collision) passed — $HASH_COUNT distinct stage hashes${NC}"
+MERGED_CONTENT=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" \
+    "content-A-unique|content-B-unique-different" \
+    call_api node-1 GET 8081 "download/$OUTPUT_HASH")
+assert_equals "$MERGED_CONTENT" \
+    "content-A-unique|content-B-unique-different" \
+    "Same-basename inputs produced incorrect merged content"
+
+echo -e "${GREEN}✅ Case 20 (stage name collision) passed with exact merged content${NC}"
 exit 0

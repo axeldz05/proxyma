@@ -12,7 +12,7 @@ ANDROID_DIR=cmd/proxyma-android
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test test-race test-android-bind test-android lint clean help init-cluster test-e2e test-all coverage
+.PHONY: all build test test-integration test-race test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
 
 all: lint test build ## Run lint, tests, and build
 
@@ -23,6 +23,10 @@ build: ## Build the Proxyma CLI
 test: ## Run the Go test suite
 	@echo "$(BLUE)Running tests...$(NC)"
 	$(GO) test -v ./...
+
+test-integration: ## Run live public-contract integration tests
+	@echo "$(BLUE)Running integration contract tests...$(NC)"
+	$(GO) test -v ./cmd/proxyma-bind ./internal/server
 
 # The race suite is green. It remains separate from `test` because it is slower.
 test-race: ## Run the Go test suite with race detection
@@ -95,9 +99,19 @@ help: ## Show available targets
 	@echo "Available targets:"
 	@awk 'BEGIN { FS = ":.*## " } /^[[:alnum:]_.-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-test-e2e: ## Run E2E integration tests
-	@echo "$(BLUE)Running E2E integration tests...$(NC)"
-	./tests/e2e/run.sh
+test-e2e: test-e2e-full ## Run the stable full E2E profile
+
+test-e2e-pr: ## Run deterministic PR E2E contracts
+	@echo "$(BLUE)Running deterministic PR E2E contracts...$(NC)"
+	E2E_PROFILE=pr ./tests/e2e/run.sh
+
+test-e2e-network: ## Run network and fault-injection E2E tests
+	@echo "$(BLUE)Running network E2E tests...$(NC)"
+	E2E_PROFILE=network ./tests/e2e/run.sh
+
+test-e2e-full: ## Run all stable E2E tests
+	@echo "$(BLUE)Running the stable full E2E suite...$(NC)"
+	E2E_PROFILE=full ./tests/e2e/run.sh
 
 test-all: test test-e2e ## Run unit and E2E tests
 

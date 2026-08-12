@@ -1,0 +1,2 @@
+# Fake JPEG frame smoke test; does not validate real screen capture or latency.
+14_screen_stream

@@ -20,7 +20,6 @@ cat << 'EOF' > "$E2E_DATA_DIR/node-2/scripts/tick_server.py"
 #!/usr/bin/env python3
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-import time
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -35,10 +34,12 @@ class Handler(BaseHTTPRequestHandler):
             line = json.dumps({"tick": i, "msg": "hello"}) + "\n"
             self.wfile.write(line.encode())
             self.wfile.flush()
-            time.sleep(0.05)
 
 if __name__ == "__main__":
-    HTTPServer(("127.0.0.1", 9099), Handler).serve_forever()
+    server = HTTPServer(("127.0.0.1", 9099), Handler)
+    with open("/app/data/tick.ready", "w", encoding="utf-8") as ready:
+        ready.write("ready\n")
+    server.serve_forever()
 EOF
 
 bootstrap_node node-1 8081
@@ -52,15 +53,16 @@ run_node node-2 service add \
     --desc "NDJSON tick stream" \
     --param "n?:int"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
-$COMPOSE_CMD up -d node-2
-sleep 2
+start_node node-2 8082
 
 echo "Starting tick upstream inside node-2..."
-$COMPOSE_CMD exec -d node-2 python3 /app/data/scripts/tick_server.py
-sleep 1
+e2e_compose exec -d node-2 python3 /app/data/scripts/tick_server.py
+wait_until 15 "tick fixture readiness" \
+    exec_node node-2 test -f /app/data/tick.ready >/dev/null
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" ticks \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 echo "Streaming ticks from node-1 via /services/stream..."
 STREAM_OUT=$(call_api node-1 POST 8081 "services/stream?service=ticks" \

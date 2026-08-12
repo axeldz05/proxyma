@@ -1,0 +1,160 @@
+# Proxyma E2E test contracts
+
+This directory owns Docker Compose coverage for observable multi-node behavior. It is a contract suite, not evidence that every objective in the repository [README](../../README.md) is complete.
+
+## Functional-case rule: Given / When / Then
+
+Every functional case must follow this boundary:
+
+- **Given** may use Docker and fixture internals to create nodes, certificates, services, topology, resource limits, partitions, crashes, or fixture readiness.
+- **When** must exercise Proxyma through a public CLI command or public mTLS HTTP endpoint.
+- **Then** must assert only public CLI/API status, metadata, content, or errors. Container files, Bolt buckets, CAS paths, process logs, and private transport choices are not product assertions.
+
+Docker inspection belongs only to setup, fault injection, infrastructure checks, and diagnostics. A test may read a fixture-owned ready file, edit a pre-start config, or disconnect a container in **Given**; it may not use those internals to prove the functional **Then**. Case 05 is explicitly an infrastructure test rather than a product feature gate.
+
+Use deadline-bounded polling from [`lib/wait.sh`](lib/wait.sh), not fixed sleeps. A terminal product error should stop a wait immediately; asynchronous success should be observed through its public result.
+
+## Integration tests versus Docker E2E
+
+The live Go integration layer and Docker layer have different ownership:
+
+- [`cmd/proxyma-bind/integration_live_contract_test.go`](../../cmd/proxyma-bind/integration_live_contract_test.go) starts a real daemon subprocess and owns bind-to-Unix-IPC public contracts: service/storage actions, server streams, bind cancellation, enrollment, and pipeline validation/execution.
+- [`internal/server/restart_contract_test.go`](../../internal/server/restart_contract_test.go) owns a real mTLS HTTP server restart contract with a temporary persistent store.
+- Docker cases own behavior that requires multiple isolated nodes, Compose restarts, network faults, relay topology, cgroups, or cross-container mTLS.
+- Unit/package tests own implementation details, injected failures, races, and state-machine invariants.
+
+Do not duplicate a private assertion in Docker merely because an integration test already proves it. Add Docker coverage only when the container or multi-node boundary changes the observable contract.
+
+Run the live integration contracts with:
+
+```bash
+make test-integration
+```
+
+## Harness entry points
+
+[`run.sh`](run.sh) discovers `cases/*.sh`, builds the shared image once, runs selected cases with bounded parallelism, sanitizes each log, and reports every failure.
+
+```bash
+# Stable suite; this is the normal E2E green gate.
+make test-e2e
+make test-e2e-full
+
+# Deterministic pull-request contracts.
+make test-e2e-pr
+
+# Network and fault-injection contracts.
+make test-e2e-network
+
+# Other named profiles.
+E2E_PROFILE=functional ./tests/e2e/run.sh
+E2E_PROFILE=infrastructure ./tests/e2e/run.sh
+E2E_PROFILE=smoke ./tests/e2e/run.sh
+
+# Quarantined sampler-sensitive coverage; never roll this into a green claim.
+E2E_PROFILE=quarantine ./tests/e2e/run.sh
+
+# One case, several comma-separated cases, or selection preview.
+E2E_CASE=17 ./tests/e2e/run.sh
+E2E_CASE=15,17,24 E2E_PARALLEL=1 ./tests/e2e/run.sh
+E2E_PROFILE=full E2E_LIST=true ./tests/e2e/run.sh
+```
+
+`E2E_CASE` takes precedence over `E2E_PROFILE`. `E2E_PARALLEL` defaults to `3`. `E2E_SKIP_BUILD=true` reuses an already-built `proxyma-e2e-node-3` image. Running `./tests/e2e/run.sh` without a selector uses the synthetic `all` selection, which includes quarantined case 13; use `full` for the stable gate.
+
+The helper facade [`lib/helpers.sh`](lib/helpers.sh) loads:
+
+- [`lib/cluster.sh`](lib/cluster.sh): Compose lifecycle, node bootstrap/restart, enrollment, and public CLI/mTLS calls.
+- [`lib/wait.sh`](lib/wait.sh): deadline-bounded polling with exponential backoff and terminal-failure support.
+- [`lib/assert.sh`](lib/assert.sh): assertions over public output.
+- [`lib/faults.sh`](lib/faults.sh): Docker-only fault injection for **Given**.
+- [`lib/dump.sh`](lib/dump.sh): redacted logs and failure diagnostics.
+
+Profiles are explicit selectors under [`profiles/`](profiles/):
+
+- `functional`: deterministic public-contract cases 08, 15–19, 21, 22, and 24.
+- `pr`: currently the same deterministic set required on pull requests.
+- `network`: 02, 03, 04, 07, and 09–11.
+- `infrastructure`: case 05 only.
+- `smoke`: case 14 only.
+- `quarantine`: case 13 only.
+- `full`: all stable cases; excludes quarantined 13 and the intentionally absent 23.
+
+## Current case matrix
+
+There are 23 executable cases. Number 23 is intentionally absent.
+
+| ID | Public contract | Profiles / decision |
+|---|---|---|
+| 01 | VFS metadata, subscription-gated blob retrieval, hash/content integrity, and OCR output propagation | `full` |
+| 02 | Partition isolation followed by public VFS convergence after healing | `network`, `full` |
+| 03 | Relay-topology metadata and exact-content fallback download | `network`, `full` |
+| 04 | Download from a surviving replica after the original source is killed | `network`, `full` |
+| 05 | Container telemetry reflects configured CPU and memory cgroups | `infrastructure`, `full`; infrastructure only |
+| 06 | Generic file service staging and requester VFS output registration | `full` |
+| 07 | Public VFS success with loopback-only TCP and mock STUN setup | `network`, `full`; does not prove a private transport or real UPnP |
+| 08 | Requester-local file auto-staging and returned output registration | `functional`, `pr`, `full` |
+| 09 | Invite/join succeeds when the joiner reaches the sponsor only through a relay | `network`, `full` |
+| 10 | Service failover returns the surviving provider and no-provider failure is exact | `network`, `full` |
+| 11 | Live peer TLS identity rotates and post-rotation VFS traffic succeeds | `network`, `full`; needs real UDP sockets |
+| 12 | Public HTTP server-stream returns at least three NDJSON messages | `full`; CLI output is informational, not the gate |
+| 13 | `cheapest` selects an idle provider under synthetic load | `quarantine` only; sampler-sensitive |
+| 14 | Fake JPEG frames traverse the screen stream with basic pacing | `smoke`, `full`; fake smoke only |
+| 15 | A pinned three-node DAG stages input, crosses two providers, and returns exact output | `functional`, `pr`, `full` |
+| 16 | CLI rejects cycle/type mismatch, accepts a valid pipeline, and persists only the valid one | `functional`, `pr`, `full` |
+| 17 | A protected endpoint rejects no-cert access, invite replay fails, and the enrolled peer works | `functional`, `pr`, `full` |
+| 18 | A matching service subscription affects offline validation/discovery while a non-match does not | `functional`, `pr`, `full` |
+| 19 | A subscribed schema notification survives producer restart in the durable outbox | `functional`, `pr`, `full` |
+| 20 | Same-basename inputs stage without collision and produce exact merged content | `full` |
+| 21 | A tombstone makes replicated blobs unavailable by public open/download | `functional`, `pr`, `full`; list absence is not claimed |
+| 22 | Sponsor identity, peer topology, and peer service routing survive restart | `functional`, `pr`, `full` |
+| 23 | No executable case: true bidi multi-message/cancel contract is blocked | intentionally omitted |
+| 24 | A subscribed download intent survives requester restart and resumes without another sync command | `functional`, `pr`, `full` |
+
+### Why case 23 is absent
+
+The current public HTTP/CLI streaming request accepts one JSON payload and closes client input. It cannot send multiple client messages on one bidi session, and the HTTP/CLI surface has no stream ID plus cancel command that a Docker case can drive. Bind `StreamService`/`CancelStream` cancellation is covered by the live integration tests, but that does not create a multi-message HTTP/CLI bidi contract.
+
+Do not add a fake case that calls private handlers or treats one request plus several response chunks as bidi. Case 23 becomes valid only after a public API supports multiple client messages and observable cancellation end to end.
+
+## README decision gates
+
+The following objectives are not green based on this harness and must not be reported as complete:
+
+| Objective | Current evidence gap |
+|---|---|
+| Dynamic port validation | “Dynamic” has no unambiguous public contract. Cases 15–16 prove DAG execution and registration-time cycle/type checks; the live integration test proves runtime input validation. Define the dynamic behavior before adding a green gate. |
+| Passive background synchronization | Most cases issue `storage sync` while polling. Case 24 proves automatic recovery of one durable download intent, not a general passive metadata/blob synchronization SLO. Define the SLO and test it without manual sync triggers. |
+| Real UPnP/NAT-PMP | Case 07 uses Docker networking and a mock STUN server. It neither controls a real gateway nor verifies a real mapping lifecycle. |
+| OpenTelemetry load balancing | Case 13 uses host/cgroup sampling, is sampler-sensitive, and is quarantined. It does not prove OTel export or deterministic OTel-driven selection. |
+| Real low-latency screen access | Case 14 uses generated JPEG frames. It does not capture/render a real screen, send input, or enforce latency/jitter percentiles. |
+| `uv` Python environment and RGBA conversion | The E2E image installs distro Python/OCR packages and cases 01/06 use inline scripts. It does not exercise the claimed isolated `uv` environment or an RGBA input conversion path. |
+| Visual editor, UI, and Android behavior | The Docker image exercises CLI/server processes only. TUI interaction, Compose UI, gomobile/JNI packaging, device lifecycle, and native pickers require their own non-Docker test targets. |
+| mTLS for every inter-node call | Bootstrap/probing routes are intentionally anonymous (`peers/probe`, `cluster/join`, and relay forwarding policy). Case 17 proves a protected endpoint and invite security, not literal mTLS on every route. Claims must describe the intentional bootstrap exceptions. |
+
+A passing `full` profile establishes only the contracts in the matrix. It must not be used to mark these objectives green.
+
+## Sanitized artifacts
+
+Per-case output is written to `tests/e2e/logs/<case>.log` and sanitized before the runner reports or archives it. Failed logs are copied to `tests/e2e/logs/failed/<timestamp>/`. Cases using `dump_e2e_diagnostics` also capture sanitized Compose state, bounded logs, and public health under `tests/e2e/logs/diagnostics/`.
+
+Sanitization removes private-key bodies and redacts bearer credentials, CLI `--token` values, JSON token fields, and query tokens. CI sanitizes the complete logs directory again before uploading failure artifacts and retains them for five days. When a new credential format is introduced, update [`lib/dump.sh`](lib/dump.sh) before logging it.
+
+## Adding or changing a case
+
+1. Choose `NN_descriptive_name.sh`; number 23 remains reserved for the blocked bidi contract.
+2. Use `set -euo pipefail`, a unique `E2E_PROJECT_NAME`, and a unique `/tmp/proxyma-e2e/...` data directory.
+3. Source [`lib/helpers.sh`](lib/helpers.sh), clean before setup, and install an exit trap. New functional cases should call `dump_e2e_diagnostics` on failure.
+4. Write the scenario as **Given** fixture/topology, **When** public CLI or mTLS action, **Then** public assertion.
+5. Use `wait_until`, `wait_for_output`, `wait_for_node`, or `wait_for_task_completed`; never add a fixed sleep to make timing pass.
+6. Reuse helper modules instead of open-coding Compose, curl certificate flags, polling, assertions, or redaction.
+7. Add the case explicitly to the appropriate profile files. Stable cases belong in `full`; deterministic public contracts may also enter `functional`/`pr`; sampler-sensitive work stays in `quarantine` with a reason.
+8. Check syntax and selectors, then run the narrowest relevant contract:
+
+```bash
+bash -n tests/e2e/cases/NN_descriptive_name.sh
+E2E_CASE=NN E2E_LIST=true ./tests/e2e/run.sh
+E2E_CASE=NN E2E_PARALLEL=1 ./tests/e2e/run.sh
+```
+
+If the case changes the harness, profile ownership, or a decision gate, update this file, the testing sections in [`.cursorrules.md`](../../.cursorrules.md) and [`.agents/AGENTS.md`](../../.agents/AGENTS.md), and both testing skills.

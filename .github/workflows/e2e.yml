@@ -2,42 +2,156 @@ name: Proxyma E2E Tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main, master ]
+  schedule:
+    - cron: '17 3 * * 1'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: E2E profile to run
+        required: true
+        default: full
+        type: choice
+        options:
+          - pr
+          - network
+          - full
+      coverage:
+        description: Build an instrumented image and record combined coverage
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  e2e-cluster-test:
-    name: Run Distributed E2E
+  select-profile:
+    name: Select bounded E2E profile
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
 
     steps:
-      - name: Checkout Code
+      - name: Select profile and coverage mode
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PROFILE: ${{ inputs.profile }}
+          DISPATCH_COVERAGE: ${{ inputs.coverage }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request)
+              profile=pr
+              coverage=false
+              cache_scope=standard
+              ;;
+            push)
+              profile=network
+              coverage=false
+              cache_scope=standard
+              ;;
+            schedule)
+              profile=full
+              coverage=true
+              cache_scope=coverage
+              ;;
+            workflow_dispatch)
+              profile="$DISPATCH_PROFILE"
+              coverage="$DISPATCH_COVERAGE"
+              if [ "$coverage" = true ]; then
+                cache_scope=coverage
+              else
+                cache_scope=standard
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          printf 'value={"include":[{"profile":"%s","coverage":%s,"cache_scope":"%s"}]}\n' \
+            "$profile" "$coverage" "$cache_scope" >> "$GITHUB_OUTPUT"
+
+  e2e-cluster-test:
+    name: E2E ${{ matrix.profile }}
+    needs: select-profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.select-profile.outputs.matrix) }}
+
+    steps:
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable' 
+          go-version-file: go.mod
           cache: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Make scripts executable
-        run: chmod +x ./tests/e2e/run.sh ./tests/e2e/cases/*.sh
+        run: chmod +x ./tests/e2e/run.sh ./tests/e2e/cases/*.sh ./scripts/coverage.sh
 
-      - name: Execute E2E Test Suite
-        run: ./tests/e2e/run.sh
+      - name: Build and cache shared E2E image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: proxyma-e2e-node-3
+          build-args: COVER=${{ matrix.coverage }}
+          cache-from: type=gha,scope=proxyma-e2e-${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=proxyma-e2e-${{ matrix.cache_scope }}
 
-      - name: Upload E2E Logs on Failure
+      - name: Execute E2E profile
+        if: matrix.coverage == false
+        env:
+          E2E_SKIP_BUILD: 'true'
+        run: make test-e2e-${{ matrix.profile }}
+
+      - name: Execute instrumented E2E profile
+        if: matrix.coverage == true
+        env:
+          COVER: 'true'
+          E2E_PROFILE: ${{ matrix.profile }}
+          E2E_SKIP_BUILD: 'true'
+        run: ./scripts/coverage.sh
+
+      - name: Upload combined coverage
+        if: matrix.coverage == true && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.profile }}-coverage
+          path: |
+            coverage.out
+            coverage-unit.out
+            coverage-e2e.out
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Sanitize E2E diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          source ./tests/e2e/lib/dump.sh
+          while IFS= read -r -d '' artifact; do
+            sanitize_file "$artifact" || true
+          done < <(find ./tests/e2e/logs -type f -print0 2>/dev/null)
+
+      - name: Upload sanitized E2E diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-logs
-          path: tests/e2e/logs/
+          name: e2e-${{ matrix.profile }}-sanitized-diagnostics
+          path: ./tests/e2e/logs/
+          if-no-files-found: ignore
           retention-days: 5

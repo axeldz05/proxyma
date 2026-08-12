@@ -28,16 +28,14 @@ mkdir -p "$E2E_DATA_DIR/node-2" # node-low-spec uses node-2 data volume mapping
 
 # Initialize and bring up Sponsor
 bootstrap_node node-1 8081
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 # Initialize and join node-low-spec
 bootstrap_node node-low-spec 8082
 join_cluster node-low-spec node-1 8081 8082
 
 # Bring up node-low-spec
-$COMPOSE_CMD up -d node-low-spec
-sleep 2
+start_node node-low-spec 8082
 
 # Query telemetry endpoint on node-low-spec
 echo "🔍 Querying telemetry endpoint..."

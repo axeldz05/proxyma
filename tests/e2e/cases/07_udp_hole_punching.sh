@@ -36,6 +36,8 @@ import socket
 def run_stun():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('0.0.0.0', 3478))
+    with open("/app/data/stun.ready", "w", encoding="utf-8") as ready:
+        ready.write("ready\n")
     print("STUN mock server listening on port 3478")
     while True:
         data, addr = sock.recvfrom(1024)
@@ -96,13 +98,13 @@ cat << 'EOF' > "$E2E_DATA_DIR/node-3/config.json"
 EOF
 
 # Bring up Node 1 (Sponsor)
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 # Start Python STUN Mock Server inside node-1 container
 echo "Starting STUN server on node-1..."
 exec_node node-1 python3 /app/data/scripts/stun_server.py > /dev/null 2>&1 &
-sleep 1
+wait_until 15 "mock STUN fixture readiness" \
+    exec_node node-1 test -f /app/data/stun.ready >/dev/null
 
 # Join Node 2 & 3 to the Sponsor
 join_cluster node-2 node-1 8081
@@ -113,12 +115,14 @@ python3 -c "import json; p='$E2E_DATA_DIR/node-2/config.json'; d=json.load(open(
 python3 -c "import json; p='$E2E_DATA_DIR/node-3/config.json'; d=json.load(open(p)); d['address']='https://127.0.0.1:8083'; json.dump(d, open(p, 'w'))"
 
 # Bring up node-3 first and let it announce presence to the Sponsor
-$COMPOSE_CMD up -d node-3
-sleep 6
+start_node node-3 8083
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" node-3 \
+    exec_node node-1 ./proxyma peers list --storage /app/data >/dev/null
 
 # Bring up node-2
-$COMPOSE_CMD up -d node-2
-sleep 4
+start_node node-2 8082
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" node-2 \
+    exec_node node-1 ./proxyma peers list --storage /app/data >/dev/null
 
 # Add file to node-3 VFS
 echo "Direct UDP sync test payload" > "$E2E_DATA_DIR/node-3/test_udp.txt"
@@ -135,12 +139,11 @@ exec_node node-2 ./proxyma storage subscribe --name "test_udp.txt" --storage "/a
 echo "Triggering VFS sync on node-2..."
 exec_node node-2 ./proxyma storage sync --storage "/app/data"
 
-# Verify that the file test_udp.txt is successfully synchronized to node-2 via UDP Hole Punching & QUIC
+# Verify the public VFS outcome under the loopback-only TCP/STUN setup. The test
+# deliberately does not infer or inspect a private transport selection.
 echo "Checking if file is synced to node-2..."
-if ! wait_for_condition 30 2 "test_udp.txt" exec_node node-2 ./proxyma storage list --storage "/app/data"; then
-    echo -e "${RED}❌ VFS sync failed or was blocked!${NC}"
-    exit 1
-fi
+wait_for_output "${E2E_VFS_TIMEOUT:-60}" test_udp.txt \
+    exec_node node-2 ./proxyma storage list --storage "/app/data" >/dev/null
 
 # Get file hash
 MANIFEST_N2=$(call_api node-2 GET 8082 manifest)
@@ -158,6 +161,6 @@ if [ "$FILE_CONTENT" != "Direct UDP sync test payload" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}✅ VFS file successfully synchronized directly over QUIC (via UDP Hole Punching)!${NC}"
-echo -e "${GREEN}🎉 Case 7 (UDP NAT Hole Punching via STUN & QUIC) completed successfully!${NC}"
+echo -e "${GREEN}✅ VFS file synchronized under the simulated NAT configuration.${NC}"
+echo -e "${GREEN}🎉 Case 7 (public NAT sync outcome) completed successfully!${NC}"
 exit 0

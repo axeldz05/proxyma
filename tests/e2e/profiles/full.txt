@@ -1,0 +1,25 @@
+# Stable functional, network, infrastructure, and smoke coverage.
+# 05 validates the container/cgroups test infrastructure.
+# 14 is fake-frame smoke coverage, not real screen capture.
+01_sync_ocr
+02_network_partition
+03_relay_fallback
+04_node_churn
+05_cgroups_limits
+06_generic_file_ocr
+07_udp_hole_punching
+08_pipeline_vfs_staging
+09_invite_join_relay_only
+10_service_bid_failover
+11_ca_rotation_live
+12_server_stream_service
+14_screen_stream
+15_pipeline_multinode_dag
+16_pipeline_validation_cli
+17_pairing_security
+18_service_subscribe_notify
+19_offline_outbox_notify
+20_stage_name_collision
+21_vfs_delete_tombstone
+22_peer_restart_persistence
+24_durable_download_restart

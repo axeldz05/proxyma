@@ -34,8 +34,36 @@ jobs:
         with:
           version: latest
 
-      - name: Run Tests
+      - name: Run integration contract tests
+        run: make test-integration
+
+      - name: Run Go test suite
         run: make test
+
+      - name: Run race detector
+        run: make test-race
+
+      - name: Record Go coverage
+        run: |
+          go test -count=1 -coverprofile=coverage-unit.out ./...
+          go tool cover -func=coverage-unit.out | tee coverage-summary.txt
+          {
+            echo '### Go statement coverage'
+            echo '```text'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Go coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: |
+            coverage-unit.out
+            coverage-summary.txt
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Build Binary
         run: make build

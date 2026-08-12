@@ -10,7 +10,16 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 echo -e "${GREEN}🚀 Starting test case: Pipeline VFS auto-staging...${NC}"
 
 cleanup_e2e
-trap cleanup_e2e EXIT
+finish_case() {
+    local exit_code=$?
+    trap - EXIT
+    if [ "$exit_code" -ne 0 ]; then
+        dump_e2e_diagnostics "case-08-failure"
+    fi
+    cleanup_e2e
+    exit "$exit_code"
+}
+trap finish_case EXIT
 
 mkdir -p "$E2E_DATA_DIR/node-1"
 mkdir -p "$E2E_DATA_DIR/node-2/scripts"
@@ -19,9 +28,9 @@ cat << 'EOF' > "$E2E_DATA_DIR/node-2/scripts/transform.py"
 import sys, json, os
 payload = json.load(sys.stdin)
 inp = payload.get("input_path")
-out = payload.get("output_path")
-if not inp or not out:
-    print(json.dumps({"error": f"missing paths: {payload}"}))
+out = payload.get("output_path", "/tmp/staged_out.txt")
+if not inp:
+    print(json.dumps({"error": f"missing input path: {payload}"}))
     sys.exit(1)
 if not os.path.exists(inp):
     print(json.dumps({"error": f"input missing: {inp}"}))
@@ -45,38 +54,39 @@ run_node node-2 service add \
     --type "script" \
     --exec "python3 /app/data/scripts/transform.py" \
     --desc "Prefix file content" \
-    --param "lang?:string"
+    --param "input_path:file,output_path?:string"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
-$COMPOSE_CMD up -d node-2
-sleep 2
+start_node node-2 8082
+
+echo "Waiting for transform to be discoverable through the public CLI..."
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" transform \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 echo "hello-vfs-staging" > "$E2E_DATA_DIR/node-1/source.txt"
-exec_node node-1 ./proxyma storage upload --name "source.txt" --path "/app/data/source.txt" --storage "/app/data"
+UPLOAD_RES=$(exec_node node-1 ./proxyma storage upload \
+    --name source.txt \
+    --path /app/data/source.txt \
+    --storage /app/data)
+assert_not_empty "$UPLOAD_RES" "Storage upload returned no public CLI output"
 
 echo "Running transform via service run (VFS stage input + fetch output)..."
-exec_node node-1 ./proxyma service run --name transform --inputs "input_path=/app/data/source.txt,output_path=/tmp/staged_out.txt" --storage "/app/data" >/dev/null
+RUN_RES=$(exec_node node-1 ./proxyma service run \
+    --name transform \
+    --inputs "input_path=/app/data/source.txt" \
+    --storage /app/data)
+assert_not_empty "$RUN_RES" "Transform submission returned no public CLI output"
 
-STATUS_RES=$(exec_node node-1 ./proxyma service status --storage "/app/data")
+STATUS_RES=$(wait_for_task_completed "${E2E_TASK_TIMEOUT:-60}" node-1 /app/data)
 echo "status: $STATUS_RES"
+assert_not_contains "$STATUS_RES" failed "Transform task failed"
+assert_contains "$STATUS_RES" completed "Transform task did not complete"
 
-if echo "$STATUS_RES" | grep -q "failed"; then
-    echo -e "${RED}❌ Transform task failed${NC}"
-    exit 1
-fi
-if ! echo "$STATUS_RES" | grep -q "completed"; then
-    echo -e "${RED}❌ Transform task did not complete${NC}"
-    exit 1
-fi
-
-MANIFEST_N1=$(exec_node node-1 ./proxyma storage list --storage "/app/data")
-if ! echo "$MANIFEST_N1" | grep -q "staged_out.txt"; then
-    echo -e "${RED}❌ staged_out.txt not registered in node-1 VFS${NC}"
-    echo "$MANIFEST_N1"
-    exit 1
-fi
+MANIFEST_N1=$(wait_for_output "${E2E_VFS_TIMEOUT:-45}" staged_out.txt \
+    exec_node node-1 ./proxyma storage list --storage /app/data)
+assert_contains "$MANIFEST_N1" staged_out.txt \
+    "staged_out.txt was not registered in node-1 VFS"
 
 echo -e "${GREEN}✅ Case 08 (pipeline VFS staging) passed${NC}"
 exit 0

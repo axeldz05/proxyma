@@ -27,11 +27,12 @@ run_node node-2 service add \
     --desc "Fake screen capturer" \
     --param "frames?:int"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
-$COMPOSE_CMD up -d node-2
-sleep 2
+start_node node-2 8082
+
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" screen-share \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 # 45 frames × 50ms ≈ 2.25s of stream (assert ≥2s wall + gaps)
 echo "Streaming screen frames from node-1 (viewer) → node-2 (capturer)..."

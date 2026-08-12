@@ -32,16 +32,13 @@ bootstrap_node node-1 8081
 bootstrap_node node-2 8082
 bootstrap_node node-3 8083
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
 
-$COMPOSE_CMD up -d node-3
-sleep 6
-$COMPOSE_CMD up -d node-2
-sleep 4
+start_node node-3 8083
+start_node node-2 8082
 
 # Register container and network names
 NODE1_CONTAINER=$($COMPOSE_CMD ps -q node-1)
@@ -59,45 +56,48 @@ docker network connect --alias node-1 "$NET_B_NAME" "$NODE1_CONTAINER"
 echo "🚷 Disconnecting node-3 from default network $DEFAULT_NETWORK..."
 docker network disconnect "$DEFAULT_NETWORK" "$NODE3_CONTAINER"
 
-# Wait for network topology to settle and node-3 to reestablish polling on the new network
-sleep 35
-
 # Write and upload a file to node-3
 echo "Writing test file on node-3..."
 echo "relay_fallback_works" > "$E2E_DATA_DIR/node-3/relay_test.txt"
 call_api node-3 POST 8083 upload -F "file=@/app/data/relay_test.txt" > /dev/null
 
-# Force sync on node-3 so it announces metadata to sponsor (node-1)
-exec_node node-3 ./proxyma storage sync > /dev/null
+# Repeatedly exercise public sync and manifest behavior until the new topology
+# works; no fixed relay-poll settling delay is required.
+relay_source_announced() {
+    exec_node node-3 ./proxyma storage sync >/dev/null 2>&1 || true
+    call_api node-1 GET 8081 manifest
+}
 
-# Wait for metadata to propagate to node-1
+# Wait for metadata to propagate to node-1.
 echo "🔍 Waiting for metadata propagation from node-3 to node-1..."
-if ! wait_for_condition 10 2 "relay_test.txt" call_api node-1 GET 8081 manifest; then
-    echo -e "${RED}❌ Error: Metadata from node-3 did not reach node-1${NC}"
-    exit 1
-fi
+MANIFEST_N1=$(wait_for_output "${E2E_VFS_TIMEOUT:-60}" relay_test.txt \
+    relay_source_announced)
 
 # Subscribe node-2 to relay_test.txt
 call_api node-2 POST 8082 "subscribe?name=relay_test.txt" > /dev/null
 
-# Force sync on node-2
-exec_node node-2 ./proxyma storage sync > /dev/null
-
 # Get file hash
-MANIFEST_N1=$(call_api node-1 GET 8081 manifest)
 FILE_HASH=$(echo "$MANIFEST_N1" | grep -o '"relay_test.txt":{"name":"relay_test.txt","size":[^,]*,"hash":"[^"]*"' | grep -o '"hash":"[^"]*"' | cut -d'"' -f4)
+assert_not_empty "$FILE_HASH" "relay_test.txt had no public VFS hash"
 
-if [ -z "$FILE_HASH" ]; then
-    echo -e "${RED}❌ Error: Could not find the hash of relay_test.txt in the manifest${NC}"
-    exit 1
-fi
+relay_download_ready() {
+    local output
 
-# Wait for download on node-2 via node-1 relay
+    exec_node node-2 ./proxyma storage sync >/dev/null 2>&1 || true
+    output=$(call_api node-2 GET 8082 "download/$FILE_HASH" 2>&1) || {
+        printf '%s\n' "$output"
+        return 1
+    }
+    printf '%s\n' "$output"
+    [ "$output" = "relay_fallback_works" ]
+}
+
+# Wait directly on the public relay download outcome.
 echo "📥 Downloading file on node-2 via Node 1 Relay..."
-if ! wait_for_condition 15 2 "relay_fallback_works" call_api node-2 GET 8082 "download/$FILE_HASH"; then
-    echo -e "${RED}❌ Error: Relay Fallback download failed or did not complete.${NC}"
-    exit 1
-fi
+RELAY_CONTENT=$(wait_until "${E2E_VFS_TIMEOUT:-60}" \
+    "exact relay-fallback download content" relay_download_ready)
+assert_equals "$RELAY_CONTENT" "relay_fallback_works" \
+    "Relay fallback returned unexpected content"
 
 echo -e "${GREEN}✅ Relay Fallback download successful. Content verified.${NC}"
 echo -e "${GREEN}🎉 Case 3 (Relay Fallback) completed successfully!${NC}"

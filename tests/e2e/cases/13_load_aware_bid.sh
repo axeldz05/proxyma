@@ -36,12 +36,17 @@ payload = json.load(sys.stdin)
 print(json.dumps({"status": "ok", "from": "node-3", "echo": payload.get("msg", "")}))
 EOF
 
-# Long-running task to saturate workers (raises EstimatedMillis / CostUnits)
+# Blocking task to saturate workers deterministically (raises EstimatedMillis /
+# CostUnits). The FIFO is fixture coordination; container teardown releases it.
+mkfifo "$E2E_DATA_DIR/node-3/slow-gate"
 cat << 'EOF' > "$E2E_DATA_DIR/node-3/scripts/slow.py"
-import sys, json, time
+import pathlib, sys, json
 payload = json.load(sys.stdin)
-time.sleep(25)
-print(json.dumps({"status": "ok", "slept": True}))
+task_id = str(payload.get("x", "unknown"))
+pathlib.Path(f"/app/data/slow-{task_id}.started").write_text("started\n")
+with open("/app/data/slow-gate", "r", encoding="utf-8") as gate:
+    gate.read(1)
+print(json.dumps({"status": "ok", "released": True}))
 EOF
 
 bootstrap_node node-1 8081
@@ -58,40 +63,52 @@ run_node node-3 service add \
     --name "slow" --storage "/app/data" --type "script" \
     --exec "python3 /app/data/scripts/slow.py" --desc "block workers" --param "x?:string"
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
-$COMPOSE_CMD up -d node-2 node-3
-sleep 3
+start_nodes node-2 node-3
+
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" echo \
+    exec_node node-1 ./proxyma service discover --storage /app/data >/dev/null
 
 echo "Saturating node-3 workers with background slow tasks..."
 for i in 1 2 3 4; do
-    $COMPOSE_CMD exec -d node-3 ./proxyma service run --name slow --payload "{\"x\":$i}" --storage "/app/data" >/dev/null 2>&1 || true
+    e2e_compose exec -d node-3 ./proxyma service run \
+        --name slow --payload "{\"x\":$i}" --storage /app/data >/dev/null 2>&1 || true
 done
-sleep 2
+wait_until 15 "all slow-task fixtures to begin" \
+    exec_node node-3 test \
+        -f /app/data/slow-1.started \
+        -a -f /app/data/slow-2.started \
+        -a -f /app/data/slow-3.started \
+        -a -f /app/data/slow-4.started >/dev/null
 
 echo "Running echo with --strategy cheapest (expect idle node-2; retry for sampler noise)..."
-picked_idle=false
-STATUS=""
-for attempt in 1 2 3 4 5; do
-    exec_node node-1 ./proxyma service run --name echo --payload "{\"msg\":\"pick-idle-$attempt\"}" --strategy cheapest --storage "/app/data" >/dev/null || true
-    STATUS=$(exec_node node-1 ./proxyma service status --storage "/app/data")
-    echo "attempt $attempt status: $STATUS"
-    if echo "$STATUS" | grep -qE '"from"[[:space:]]*:[[:space:]]*"node-2"'; then
-        if ! echo "$STATUS" | grep -qE '"from"[[:space:]]*:[[:space:]]*"node-3"'; then
-            picked_idle=true
-            break
-        fi
-    fi
-    sleep 2
-done
+idle_provider_selected() {
+    local response
 
-if [ "$picked_idle" != true ]; then
-    echo -e "${RED}❌ Expected echo on idle node-2 under cheapest strategy (after retries)${NC}"
-    echo "last status: $STATUS"
-    exit 1
-fi
+    response=$(exec_node node-1 ./proxyma service run \
+        --name echo --payload '{"msg":"pick-idle"}' \
+        --strategy cheapest --storage /app/data 2>&1) || {
+        printf '%s\n' "$response"
+        return 1
+    }
+    printf '%s\n' "$response"
+    printf '%s\n' "$response" | python3 -c '
+import json
+import sys
+
+response = json.load(sys.stdin)
+outputs = response.get("outputs", {})
+if response.get("status") != "completed" or outputs.get("from") != "node-2":
+    raise SystemExit(1)
+'
+}
+
+STATUS=$(wait_until "${E2E_BID_TIMEOUT:-45}" \
+    "cheapest strategy to select idle node-2" idle_provider_selected)
+assert_contains "$STATUS" '"from": "node-2"' \
+    "Cheapest strategy did not return the idle provider response"
 
 echo -e "${GREEN}✅ Case 13 (load-aware bid) passed — cheapest picked node-2${NC}"
 exit 0

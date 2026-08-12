@@ -206,6 +206,17 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 1. `announceAndSync` + `forEachPeer` manifests → `fetchBlobFromPeer`.
 2. Bids via `mapEachPeer`; on-demand via `firstPeer`; dispatch with `StageLocalFile`.
 
+### Testing workflow
+
+[`tests/e2e/README.md`](../tests/e2e/README.md) is the testing contract, current 23-case matrix, profile map, and README decision-gate ledger.
+
+* `make test` owns unit/package coverage; `make test-integration` owns live bind Unix-IPC and real mTLS restart contracts; `make test-race` is the complete race gate.
+* `make test-e2e-pr`, `make test-e2e-network`, and `make test-e2e` / `make test-e2e-full` are the Docker entry points. Use `E2E_CASE=NN ./tests/e2e/run.sh` for one case and `E2E_PROFILE=<name>` for `functional`, `pr`, `network`, `infrastructure`, `smoke`, `quarantine`, or `full`.
+* No new fixed sleeps. Go tests synchronize with channels/contexts and use deadlines only as failure bounds; shell cases use `wait_until` / `wait_for_output`.
+* Functional Docker scenarios are **Given** topology/fixtures/faults, **When** public CLI or mTLS API action, **Then** public output/status/content assertion. Private files, logs, stores, and transport choices are not product assertions.
+* Add every case explicitly to its profile files. `full` excludes quarantined case 13; case 05 is infrastructure-only; case 14 is fake-frame smoke; case 23 remains absent until public bidi supports multi-message input and end-to-end cancel.
+* Route E2E diagnostics through `tests/e2e/lib/dump.sh`; artifacts must be sanitized before upload.
+
 ---
 
 ## Skills Index

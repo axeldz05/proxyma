@@ -29,86 +29,88 @@ bootstrap_node node-1 8081
 bootstrap_node node-2 8082
 bootstrap_node node-3 8083
 
-$COMPOSE_CMD up -d node-1
-sleep 2
+start_node node-1 8081
 join_cluster node-2 node-1 8081
 join_cluster node-3 node-1 8081
-$COMPOSE_CMD up -d node-2 node-3
-sleep 4
+start_nodes node-2 node-3
 
-# Warm mTLS so sponsor caches peer leaf certs (needed to re-sign on rotation)
-call_api node-2 GET 8082 peers >/dev/null || true
-call_api node-3 GET 8083 peers >/dev/null || true
-call_api node-1 GET 8081 peers >/dev/null || true
-# Touch sponsor from peers (client cert presented → SetPeerCertificate)
-exec_node node-2 ./proxyma storage sync >/dev/null || true
-exec_node node-3 ./proxyma storage sync >/dev/null || true
-sleep 2
+# Exercise a real peer-to-peer mTLS request so the sponsor has observed the
+# remaining peer's public TLS identity before rotation.
+wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" node-1 \
+    call_peer_api node-2 node-1 GET 8081 telemetry >/dev/null
+
+live_peer_serial() {
+    local client_id=$1
+    local target_host=$2
+    local target_port=$3
+
+    exec_node "$client_id" python3 -c '
+import socket
+import ssl
+import sys
+
+client_id, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+context = ssl.create_default_context(cafile="/app/data/certs/ca.crt")
+context.load_cert_chain(
+    certfile=f"/app/data/certs/{client_id}.crt",
+    keyfile=f"/app/data/certs/{client_id}.key",
+)
+with socket.create_connection((host, port), timeout=5) as raw:
+    with context.wrap_socket(raw, server_hostname=host) as tls:
+        print(tls.getpeercert()["serialNumber"])
+' "$client_id" "$target_host" "$target_port"
+}
+
+TLS_SERIAL_BEFORE=$(live_peer_serial node-2 node-1 8081)
+assert_not_empty "$TLS_SERIAL_BEFORE" \
+    "Live pre-rotation peer handshake exposed no TLS serial"
+echo "Live sponsor TLS serial before rotation: $TLS_SERIAL_BEFORE"
 
 # Seed a file before rotation
 echo "pre_rotation" > "$E2E_DATA_DIR/node-1/pre.txt"
 call_api node-1 POST 8081 upload -F "file=@/app/data/pre.txt" >/dev/null
 exec_node node-2 ./proxyma storage sync >/dev/null || true
 
-if ! wait_for_condition 15 2 "pre.txt" call_api node-2 GET 8082 manifest; then
-    echo -e "${RED}❌ pre-rotation sync failed${NC}"
-    exit 1
-fi
-
-CA_BEFORE=$(exec_node node-1 sha256sum /app/data/certs/ca.crt | awk '{print $1}')
-echo "CA before leave/rotation: $CA_BEFORE"
+wait_for_output "${E2E_VFS_TIMEOUT:-45}" pre.txt \
+    call_api node-2 GET 8082 manifest >/dev/null
 
 # Only the sponsor leave path triggers RotateCAAndResignPeers with CA authority.
-# Rotation runs in a goroutine — do not race uploads against in-memory TLS reload.
+# Rotation runs asynchronously; observe it through the public peer handshake.
 echo "👋 Removing node-3 via sponsor leave (triggers CA rotation)..."
 set +e
 LEAVE_OUT=$(call_api node-1 POST 8081 peers/leave -H "Content-Type: application/json" -d '{"id":"node-3"}' 2>&1)
 LEAVE_RC=$?
 set -e
 echo "leave response (rc=$LEAVE_RC): $LEAVE_OUT"
-$COMPOSE_CMD stop node-3 >/dev/null || true
-
-echo "⏳ Waiting for CA file rotation on sponsor..."
-CA_AFTER=""
-for i in $(seq 1 30); do
-    CA_AFTER=$(exec_node node-1 sha256sum /app/data/certs/ca.crt 2>/dev/null | awk '{print $1}')
-    if [ -n "$CA_AFTER" ] && [ "$CA_AFTER" != "$CA_BEFORE" ]; then
-        break
-    fi
-    sleep 1
-done
-echo "CA after leave/rotation: $CA_AFTER"
-if [ -z "$CA_AFTER" ] || [ "$CA_AFTER" = "$CA_BEFORE" ]; then
-    echo -e "${RED}❌ CA did not rotate on sponsor${NC}"
-    exit 1
+if [ "$LEAVE_RC" -ne 0 ]; then
+    fail_assertion "Sponsor rejected the public leave request" "$LEAVE_OUT"
 fi
+e2e_compose stop node-3 >/dev/null || true
 
-echo "⏳ Waiting for node-2 to receive rotated CA..."
-if ! wait_for_condition 30 2 "$CA_AFTER" exec_node node-2 sha256sum /app/data/certs/ca.crt; then
-    echo -e "${RED}❌ node-2 CA was not updated after rotation${NC}"
-    exec_node node-2 sha256sum /app/data/certs/ca.crt || true
-    exit 1
-fi
+rotated_peer_identity_ready() {
+    local serial
 
-echo "⏳ Waiting until mTLS endpoints accept the new certs..."
-tls_ok() {
-    local node=$1 port=$2
-    local out
-    out=$(call_api "$node" GET "$port" telemetry 2>/dev/null || true)
-    echo "$out" | grep -q "node_id"
+    serial=$(live_peer_serial node-2 node-1 8081 2>&1) || {
+        printf '%s\n' "$serial"
+        return 1
+    }
+    printf '%s\n' "$serial"
+    [ "$serial" != "$TLS_SERIAL_BEFORE" ]
 }
-for i in $(seq 1 30); do
-    if tls_ok node-1 8081 && tls_ok node-2 8082; then
-        break
-    fi
-    sleep 1
-done
-if ! tls_ok node-1 8081 || ! tls_ok node-2 8082; then
-    echo -e "${RED}❌ Telemetry/mTLS still unhealthy after rotation${NC}"
-    call_api node-1 GET 8081 telemetry || true
-    call_api node-2 GET 8082 telemetry || true
-    exit 1
+
+echo "⏳ Waiting for a changed live TLS identity and valid peer handshake..."
+TLS_SERIAL_AFTER=$(wait_until "${E2E_TLS_TIMEOUT:-60}" \
+    "rotated sponsor TLS identity accepted by node-2" \
+    rotated_peer_identity_ready)
+assert_not_empty "$TLS_SERIAL_AFTER" \
+    "Live post-rotation peer handshake exposed no TLS serial"
+if [ "$TLS_SERIAL_AFTER" = "$TLS_SERIAL_BEFORE" ]; then
+    fail_assertion "Sponsor TLS identity did not rotate" "$TLS_SERIAL_AFTER"
 fi
+echo "Live sponsor TLS serial after rotation: $TLS_SERIAL_AFTER"
+
+wait_for_output "${E2E_TLS_TIMEOUT:-60}" node-1 \
+    call_peer_api node-2 node-1 GET 8081 telemetry >/dev/null
 
 # Live traffic after rotation: upload from node-1, sync to node-2
 echo "post_rotation" > "$E2E_DATA_DIR/node-1/post.txt"
@@ -122,15 +124,20 @@ if [ $UP_RC -ne 0 ]; then
     exit 1
 fi
 
-exec_node node-1 ./proxyma storage sync >/dev/null || true
-exec_node node-2 ./proxyma storage sync >/dev/null || true
-
-if ! wait_for_condition 20 2 "post.txt" call_api node-2 GET 8082 manifest; then
-    echo -e "${RED}❌ post-rotation VFS sync failed between remaining peers${NC}"
-    call_api node-1 GET 8081 manifest || true
-    call_api node-2 GET 8082 manifest || true
-    exit 1
-fi
+call_api node-2 POST 8082 "subscribe?name=post.txt" >/dev/null
+post_rotation_visible() {
+    exec_node node-1 ./proxyma storage sync >/dev/null 2>&1 || true
+    exec_node node-2 ./proxyma storage sync >/dev/null 2>&1 || true
+    call_api node-2 GET 8082 manifest
+}
+POST_MANIFEST=$(wait_for_output "${E2E_VFS_TIMEOUT:-60}" post.txt \
+    post_rotation_visible)
+POST_HASH=$(echo "$POST_MANIFEST" | grep -o '"post.txt":{"name":"post.txt","size":[^,]*,"hash":"[^"]*"' | grep -o '"hash":"[^"]*"' | cut -d'"' -f4)
+assert_not_empty "$POST_HASH" "post.txt had no public VFS hash after rotation"
+POST_CONTENT=$(wait_for_output "${E2E_VFS_TIMEOUT:-60}" post_rotation \
+    call_api node-2 GET 8082 "download/$POST_HASH")
+assert_equals "$POST_CONTENT" post_rotation \
+    "Post-rotation peer operation returned incorrect content"
 
 PROBE=$(call_api node-1 GET 8081 peers || true)
 echo "peers after rotation: $PROBE"

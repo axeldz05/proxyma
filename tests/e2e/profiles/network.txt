@@ -1,0 +1,8 @@
+# Network topology, partition, relay, churn, and failover cases.
+02_network_partition
+03_relay_fallback
+04_node_churn
+07_udp_hole_punching
+09_invite_join_relay_only
+10_service_bid_failover
+11_ca_rotation_live

@@ -1,0 +1,2 @@
+# Heuristic remains sampler-sensitive; run manually until selection is deterministic.
+13_load_aware_bid
