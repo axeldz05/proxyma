@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "epsilon": 0.1,
+  "packages": {
+    "proxyma/internal/example": 50.0
+  },
+  "exclusions": {}
+}

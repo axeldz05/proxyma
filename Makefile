@@ -12,7 +12,7 @@ ANDROID_DIR=cmd/proxyma-android
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test test-integration test-race test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
+.PHONY: all build test test-integration test-cover test-sanitizer test-race test-ci test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
 
 all: lint test build ## Run lint, tests, and build
 
@@ -28,10 +28,21 @@ test-integration: ## Run live public-contract integration tests
 	@echo "$(BLUE)Running integration contract tests...$(NC)"
 	$(GO) test -v ./cmd/proxyma-bind ./internal/server
 
+test-cover: ## Run tests with coverage and enforce the coverage ratchet
+	@echo "$(BLUE)Running tests with coverage...$(NC)"
+	$(GO) test -count=1 -coverprofile=coverage-unit.out ./...
+	$(GO) run ./cmd/coverage-ratchet check scripts/coverage_baseline.json coverage-unit.out
+
+test-sanitizer: ## Verify E2E diagnostic sanitization
+	@echo "$(BLUE)Testing the E2E diagnostic sanitizer...$(NC)"
+	bash ./tests/e2e/lib/dump_sanitize_test.sh
+
 # The race suite is green. It remains separate from `test` because it is slower.
 test-race: ## Run the Go test suite with race detection
 	@echo "$(BLUE)Running tests with the race detector...$(NC)"
-	$(GO) test -race ./...
+	$(GO) test -race -count=1 ./...
+
+test-ci: test-cover test-sanitizer test-race ## Run the local CI test gates
 
 test-android-bind: ## Build the Android AAR and verify required Java APIs
 test-android: ## Build and test Android against one fresh temporary AAR

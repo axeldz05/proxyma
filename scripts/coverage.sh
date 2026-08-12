@@ -45,16 +45,30 @@ fi
 
 # 3. Locate and merge E2E coverage directories
 echo -e "\n${BLUE}🧩 [3/5] Merging E2E coverage data...${NC}"
-COV_DIRS=$(find /tmp/proxyma-e2e -type d -name "coverage" 2>/dev/null | paste -sd "," - || true)
+mapfile -t COV_DIR_CANDIDATES < <(find /tmp/proxyma-e2e -type d -name "coverage" 2>/dev/null | sort || true)
+COV_DIR_ARRAY=()
+for cov_dir in "${COV_DIR_CANDIDATES[@]}"; do
+    if compgen -G "$cov_dir/covmeta.*" >/dev/null &&
+        compgen -G "$cov_dir/covcounters.*" >/dev/null; then
+        COV_DIR_ARRAY+=("$cov_dir")
+    fi
+done
 
-if [ -n "$COV_DIRS" ]; then
+HAS_E2E_COVERAGE=false
+if [ ${#COV_DIR_ARRAY[@]} -gt 0 ]; then
+    COV_DIRS=$(IFS=,; echo "${COV_DIR_ARRAY[*]}")
     mkdir -p /tmp/proxyma-merged-covdata
     go tool covdata merge -i="$COV_DIRS" -o=/tmp/proxyma-merged-covdata
     go tool covdata textfmt -i=/tmp/proxyma-merged-covdata -o=coverage-e2e.out
+    HAS_E2E_COVERAGE=true
     echo -e "${GREEN}✅ E2E coverage profile generated (coverage-e2e.out).${NC}"
+elif [ "${COVERAGE_ALLOW_MISSING_E2E:-false}" = true ]; then
+    printf 'mode: set\n' > coverage-e2e.out
+    echo -e "${YELLOW}⚠️ No E2E covdata found; continuing because COVERAGE_ALLOW_MISSING_E2E=true.${NC}"
 else
-    echo -e "${YELLOW}⚠️ No E2E coverage data directories found.${NC}"
-    touch coverage-e2e.out
+    echo -e "${RED}❌ No E2E covdata found. Coverage generation requires covmeta and covcounters files.${NC}" >&2
+    echo -e "${YELLOW}   For local unit-only runs, set COVERAGE_ALLOW_MISSING_E2E=true.${NC}" >&2
+    exit 1
 fi
 
 # 4. Run Go unit tests and generate unit coverage profile
@@ -67,10 +81,23 @@ echo -e "${GREEN}✅ Unit coverage profile generated (coverage-unit.out).${NC}"
 
 # 5. Merge unit and E2E profiles using merge_profiles.go
 echo -e "\n${BLUE}🔗 [5/5] Merging unit and E2E coverage profiles...${NC}"
-go run scripts/merge_profiles.go coverage.out coverage-unit.out coverage-e2e.out
+go run scripts/merge_profiles.go --strict coverage.out coverage-unit.out coverage-e2e.out
 
 echo -e "\n${GREEN}======================================================${NC}"
-echo -e "${GREEN}📊 Combined Overall Coverage Report:${NC}"
+echo -e "${GREEN}📊 Unit Coverage Report:${NC}"
+echo -e "${GREEN}======================================================${NC}"
+go tool cover -func=coverage-unit.out
+
+echo -e "\n${GREEN}======================================================${NC}"
+echo -e "${GREEN}📊 E2E Coverage Report:${NC}"
+echo -e "${GREEN}======================================================${NC}"
+if [ "$HAS_E2E_COVERAGE" != true ]; then
+    echo -e "${YELLOW}No E2E covdata was generated; reporting the explicit empty profile.${NC}"
+fi
+go tool cover -func=coverage-e2e.out
+
+echo -e "\n${GREEN}======================================================${NC}"
+echo -e "${GREEN}📊 Union Coverage Report:${NC}"
 echo -e "${GREEN}======================================================${NC}"
 go tool cover -func=coverage.out
 

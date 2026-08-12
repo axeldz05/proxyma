@@ -88,8 +88,6 @@ type liveDaemonWait struct {
 
 func startLiveBindDaemon(t *testing.T, nodeID string) *liveBindDaemon {
 	t.Helper()
-	StopNode()
-
 	storagePath := t.TempDir()
 	if err := p2p.SetupNewNode(
 		storagePath,
@@ -98,6 +96,12 @@ func startLiveBindDaemon(t *testing.T, nodeID string) *liveBindDaemon {
 	); err != nil {
 		t.Fatalf("set up live node: %v", err)
 	}
+	return startLiveBindDaemonAt(t, storagePath)
+}
+
+func startLiveBindDaemonAt(t *testing.T, storagePath string) *liveBindDaemon {
+	t.Helper()
+	StopNode()
 
 	executable, err := os.Executable()
 	if err != nil {
@@ -302,6 +306,254 @@ func TestLiveDaemonPublicActionContracts(t *testing.T) {
 
 	if err := daemon.stop(); err != nil {
 		t.Fatalf("clean StopNodeWithError contract failed: %v\n%s", err, daemon.output.String())
+	}
+}
+
+func TestLiveDaemonStorageLifecycleContracts(t *testing.T) {
+	startLiveBindDaemon(t, "live-storage-lifecycle")
+
+	const (
+		name    = "lifecycle.txt"
+		content = "live storage lifecycle"
+	)
+	inputPath := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(inputPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	assertLiveBindSuccess(t, UploadFile(name, inputPath))
+	uploaded := liveVFSFile(t, name)
+	if !uploaded.HasLocal || !uploaded.Subscribed || uploaded.Deleted ||
+		uploaded.Size != int64(len(content)) || uploaded.Hash == "" {
+		t.Fatalf("uploaded VFS status = %#v, want subscribed local live file", uploaded)
+	}
+
+	assertLiveBindSuccess(t, SetSubscription(name, false))
+	unsubscribed := liveVFSFile(t, name)
+	if unsubscribed.Subscribed {
+		t.Fatalf("unsubscribed VFS status = %#v, want subscribed=false", unsubscribed)
+	}
+
+	assertLiveBindSuccess(t, SetSubscription(name, true))
+	subscribed := liveVFSFile(t, name)
+	if !subscribed.Subscribed {
+		t.Fatalf("subscribed VFS status = %#v, want subscribed=true", subscribed)
+	}
+
+	assertLiveBindSuccess(t, SyncVFS())
+	localPath := ResolveLocalBlob(name)
+	assertLiveBindSuccess(t, localPath)
+	localContent, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read resolved local blob %q: %v", localPath, err)
+	}
+	if string(localContent) != content {
+		t.Fatalf("resolved local blob = %q, want %q", localContent, content)
+	}
+
+	assertLiveBindSuccess(t, DeleteLocalCache(name))
+	purged := liveVFSFile(t, name)
+	if purged.HasLocal || purged.Subscribed || purged.Deleted {
+		t.Fatalf("purged VFS status = %#v, want remote-only live metadata", purged)
+	}
+	assertLiveBindErrorContains(t, FetchFileOnDemand(name), "no peer holds physical replica")
+
+	assertLiveBindSuccess(t, DeleteFile(name))
+	tombstone := liveVFSFile(t, name)
+	if !tombstone.Deleted || tombstone.HasLocal || tombstone.Subscribed {
+		t.Fatalf("deleted VFS status = %#v, want nonlocal tombstone", tombstone)
+	}
+	if tombstone.Version <= uploaded.Version {
+		t.Fatalf("tombstone version = %d, want greater than upload version %d", tombstone.Version, uploaded.Version)
+	}
+}
+
+func TestLiveDaemonTaskStatusPollingContracts(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseUpstream := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": payload["value"]})
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	startLiveBindDaemon(t, "live-task-status")
+	t.Cleanup(releaseUpstream)
+	schemaPath := writeLiveServiceSchema(t, protocol.ServiceSchema{
+		Name: "live.gated",
+		Type: protocol.ServiceTypeGRPC,
+		Parameters: map[string]protocol.ServiceParameter{
+			"value": {Type: protocol.ParamTypeInt, Required: true},
+		},
+		Outputs: map[string]protocol.ServiceParameter{
+			"result": {Type: protocol.ParamTypeInt},
+		},
+	})
+	assertLiveBindSuccess(t, AddService(
+		"live.gated",
+		string(protocol.ServiceTypeGRPC),
+		upstream.URL,
+		"",
+		"",
+		"",
+		schemaPath,
+	))
+
+	runResult := make(chan string, 1)
+	go func() {
+		runResult <- RunService("live.gated", `{"value":9}`)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("gated upstream did not receive the service request")
+	}
+
+	var statuses []protocol.ServiceTaskResponse
+	decodeLiveBindJSON(t, GetTaskStatus(""), &statuses)
+	pending, ok := liveTaskForService(statuses, "live.gated")
+	if !ok || pending.TaskID == "" || pending.Status != "pending" {
+		t.Fatalf("task statuses = %#v, want pending live.gated task with ID", statuses)
+	}
+
+	var polledPending protocol.ServiceTaskResponse
+	decodeLiveBindJSON(t, GetTaskStatus(pending.TaskID), &polledPending)
+	if polledPending.TaskID != pending.TaskID || polledPending.Status != "pending" {
+		t.Fatalf("pending task poll = %#v, want task %q pending", polledPending, pending.TaskID)
+	}
+
+	releaseUpstream()
+	runJSON := awaitLiveBindResult(t, runResult, "RunService completion")
+	var completed protocol.ServiceTaskResponse
+	decodeLiveBindJSON(t, runJSON, &completed)
+	if completed.TaskID != pending.TaskID || completed.Status != "completed" ||
+		completed.Outputs["result"] != float64(9) {
+		t.Fatalf("completed RunService response = %#v, want task %q result 9", completed, pending.TaskID)
+	}
+
+	var polledCompleted protocol.ServiceTaskResponse
+	decodeLiveBindJSON(t, GetTaskStatus(pending.TaskID), &polledCompleted)
+	if polledCompleted.Status != "completed" || polledCompleted.Outputs["result"] != float64(9) {
+		t.Fatalf("completed task poll = %#v, want completed result 9", polledCompleted)
+	}
+	assertLiveBindErrorContains(t, GetTaskStatus("task-does-not-exist"), "task not found")
+}
+
+func TestLiveDaemonStatePersistsAcrossRestart(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": payload["value"]})
+	}))
+	t.Cleanup(upstream.Close)
+
+	first := startLiveBindDaemon(t, "live-persistence")
+	schemaPath := writeLiveServiceSchema(t, protocol.ServiceSchema{
+		Name:        "persistence.echo",
+		Type:        protocol.ServiceTypeGRPC,
+		Description: "restart persistence contract",
+		Parameters: map[string]protocol.ServiceParameter{
+			"value": {Type: protocol.ParamTypeInt, Required: true},
+		},
+		Outputs: map[string]protocol.ServiceParameter{
+			"result": {Type: protocol.ParamTypeInt},
+		},
+	})
+	assertLiveBindSuccess(t, AddService(
+		"persistence.echo",
+		string(protocol.ServiceTypeGRPC),
+		upstream.URL,
+		"restart persistence contract",
+		"",
+		"",
+		schemaPath,
+	))
+
+	pipeline := protocol.PipelineSchema{
+		ID:      "persistence.pipeline",
+		Version: 1,
+		Steps: []protocol.PipelineStep{
+			{ID: "echo", Service: "persistence.echo"},
+		},
+		Connections: []protocol.PipelineConnection{
+			{FromStep: "$initial", FromPort: "value", ToStep: "echo", ToPort: "value"},
+		},
+	}
+	assertLiveBindSuccess(t, AddPipelineRaw(pipeline.ID, marshalLiveJSON(t, pipeline)))
+
+	const (
+		vfsName    = "persistent.txt"
+		vfsContent = "persistent VFS content"
+	)
+	inputPath := filepath.Join(t.TempDir(), vfsName)
+	if err := os.WriteFile(inputPath, []byte(vfsContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertLiveBindSuccess(t, UploadFile(vfsName, inputPath))
+	beforeRestart := liveVFSFile(t, vfsName)
+
+	if err := first.stop(); err != nil {
+		t.Fatalf("stop first live daemon: %v\n%s", err, first.output.String())
+	}
+	startLiveBindDaemonAt(t, first.storage)
+
+	var discovered []string
+	decodeLiveBindJSON(t, DiscoverServices(), &discovered)
+	if !containsString(discovered, "persistence.echo") {
+		t.Fatalf("services after restart = %#v, want persistence.echo", discovered)
+	}
+	var persistedService protocol.ServiceSchema
+	decodeLiveBindJSON(t, GetServiceSchema("persistence.echo"), &persistedService)
+	if persistedService.Name != "persistence.echo" ||
+		persistedService.Description != "restart persistence contract" ||
+		persistedService.Parameters["value"].Type != protocol.ParamTypeInt {
+		t.Fatalf("service schema after restart = %#v", persistedService)
+	}
+
+	var pipelines []protocol.PipelineSchema
+	decodeLiveBindJSON(t, ListPipelines(), &pipelines)
+	persistedPipeline, ok := livePipelineByID(pipelines, pipeline.ID)
+	if !ok || protocol.PipelineSchemaHash(persistedPipeline) != protocol.PipelineSchemaHash(pipeline) {
+		t.Fatalf("pipeline list after restart = %#v, want %#v", pipelines, pipeline)
+	}
+	var fetchedPipeline protocol.PipelineSchema
+	decodeLiveBindJSON(t, GetPipelineSchemaJson(pipeline.ID), &fetchedPipeline)
+	if protocol.PipelineSchemaHash(fetchedPipeline) != protocol.PipelineSchemaHash(pipeline) {
+		t.Fatalf("pipeline get after restart = %#v, want %#v", fetchedPipeline, pipeline)
+	}
+
+	afterRestart := liveVFSFile(t, vfsName)
+	if afterRestart.Hash != beforeRestart.Hash || !afterRestart.HasLocal ||
+		!afterRestart.Subscribed || afterRestart.Deleted {
+		t.Fatalf("VFS status after restart = %#v, before restart %#v", afterRestart, beforeRestart)
+	}
+	localPath := ResolveLocalBlob(vfsName)
+	assertLiveBindSuccess(t, localPath)
+	gotContent, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read VFS blob after restart %q: %v", localPath, err)
+	}
+	if string(gotContent) != vfsContent {
+		t.Fatalf("VFS content after restart = %q, want %q", gotContent, vfsContent)
 	}
 }
 
@@ -660,6 +912,54 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func liveVFSFile(t *testing.T, name string) protocol.VFSFileStatus {
+	t.Helper()
+	var files []protocol.VFSFileStatus
+	decodeLiveBindJSON(t, GetVFSFilesJson(), &files)
+	for _, file := range files {
+		if file.Name == name {
+			return file
+		}
+	}
+	t.Fatalf("VFS files = %#v, want %q", files, name)
+	return protocol.VFSFileStatus{}
+}
+
+func liveTaskForService(
+	statuses []protocol.ServiceTaskResponse,
+	service string,
+) (protocol.ServiceTaskResponse, bool) {
+	for _, status := range statuses {
+		if status.Service == service {
+			return status, true
+		}
+	}
+	return protocol.ServiceTaskResponse{}, false
+}
+
+func livePipelineByID(
+	pipelines []protocol.PipelineSchema,
+	id string,
+) (protocol.PipelineSchema, bool) {
+	for _, pipeline := range pipelines {
+		if pipeline.ID == id {
+			return pipeline, true
+		}
+	}
+	return protocol.PipelineSchema{}, false
+}
+
+func awaitLiveBindResult(t *testing.T, results <-chan string, operation string) string {
+	t.Helper()
+	select {
+	case result := <-results:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", operation)
+	}
+	return ""
 }
 
 func awaitLiveStreamChunk(t *testing.T, listener *liveStreamListener) map[string]any {

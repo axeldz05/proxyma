@@ -44,19 +44,13 @@ jobs:
         run: |
           case "$EVENT_NAME" in
             pull_request)
-              profile=pr
-              coverage=false
-              cache_scope=standard
+              matrix='{"include":[{"profile":"pr","coverage":false,"cache_scope":"standard"},{"profile":"network","coverage":false,"cache_scope":"standard"}]}'
               ;;
             push)
-              profile=network
-              coverage=false
-              cache_scope=standard
+              matrix='{"include":[{"profile":"full","coverage":false,"cache_scope":"standard"}]}'
               ;;
             schedule)
-              profile=full
-              coverage=true
-              cache_scope=coverage
+              matrix='{"include":[{"profile":"full","coverage":true,"cache_scope":"coverage"}]}'
               ;;
             workflow_dispatch)
               profile="$DISPATCH_PROFILE"
@@ -66,14 +60,16 @@ jobs:
               else
                 cache_scope=standard
               fi
+              printf -v matrix \
+                '{"include":[{"profile":"%s","coverage":%s,"cache_scope":"%s"}]}' \
+                "$profile" "$coverage" "$cache_scope"
               ;;
             *)
               echo "Unsupported event: $EVENT_NAME" >&2
               exit 1
               ;;
           esac
-          printf 'value={"include":[{"profile":"%s","coverage":%s,"cache_scope":"%s"}]}\n' \
-            "$profile" "$coverage" "$cache_scope" >> "$GITHUB_OUTPUT"
+          printf 'value=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
 
   e2e-cluster-test:
     name: E2E ${{ matrix.profile }}

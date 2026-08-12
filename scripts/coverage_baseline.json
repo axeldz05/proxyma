@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "epsilon": 0.1,
+  "packages": {
+    "proxyma/cmd/proxyma": 59.5,
+    "proxyma/cmd/proxyma-bind": 72.2,
+    "proxyma/internal/compute": 65.6,
+    "proxyma/internal/p2p": 66.9,
+    "proxyma/internal/protocol": 67.2,
+    "proxyma/internal/server": 72.1,
+    "proxyma/internal/storage": 65.0,
+    "proxyma/internal/storage/physical": 71.1,
+    "proxyma/internal/telemetry": 93.1,
+    "proxyma/internal/utils": 74.2,
+    "proxyma/shared/uischema": 53.8
+  },
+  "exclusions": {
+    "proxyma/cmd/coverage-ratchet": "coverage ratchet tooling; not shipped",
+    "proxyma/internal/covermerge": "coverage profile tooling; not shipped",
+    "proxyma/internal/testutil": "test support package; not shipped",
+    "proxyma/scripts": "development tooling; not shipped",
+    "proxyma/services-examples/editor": "non-shipping example service"
+  }
+}

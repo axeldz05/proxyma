@@ -1,77 +1,32 @@
 package main
 
 import (
-	"bufio"
+	"flag"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
+
+	"proxyma/internal/covermerge"
 )
 
 func main() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: go run merge_profiles.go <output> <profile1> <profile2> ...")
+	strict := flag.Bool("strict", false, "require every input profile to exist")
+	flag.Usage = func() {
+		_, _ = fmt.Fprintln(flag.CommandLine.Output(), "Usage: go run scripts/merge_profiles.go [--strict] <output> <profile1> [profile2 ...]")
+	}
+	flag.Parse()
+	if flag.NArg() < 2 {
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	inputs := make([]covermerge.File, 0, flag.NArg()-1)
+	for _, path := range flag.Args()[1:] {
+		inputs = append(inputs, covermerge.File{Path: path, Required: *strict})
+	}
+	outputPath := flag.Arg(0)
+	if err := covermerge.MergeFiles(outputPath, inputs); err != nil {
+		fmt.Fprintf(os.Stderr, "merge coverage profiles: %v\n", err)
 		os.Exit(1)
 	}
-
-	outputPath := os.Args[1]
-	profilePaths := os.Args[2:]
-
-	counts := make(map[string]int)
-	var order []string
-	mode := "set"
-
-	for _, path := range profilePaths {
-		file, err := os.Open(path)
-		if err != nil {
-			// Skip missing files
-			continue
-		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "mode:") {
-				m := strings.TrimSpace(strings.Split(line, ":")[1])
-				if m != "" {
-					mode = m
-				}
-				continue
-			}
-			parts := strings.Fields(line)
-			if len(parts) != 3 {
-				continue
-			}
-			block := parts[0] + " " + parts[1]
-			count, err := strconv.Atoi(parts[2])
-			if err != nil {
-				continue
-			}
-			if _, exists := counts[block]; !exists {
-				order = append(order, block)
-			}
-			if mode == "set" {
-				if count > 0 {
-					counts[block] = 1
-				}
-			} else {
-				counts[block] += count
-			}
-		}
-		_ = file.Close()
-	}
-
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		fmt.Printf("Error creating output file: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = outFile.Close() }()
-
-	writer := bufio.NewWriter(outFile)
-	_, _ = writer.WriteString("mode: " + mode + "\n")
-	for _, block := range order {
-		_, _ = fmt.Fprintf(writer, "%s %d\n", block, counts[block])
-	}
-	_ = writer.Flush()
 	fmt.Printf("Successfully merged profiles into %s\n", outputPath)
 }

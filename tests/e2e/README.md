@@ -18,10 +18,12 @@ Use deadline-bounded polling from [`lib/wait.sh`](lib/wait.sh), not fixed sleeps
 
 The live Go integration layer and Docker layer have different ownership:
 
-- [`cmd/proxyma-bind/integration_live_contract_test.go`](../../cmd/proxyma-bind/integration_live_contract_test.go) starts a real daemon subprocess and owns bind-to-Unix-IPC public contracts: service/storage actions, server streams, bind cancellation, enrollment, and pipeline validation/execution.
+- [`cmd/proxyma-bind/integration_live_contract_test.go`](../../cmd/proxyma-bind/integration_live_contract_test.go) starts a real daemon subprocess and owns bind-to-Unix-IPC public contracts: service/storage actions, server streams, bind cancellation, enrollment, pipeline validation/execution, task-status polling, and restart persistence.
 - [`internal/server/restart_contract_test.go`](../../internal/server/restart_contract_test.go) owns a real mTLS HTTP server restart contract with a temporary persistent store.
 - Docker cases own behavior that requires multiple isolated nodes, Compose restarts, network faults, relay topology, cgroups, or cross-container mTLS.
 - Unit/package tests own implementation details, injected failures, races, and state-machine invariants.
+
+The live bind suite now covers the storage lifecycle (upload, subscribe/unsubscribe, sync/open, local-cache deletion, on-demand failure, and tombstone), pending-to-completed task polling plus unknown-task errors, and restart recovery of service schemas, pipeline schemas, VFS metadata, and local blob content. These remain one-process public bind contracts; they do not change the Docker case matrix.
 
 Do not duplicate a private assertion in Docker merely because an integration test already proves it. Add Docker coverage only when the container or multi-node boundary changes the observable contract.
 
@@ -134,11 +136,52 @@ The following objectives are not green based on this harness and must not be rep
 
 A passing `full` profile establishes only the contracts in the matrix. It must not be used to mark these objectives green.
 
+## Coverage and CI verification
+
+The local verification entry points in the repository [`Makefile`](../../Makefile) are:
+
+```bash
+make test-cover       # uncached Go coverage pass + package ratchet
+make test-sanitizer   # E2E diagnostic redaction contract
+make test-ci          # test-cover + test-sanitizer + full race pass
+make coverage         # full E2E run plus unit/E2E/union reports
+```
+
+`make test-ci` intentionally performs two complete Go test passes: the coverage pass in `test-cover` and the independent `go test -race -count=1 ./...` pass. The sanitizer is a shell contract between them; this target does not run Docker E2E.
+
+[`scripts/coverage.sh`](../../scripts/coverage.sh) defaults to the stable `full` profile, builds an instrumented [`cmd/proxyma`](../../cmd/proxyma) executable, and requires real Go `covdata`: at least one E2E coverage directory must contain both `covmeta.*` and `covcounters.*`. Missing E2E covdata fails coverage generation. `COVERAGE_ALLOW_MISSING_E2E=true` is an explicit local unit-only escape that creates an empty E2E profile; it must not be presented as E2E coverage.
+
+The three generated reports have different meanings:
+
+- `coverage-unit.out` is statement coverage from `go test -count=1 -coverprofile=... ./...`.
+- `coverage-e2e.out` is execution coverage from the instrumented `./cmd/proxyma` binary used by Docker. Its scope is the CLI executable and instrumented code linked into it; it does not measure `cmd/proxyma-bind` or code unavailable from that executable.
+- `coverage.out` is the source-block union of the unit and E2E profiles, not an average of their percentages. [`internal/covermerge`](../../internal/covermerge) validates profile modes and block metadata, combines equal source ranges (`set` uses covered-if-either; `count`/`atomic` sum), and emits each block once. [`scripts/merge_profiles.go`](../../scripts/merge_profiles.go) runs it with `--strict` so both generated profiles must exist.
+
+The package ratchet lives at [`cmd/coverage-ratchet`](../../cmd/coverage-ratchet), with its checked-in baseline at [`scripts/coverage_baseline.json`](../../scripts/coverage_baseline.json):
+
+```bash
+go run ./cmd/coverage-ratchet check scripts/coverage_baseline.json coverage-unit.out
+go run ./cmd/coverage-ratchet update scripts/coverage_baseline.json coverage-unit.out
+```
+
+`check` fails a tracked-package regression or a missing tracked package, reports an untracked package as a warning, and honors documented exclusions. `update` preserves existing exclusions and truncates measured package floors to one decimal place. The baseline allows `0.1` percentage point of drift. In particular, the `internal/p2p` floor is `66.9`, chosen from the repeatable floor across runs rather than a single favorable sample, and still uses the same `0.1` epsilon.
+
+At the time this contract was updated, unit coverage was approximately `65.7%` overall, `72.3%` for `cmd/proxyma-bind`, and `93.2%` for `internal/telemetry`. These are orientation snapshots, not guaranteed totals; the package baseline and ratchet behavior are the durable contract.
+
+CI splits responsibilities:
+
+- The main Go job runs lint, `test-cover` plus the sanitizer, then the separate race pass, build, and CLI smoke test.
+- Pull requests run both E2E `pr` and `network`.
+- Pushes to `main`/`master` run E2E `full`.
+- The weekly schedule runs instrumented E2E `full` plus unit/E2E/union coverage. Manual dispatch selects `pr`, `network`, or `full` and whether to collect coverage.
+
 ## Sanitized artifacts
 
 Per-case output is written to `tests/e2e/logs/<case>.log` and sanitized before the runner reports or archives it. Failed logs are copied to `tests/e2e/logs/failed/<timestamp>/`. Cases using `dump_e2e_diagnostics` also capture sanitized Compose state, bounded logs, and public health under `tests/e2e/logs/diagnostics/`.
 
-Sanitization removes private-key bodies and redacts bearer credentials, CLI `--token` values, JSON token fields, and query tokens. CI sanitizes the complete logs directory again before uploading failure artifacts and retains them for five days. When a new credential format is introduced, update [`lib/dump.sh`](lib/dump.sh) before logging it.
+Sanitization removes private-key bodies and redacts bearer credentials, CLI `--token` values, JSON `token` and `secret` fields, and query tokens. It also recognizes valid V1 and structurally valid V2 invite tokens when the token occupies the complete trimmed (optionally quoted) line. It deliberately preserves ordinary SHA-256/CA hashes, Git SHAs, generic base64, and token-like substrings embedded in other text. [`lib/dump_sanitize_test.sh`](lib/dump_sanitize_test.sh), run by `make test-sanitizer`, locks these positive and negative cases.
+
+CI sanitizes the complete logs directory again before uploading failure artifacts and retains them for five days. When a new credential format is introduced, update [`lib/dump.sh`](lib/dump.sh) and its sanitizer contract before logging it.
 
 ## Adding or changing a case
 

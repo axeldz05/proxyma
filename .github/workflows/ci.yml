@@ -32,25 +32,26 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12
 
-      - name: Run integration contract tests
-        run: make test-integration
-
-      - name: Run Go test suite
-        run: make test
-
-      - name: Run race detector
-        run: make test-race
-
-      - name: Record Go coverage
+      - name: Run unit coverage gates
         run: |
-          go test -count=1 -coverprofile=coverage-unit.out ./...
-          go tool cover -func=coverage-unit.out | tee coverage-summary.txt
+          make test-cover
+          make test-sanitizer
+
+      - name: Summarize Go coverage
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -s coverage-unit.out ]; then
+            echo '### Go statement coverage unavailable' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          go tool cover -func=coverage-unit.out | tee coverage-unit-summary.txt
           {
             echo '### Go statement coverage'
             echo '```text'
-            cat coverage-summary.txt
+            cat coverage-unit-summary.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -61,9 +62,12 @@ jobs:
           name: go-coverage
           path: |
             coverage-unit.out
-            coverage-summary.txt
+            coverage-unit-summary.txt
           if-no-files-found: ignore
           retention-days: 5
+
+      - name: Run race detector
+        run: go test -race -count=1 ./...
 
       - name: Build Binary
         run: make build

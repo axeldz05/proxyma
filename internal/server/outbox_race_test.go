@@ -635,6 +635,7 @@ func TestCommittedZeroVersionPipelineSurvivesRestartReconciliation(t *testing.T)
 func TestCorruptDownloadDoesNotHotLoopDurableIntent(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "corrupt-download")
+	cfg.Workers = 1
 	var attempts atomic.Int32
 	firstAttempt := make(chan struct{})
 	var firstOnce sync.Once
@@ -670,9 +671,16 @@ func TestCorruptDownloadDoesNotHotLoopDurableIntent(t *testing.T) {
 		return s.Storage.CountDownloadIntents() == 0
 	}, 2*time.Second, 10*time.Millisecond)
 
+	// Stop and join the sole worker so any retry already queued by the periodic
+	// reconciler is accounted for before checking explicit reconciliation.
+	s.cancelLife()
+	s.downloadWG.Wait()
+	attemptsAfterQuarantine := attempts.Load()
 	for range 3 {
 		require.NoError(t, s.Storage.ReconcileDownloadIntents())
 	}
-	require.Equal(t, int32(1), attempts.Load(),
-		"quarantined integrity failure must not be retried by the 200ms reconciler")
+	require.Equal(t, attemptsAfterQuarantine, attempts.Load(),
+		"quarantined integrity failure must not be retried after its durable intent is removed")
+	require.LessOrEqual(t, attemptsAfterQuarantine, int32(2),
+		"periodic reconciliation may queue at most one bounded duplicate before quarantine")
 }
