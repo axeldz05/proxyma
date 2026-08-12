@@ -1,28 +1,49 @@
 # Proxyma: Heterogeneous Resource Orchestrator (WIP)
 
-**Proxyma** is a distributed, heterogeneous P2P resource and compute orchestrator written in **Go**. It unifies devices (servers, desktops, mobiles) into a single intelligent computing and storage mesh. It allows the hardware capabilities of one node (such as a PC's compute services or a mobile camera) to be transparently shared across the network.
+**Proxyma** is a distributed P2P storage and compute orchestrator written in **Go**. Enrolled
+servers, desktops, and Android devices can expose explicitly registered services, exchange VFS
+metadata and content, and execute multi-node workflows over an authenticated mesh.
+
+The project is under active development. The core mesh is implemented, but some integrations are still lab-grade. The authoritative multi-node behavior currently covered by tests is documented in [`tests/e2e/README.md`](tests/e2e/README.md).
 
 ---
 
 ## Key Features
 
-* **P2P Synchronization & VFS:** A decentralized virtual file system with background metadata replication and blob retrieval (inspired by BitTorrent).
-* **Compute Workflows & Pipeline Engine:** Coordinates tasks across nodes using dynamic pipeline orchestration (workflows/DAGs) with static/dynamic port type checks and transparent cross-node VFS auto-staging & auto-fetching.
-* **Heterogeneous Connectivity:** Native integration between servers, desktop PCs, and mobile devices (using Go-mobile JNI bindings).
-* **NAT Traversal & Hole Punching:** Implements direct UDP NAT Hole Punching using STUN for public IP/port discovery, signaling via the Sponsor relay, automatic UPnP/NAT-PMP port mapping, and secure QUIC tunnels. Falls back to long-polling relay fallback in strict firewalls.
-* **E2E mTLS Security:** Dynamic CSR enrollment, mutual TLS authorization for all inter-node calls, and automatic cluster topology sync.
-* **Native Python Services & UV Environment:** Native Python service execution (`ocrmypdf`, `pypdf`, `pytesseract`) with isolated `uv` virtual environment resolution and RGBA alpha channel image pre-conversion.
+* **P2P VFS:** Replicates versioned metadata and tombstones, retrieves subscribed or requested
+  blobs, verifies SHA-256 content, and preserves pending downloads across restarts.
+* **Services and pipelines:** Runs registered unary and streaming services and coordinates
+  multi-node DAGs. Registration validates graph structure and port compatibility when the relevant
+  service schemas are available; runtime service inputs are also validated. Local file inputs and
+  returned outputs can be staged through the VFS.
+* **Connectivity:** Uses mTLS for protected inter-node routes, direct HTTP/QUIC where available,
+  STUN-assisted UDP hole punching, IPv4 UPnP/NAT-PMP mapping, and long-polling relay fallback.
+  Enrollment, probing, and relay bootstrap have intentional anonymous routes. TURN is not
+  implemented, and the E2E suite does not validate a real consumer gateway's port mapping.
+* **CLI, Go-mobile bind, and Android:** Provides a Cobra CLI, an in-process/Unix IPC binding layer,
+  and a Jetpack Compose Android client. Android builds intentionally return unsupported for WebRTC
+  service registration and signaling.
+* **Streaming experiments:** HTTP/NDJSON streaming and non-Android WebRTC DataChannels are
+  implemented. The current screen service emits generated JPEG frames; it is not real screen
+  capture, remote input, or a latency-qualified remote-desktop protocol.
+* **Example services:** `services-examples/` contains Python/`uv`, OCR, media, music, clipboard,
+  shell, and collaboration labs. These demonstrate the service contract but are not all covered as
+  production platform guarantees by the Docker E2E suite.
 
 ---
 
-## Standalone Pipeline Editor
+## Pipeline Editors
 
-Proxyma includes a visual, standalone blueprint/node-editor to create, edit, and validate distributed workflow pipelines:
+Proxyma includes two interfaces for creating and editing distributed pipeline schemas:
 
-1. **Static Validation Engine**: Performs DAG cycle detection and strict type verification on linked ports (e.g. matching an OCR output parameter to a save-file input parameter) before pipeline registration.
-2. **Platform Interfaces**:
-   * **Cobra CLI (TUI)**: An interactive terminal UI editor launched with `proxyma service edit_pipeline`.
-   * **Android Client (Jetpack Compose GUI)**: Built modularly in Jetpack Compose, integrated directly inside the *Services* tab of the Android app, supporting node target selection, native camera/file pickers, preset dropdowns (`UISchema`), and execution via Go-mobile bindings.
+1. **Terminal editor:** An interactive menu-driven TUI launched with
+   `proxyma service edit_pipeline`.
+2. **Android editor:** A Jetpack Compose editor in the *Services* area with service and target-node
+   selection. Dynamic service forms use schema metadata for options and native file/camera pickers.
+
+The Go validation engine remains authoritative when a pipeline is saved. Android is covered by
+JVM contract tests, lint, assembly, and Go-mobile ABI checks; the repository does not currently
+run instrumented device UI tests.
 
 ---
 
@@ -34,12 +55,19 @@ To quickly spin up a developer test environment:
    ```bash
    ./scripts/bootstrap_dev.sh
    ```
-   This script builds all binaries, launches a local background daemon (scoped to `/tmp/proxyma-dev`), registers mock services (`ocr`, `text/extract`, `obsidian/save`, and the standalone `pipeline/editor`), and pre-populates VFS sample files.
+   This builds the CLI and example editors, starts a local daemon, registers every
+   `*_service.json` and `*_pipeline.json` under `services-examples/`, and pre-populates sample VFS
+   files. The default state directory is `$HOME/.proxyma_dev`; override it with
+   `PROXYMA_DEV_DIR=/path/to/state`.
+
+   Python examples require their external tools. If `uv` is installed, the script attempts to sync
+   the example environment; unavailable optional examples do not prevent the rest of the
+   bootstrap from starting.
 
 2. Interact with the node easily using the automatic wrapper (which binds `--storage` flags by default):
-   * List files: `/tmp/proxyma-dev/pm storage list`
-   * Discover services: `/tmp/proxyma-dev/pm service discover`
-   * Launch TUI Editor: `/tmp/proxyma-dev/pm service edit_pipeline`
+   * List files: `$HOME/.proxyma_dev/pm storage list`
+   * Discover services: `$HOME/.proxyma_dev/pm service discover`
+   * Launch the TUI editor: `$HOME/.proxyma_dev/pm service edit_pipeline`
 
 To build and compile the mobile app bindings:
    ```bash
@@ -48,23 +76,49 @@ To build and compile the mobile app bindings:
 
 ---
 
+## Verification
+
+The main local gates are:
+
+```bash
+make test-cover          # Go tests plus per-package coverage ratchet
+make test-race           # complete Go race-detector pass
+make test-android        # Android build-tag contracts, fresh AAR, JVM tests, lint, assemble
+make test-e2e-pr         # deterministic public contracts
+make test-e2e-network    # topology and fault-injection contracts
+make test-e2e-full       # all stable Docker E2E contracts
+```
+
+The checked-in unit coverage floors range from 53.8% to 93.1% by package. Aggregate unit, E2E,
+and union percentages are informational; the per-package unit ratchet is the enforced coverage
+contract. The stable E2E profile covers the public behaviors listed in
+[`tests/e2e/README.md`](tests/e2e/README.md), not every roadmap objective below.
+
+---
+
 ## Roadmap & Status
 
 ### Phase 1: Core & Networking
 - [x] Decentralized Virtual File System (VFS) with P2P synchronization.
 - [x] Persistent cluster peer topology database.
-- [x] End-to-end mTLS authentication and secure "Handshake" pairing.
+- [x] CSR enrollment and mTLS authorization for protected inter-node routes.
 - [x] UDP NAT Hole Punching and direct QUIC connectivity.
-- [x] Automatic UPnP/NAT-PMP port mapping and STUN gateway queries.
+- [x] IPv4 UPnP/NAT-PMP implementation and STUN discovery.
+- [ ] Hardware-gateway E2E validation and TURN fallback.
 
 ### Phase 2: Orchestration & Services
 - [x] Custom services engine and workflow orchestration.
-- [x] **Static & Dynamic pipeline validation** (cycle/type check).
-- [x] **Transparent cross-node VFS file auto-staging and auto-fetching**.
-- [ ] Load balancing logic based on real-time CPU/RAM telemetry (OpenTelemetry).
+- [x] Registration-time pipeline cycle, topology, and known-schema port validation.
+- [x] Runtime service input validation and cross-node VFS staging/fetching.
+- [x] Resource-aware bid metadata and `fastest`, `cheapest`, and `low_power` strategies.
+- [ ] A deterministic green E2E contract for load-aware selection; OpenTelemetry export currently
+      provides best-effort observability rather than driving scheduling.
+- [ ] A precise public contract for any additional "dynamic port validation" behavior.
 
 ### Phase 3: Ecosystem & UI
-- [x] Standalone visual blueprint pipeline editor (TUI).
+- [x] Standalone menu-driven pipeline editor (TUI).
 - [x] Jetpack Compose-based visual pipeline editor on Android with target node selection.
 - [x] Lightweight Android daemon client (built with Gomobile JNI) with native camera & file pickers.
-- [ ] Low-latency streaming protocol for remote screen access.
+- [ ] Public HTTP/CLI multi-message bidirectional streaming and end-to-end cancellation.
+- [ ] Real low-latency screen capture, rendering, remote input, and latency/jitter targets.
+- [ ] WebRTC service and signaling support on Android.
