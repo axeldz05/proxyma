@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 export E2E_PROJECT_NAME="e2e_relay"
 export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
@@ -9,17 +9,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Relay Fallback under virtual NAT...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed with exit code $exit_code. Keeping containers for inspection.${NC}"
-    else
-        cleanup_e2e
-    fi
-}
-trap cleanup_on_exit EXIT
-
-# Initial cleanup
+install_e2e_case_trap "case-03-failure"
 cleanup_e2e
 
 # Create directories

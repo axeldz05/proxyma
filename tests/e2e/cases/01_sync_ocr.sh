@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 # E2E project setup
 export E2E_PROJECT_NAME="e2e_sync_ocr"
@@ -11,9 +11,8 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Basic Sync and OCR...${NC}"
 
-# Initial cleanup
+install_e2e_case_trap "case-01-failure"
 cleanup_e2e
-trap cleanup_e2e EXIT
 
 # Create directories
 mkdir -p "$E2E_DATA_DIR/node-1"
@@ -29,14 +28,16 @@ import sys, json, subprocess, os
 try:
     payload = json.load(sys.stdin)
     file_hash = payload.get("file_hash")
-    input_path = f"/app/data/{file_hash}"
+    input_path = "/tmp/input.pdf"
     output_path = "/tmp/optimized.pdf"
-    
+
+    download_cmd = ["curl", "--fail", "--silent", "--show-error", "-o", input_path, f"https://localhost:8082/download/{file_hash}", "--cacert", "/app/data/certs/ca.crt", "--cert", "/app/data/certs/node-2.crt", "--key", "/app/data/certs/node-2.key"]
+    subprocess.run(download_cmd, check=True, capture_output=True)
     subprocess.run(["ocrmypdf", "--force-ocr", input_path, output_path], check=True, capture_output=True)
-    
-    upload_cmd = ["curl", "-s", "-X", "POST", "-F", f"file=@{output_path}", "https://localhost:8082/upload", "--cacert", "/app/data/certs/ca.crt", "--cert", "/app/data/certs/node-2.crt", "--key", "/app/data/certs/node-2.key"]
+
+    upload_cmd = ["curl", "--fail", "--silent", "--show-error", "-X", "POST", "-F", f"file=@{output_path}", "https://localhost:8082/upload", "--cacert", "/app/data/certs/ca.crt", "--cert", "/app/data/certs/node-2.crt", "--key", "/app/data/certs/node-2.key"]
     res = subprocess.run(upload_cmd, capture_output=True, text=True, check=True)
-    
+
     print(json.dumps({"status": "success", "upload_response": res.stdout}))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
@@ -134,9 +135,58 @@ OCR_RUN=$(exec_node node-1 ./proxyma service run \
 assert_contains "$OCR_RUN" '"status": "completed"' \
     "Distributed OCR task did not complete"
 
-# Wait for OCR-processed PDF to appear in the manifest of node-3
+# Wait for OCR-processed PDF to appear in the manifest of node-3.
 echo "⏱️ Waiting for OCR-processed PDF to appear in the manifest of node-3..."
-wait_for_output "${E2E_VFS_TIMEOUT:-60}" optimized.pdf \
-    call_api node-3 GET 8083 manifest >/dev/null
+OPTIMIZED_MANIFEST=$(wait_for_output "${E2E_VFS_TIMEOUT:-60}" optimized.pdf \
+    call_api node-3 GET 8083 manifest)
+OPTIMIZED_HASH=$(printf '%s\n' "$OPTIMIZED_MANIFEST" | python3 -c '
+import json
+import sys
+
+manifest = json.load(sys.stdin)
+print(manifest.get("optimized.pdf", {}).get("hash", ""))
+')
+assert_not_empty "$OPTIMIZED_HASH" \
+    "Node 3 manifest exposed no hash for optimized.pdf"
+
+OPTIMIZED_SUBSCRIPTION=$(call_api node-3 POST 8083 "subscribe?name=optimized.pdf")
+assert_contains "$OPTIMIZED_SUBSCRIPTION" "Subscribed to optimized.pdf" \
+    "Node 3 did not acknowledge the optimized.pdf subscription"
+
+optimized_download_ready() {
+    local status actual_hash
+
+    exec_node node-3 ./proxyma storage sync --storage /app/data >/dev/null 2>&1 || true
+    status=$(call_api node-3 GET 8083 "download/$OPTIMIZED_HASH" \
+        --output /tmp/node-3-optimized.pdf \
+        --write-out '%{http_code}' 2>&1) || {
+        printf '%s\n' "$status"
+        return 1
+    }
+    actual_hash=$(exec_node node-3 sha256sum /tmp/node-3-optimized.pdf |
+        awk '{print $1}')
+    printf '%s\n' "$actual_hash"
+    [ "$status" = "200" ] && [ "$actual_hash" = "$OPTIMIZED_HASH" ]
+}
+
+OPTIMIZED_SHA=$(wait_until "${E2E_DOWNLOAD_TIMEOUT:-60}" \
+    "node-3 public download of optimized.pdf" optimized_download_ready)
+assert_equals "$OPTIMIZED_SHA" "$OPTIMIZED_HASH" \
+    "Downloaded optimized.pdf SHA-256 did not match its manifest hash"
+
+OPTIMIZED_PROPERTIES=$(exec_node node-3 python3 -c '
+import pathlib
+import sys
+
+content = pathlib.Path(sys.argv[1]).read_bytes()
+print("{}|{}".format(len(content), content[:5].decode("ascii", errors="replace")))
+' /tmp/node-3-optimized.pdf)
+OPTIMIZED_SIZE=${OPTIMIZED_PROPERTIES%%|*}
+OPTIMIZED_MAGIC=${OPTIMIZED_PROPERTIES#*|}
+if ! [[ "$OPTIMIZED_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    fail_assertion "Downloaded optimized.pdf was empty" "$OPTIMIZED_PROPERTIES"
+fi
+assert_equals "$OPTIMIZED_MAGIC" "%PDF-" \
+    "Downloaded optimized.pdf did not have PDF magic"
 
 echo -e "${GREEN}🎉 Case 1 (Sync & OCR) completed successfully!${NC}"

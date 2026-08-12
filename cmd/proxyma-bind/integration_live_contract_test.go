@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,6 +307,114 @@ func TestLiveDaemonPublicActionContracts(t *testing.T) {
 
 	if err := daemon.stop(); err != nil {
 		t.Fatalf("clean StopNodeWithError contract failed: %v\n%s", err, daemon.output.String())
+	}
+}
+
+func TestLiveDaemonTelemetryAndAndroidMetadataContracts(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+	}))
+	t.Cleanup(upstream.Close)
+
+	startLiveBindDaemon(t, "live-metadata")
+	schemaPath := writeLiveServiceSchema(t, protocol.ServiceSchema{
+		Name:        "live.metadata",
+		Type:        protocol.ServiceTypeServerStream,
+		Description: "Android metadata contract",
+		Parameters: map[string]protocol.ServiceParameter{
+			"query": {
+				Type:     protocol.ParamTypeString,
+				Required: true,
+			},
+			"mode": {
+				Type:    protocol.ParamTypeString,
+				Options: []string{"fast", "quality"},
+			},
+			"document": {
+				Type:   protocol.ParamTypeFile,
+				UIHint: protocol.UIHintFilePicker,
+			},
+			"photo": {
+				Type:   protocol.ParamTypeFile,
+				UIHint: protocol.UIHintImagePicker,
+			},
+		},
+	})
+	assertLiveBindSuccess(t, AddService(
+		"live.metadata",
+		string(protocol.ServiceTypeServerStream),
+		upstream.URL,
+		"Android metadata contract",
+		"",
+		"",
+		schemaPath,
+	))
+
+	var detail ServiceDetail
+	decodeLiveBindJSON(t, GetServiceDetails("live.metadata"), &detail)
+	if detail.Name != "live.metadata" ||
+		detail.Description != "Android metadata contract" ||
+		!detail.IsStreaming {
+		t.Fatalf("service detail = %#v, want named streaming Android metadata", detail)
+	}
+	parameters := make(map[string]ParameterDetail, len(detail.Parameters))
+	for _, parameter := range detail.Parameters {
+		parameters[parameter.Name] = parameter
+	}
+	if query := parameters["query"]; !query.Required || query.Type != protocol.ParamTypeString {
+		t.Fatalf("required query parameter = %#v", query)
+	}
+	if mode := parameters["mode"]; mode.Required ||
+		mode.Type != protocol.ParamTypeString ||
+		len(mode.Options) != 2 ||
+		mode.Options[0] != "fast" ||
+		mode.Options[1] != "quality" {
+		t.Fatalf("optional mode parameter = %#v", mode)
+	}
+	if document := parameters["document"]; document.Required ||
+		document.Type != protocol.ParamTypeFile ||
+		document.UIHint != protocol.UIHintFilePicker {
+		t.Fatalf("document parameter = %#v, want optional file picker", document)
+	}
+	if photo := parameters["photo"]; photo.Required ||
+		photo.Type != protocol.ParamTypeFile ||
+		photo.UIHint != protocol.UIHintImagePicker {
+		t.Fatalf("photo parameter = %#v, want optional image picker", photo)
+	}
+	if !containsString(detail.RequiredPermissions, "Camera (to take photo for upload)") ||
+		!containsString(detail.RequiredPermissions, "Gallery / Storage (to select photo)") {
+		t.Fatalf("required permissions = %#v, want camera and gallery metadata", detail.RequiredPermissions)
+	}
+
+	var stats []struct {
+		Metric string `json:"metric"`
+		Value  string `json:"value"`
+	}
+	decodeLiveBindJSON(t, GetBandwidthStatsJson(), &stats)
+	statValues := make(map[string]string, len(stats))
+	for _, stat := range stats {
+		statValues[stat.Metric] = stat.Value
+	}
+	for _, metric := range []string{"Download Speed", "Upload Speed", "Total Received", "Total Sent"} {
+		if strings.TrimSpace(statValues[metric]) == "" {
+			t.Fatalf("bandwidth stats = %#v, want non-empty %q value", stats, metric)
+		}
+	}
+
+	var logs []protocol.LogRecord
+	decodeLiveBindJSON(t, GetLogsJson(), &logs)
+	foundActionLog := false
+	for _, record := range logs {
+		if record.Timestamp != "" &&
+			record.Level != "" &&
+			strings.Contains(record.Message, "Local service registered") &&
+			strings.Contains(record.Message, "live.metadata") {
+			foundActionLog = true
+			break
+		}
+	}
+	if !foundActionLog {
+		t.Fatalf("logs = %#v, want public service-add action record", logs)
 	}
 }
 
@@ -713,6 +822,67 @@ func TestJoinClusterAgainstLiveSponsorContract(t *testing.T) {
 		t.Fatalf("joined node status running=%v id=%q", IsNodeRunning(), GetNodeID())
 	}
 
+	// JoinCluster intentionally installs and starts the joined singleton in this
+	// process. Exercise its public bind boundary directly instead of adding a
+	// subprocess-only production seam.
+	joinerConfig, err := protocol.LoadConfig(joinerStorage)
+	if err != nil {
+		t.Fatalf("load joined node config: %v", err)
+	}
+	joinerURL, err := url.Parse(joinerConfig.Address)
+	if err != nil {
+		t.Fatalf("parse joined node address: %v", err)
+	}
+	joinerCert, joinerKey := p2p.NodeCertPaths(
+		filepath.Dir(joinerConfig.CAPath),
+		joinerConfig.ID,
+	)
+	_, joinerClientTLS, err := p2p.LoadNodeTLS(joinerConfig.CAPath, joinerCert, joinerKey)
+	if err != nil {
+		t.Fatalf("load joined node client TLS: %v", err)
+	}
+	enrollmentBody, err := json.Marshal(protocol.AddPeerRequest{
+		ID: sponsorConfig.ID,
+		Address: protocol.AddressRecord{
+			Addresses: []string{sponsorConfig.Address},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal peer enrollment: %v", err)
+	}
+	enrollmentClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: joinerClientTLS},
+		Timeout:   3 * time.Second,
+	}
+	enrollmentResponse, err := enrollmentClient.Post(
+		protocol.HTTPSAddr("localhost", joinerURL.Port())+protocol.PathPeersAdd,
+		"application/json",
+		bytes.NewReader(enrollmentBody),
+	)
+	if err != nil {
+		t.Fatalf("enroll sponsor through public peer API: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, enrollmentResponse.Body)
+	_ = enrollmentResponse.Body.Close()
+	if enrollmentResponse.StatusCode != http.StatusOK {
+		t.Fatalf("peer enrollment status = %d, want %d", enrollmentResponse.StatusCode, http.StatusOK)
+	}
+
+	var peers []protocol.PeerStatus
+	decodeLiveBindJSON(t, GetPeersJson(), &peers)
+	var enrolledSponsor protocol.PeerStatus
+	for _, peer := range peers {
+		if peer.ID == "live-sponsor" {
+			enrolledSponsor = peer
+			break
+		}
+	}
+	if enrolledSponsor.Address == "" ||
+		!enrolledSponsor.Online ||
+		enrolledSponsor.Error != "" {
+		t.Fatalf("joined peers = %#v, want online live-sponsor DTO", peers)
+	}
+
 	replayCSR, _, err := p2p.GenerateNodeCSR("replay-node")
 	if err != nil {
 		t.Fatalf("generate replay CSR: %v", err)
@@ -859,6 +1029,49 @@ func TestLiveDaemonPipelineContracts(t *testing.T) {
 	if !strings.Contains(ParseBindError(runtimeInvalid), "seed") {
 		t.Fatalf("runtime validation error = %q, want seed context", ParseBindError(runtimeInvalid))
 	}
+
+	var pipelines []protocol.PipelineSchema
+	decodeLiveBindJSON(t, ListPipelines(), &pipelines)
+	listed, ok := livePipelineByID(pipelines, valid.ID)
+	if !ok || protocol.PipelineSchemaHash(listed) != protocol.PipelineSchemaHash(valid) {
+		t.Fatalf("pipeline list = %#v, want source schema %#v", pipelines, valid)
+	}
+
+	var fetched protocol.PipelineSchema
+	decodeLiveBindJSON(t, GetPipelineSchemaJson(valid.ID), &fetched)
+	if protocol.PipelineSchemaHash(fetched) != protocol.PipelineSchemaHash(valid) {
+		t.Fatalf("pipeline get = %#v, want %#v", fetched, valid)
+	}
+
+	var cloned protocol.PipelineSchema
+	decodeLiveBindJSON(
+		t,
+		ClonePipelineSchemaJson(valid.ID, "pipeline.cloned", "$local"),
+		&cloned,
+	)
+	if cloned.ID != "pipeline.cloned" ||
+		len(cloned.Steps) != len(valid.Steps) ||
+		len(cloned.Connections) != len(valid.Connections) {
+		t.Fatalf("pipeline clone = %#v, want renamed source topology", cloned)
+	}
+	for _, step := range cloned.Steps {
+		if step.TargetNodeID != "live-pipeline" {
+			t.Fatalf("pipeline clone step = %#v, want local target live-pipeline", step)
+		}
+	}
+	var afterClone []protocol.PipelineSchema
+	decodeLiveBindJSON(t, ListPipelines(), &afterClone)
+	if _, persisted := livePipelineByID(afterClone, cloned.ID); persisted {
+		t.Fatalf("pipeline clone unexpectedly persisted: %#v", afterClone)
+	}
+
+	assertLiveBindSuccess(t, RemovePipeline(valid.ID))
+	var afterRemove []protocol.PipelineSchema
+	decodeLiveBindJSON(t, ListPipelines(), &afterRemove)
+	if _, exists := livePipelineByID(afterRemove, valid.ID); exists {
+		t.Fatalf("removed pipeline still listed: %#v", afterRemove)
+	}
+	assertLiveBindErrorContains(t, GetPipelineSchemaJson(valid.ID), "not found")
 }
 
 func writeLiveServiceSchema(t *testing.T, schema protocol.ServiceSchema) string {

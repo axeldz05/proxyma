@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 export E2E_PROJECT_NAME="e2e_partition"
 export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
@@ -9,20 +9,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Network Partition...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    trap - EXIT
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed with exit code $exit_code. Keeping containers for inspection.${NC}"
-        export KEEP_E2E_DATA=true
-    else
-        cleanup_e2e
-    fi
-    exit $exit_code
-}
-trap cleanup_on_exit EXIT
-
-# Initial cleanup
+install_e2e_case_trap "case-02-failure"
 cleanup_e2e
 
 # Create directories

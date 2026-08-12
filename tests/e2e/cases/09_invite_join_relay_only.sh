@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 # Join node-3 when it cannot reach the sponsor directly: invite embeds RelayAddr=node-2,
 # and the join one-shot runs only on a network shared with the relay (not the sponsor).
@@ -12,15 +12,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Invite/join via relay only...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed with exit code $exit_code. Keeping containers for inspection.${NC}"
-    else
-        cleanup_e2e
-    fi
-}
-trap cleanup_on_exit EXIT
+install_e2e_case_trap "case-09-failure"
 cleanup_e2e
 
 mkdir -p "$E2E_DATA_DIR/node-1" "$E2E_DATA_DIR/node-2" "$E2E_DATA_DIR/node-3/coverage"

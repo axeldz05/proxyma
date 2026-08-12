@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 # E2E project setup
 export E2E_PROJECT_NAME="e2e_generic_file_ocr"
@@ -11,9 +11,8 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Generic File OCR Pipeline...${NC}"
 
-# Initial cleanup
+install_e2e_case_trap "case-06-failure"
 cleanup_e2e
-trap cleanup_e2e EXIT
 
 # Create directories
 mkdir -p "$E2E_DATA_DIR/node-1"

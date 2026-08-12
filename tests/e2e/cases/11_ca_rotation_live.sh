@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 # Trigger CA rotation by peer leave on the sponsor, wait until TLS is healthy again,
 # then verify VFS sync still works between remaining nodes.
@@ -12,15 +12,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: CA rotation under live traffic...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed. Keeping containers.${NC}"
-    else
-        cleanup_e2e
-    fi
-}
-trap cleanup_on_exit EXIT
+install_e2e_case_trap "case-11-failure"
 cleanup_e2e
 
 mkdir -p "$E2E_DATA_DIR/node-1" "$E2E_DATA_DIR/node-2" "$E2E_DATA_DIR/node-3"

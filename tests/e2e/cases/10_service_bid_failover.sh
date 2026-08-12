@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 export E2E_PROJECT_NAME="e2e_bid_failover"
 export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
@@ -9,15 +9,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Service bid failover...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed. Keeping containers.${NC}"
-    else
-        cleanup_e2e
-    fi
-}
-trap cleanup_on_exit EXIT
+install_e2e_case_trap "case-10-failure"
 cleanup_e2e
 
 mkdir -p "$E2E_DATA_DIR/node-1"

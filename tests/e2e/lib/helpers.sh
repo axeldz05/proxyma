@@ -14,4 +14,5 @@ source "$E2E_LIB_DIR/assert.sh"
 source "$E2E_LIB_DIR/faults.sh"
 # shellcheck source=dump.sh
 source "$E2E_LIB_DIR/dump.sh"
-
+# shellcheck source=case.sh
+source "$E2E_LIB_DIR/case.sh"

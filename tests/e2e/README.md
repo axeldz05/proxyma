@@ -16,14 +16,16 @@ Use deadline-bounded polling from [`lib/wait.sh`](lib/wait.sh), not fixed sleeps
 
 ## Integration tests versus Docker E2E
 
-The live Go integration layer and Docker layer have different ownership:
+The non-Docker contract layers and Docker layer have different ownership:
 
-- [`cmd/proxyma-bind/integration_live_contract_test.go`](../../cmd/proxyma-bind/integration_live_contract_test.go) starts a real daemon subprocess and owns bind-to-Unix-IPC public contracts: service/storage actions, server streams, bind cancellation, enrollment, pipeline validation/execution, task-status polling, and restart persistence.
+- [`cmd/proxyma-bind/integration_live_contract_test.go`](../../cmd/proxyma-bind/integration_live_contract_test.go) starts a real daemon subprocess and owns bind-to-Unix-IPC public contracts: service/storage actions, Android-facing service metadata, bandwidth/log telemetry, enrolled-peer DTOs, server streams and cancellation, enrollment, complete pipeline add/run/list/get/clone/remove lifecycle, task-status polling, and restart persistence.
+- [`cmd/proxyma/cli_daemon_test.go`](../../cmd/proxyma/cli_daemon_test.go) builds the real CLI, starts a real bind daemon subprocess, and owns the CLI golden path for upload help, default and explicit upload names, storage listing, telemetry rendering, Unix IPC, and clean shutdown.
 - [`internal/server/restart_contract_test.go`](../../internal/server/restart_contract_test.go) owns a real mTLS HTTP server restart contract with a temporary persistent store.
+- The `androidcontract` host tag selects the Android WebRTC stubs without changing GOOS: registration is rejected and signaling returns exact JSON HTTP 501. `make test-android-contract` runs this without an emulator; `make test-android` also builds one fresh AAR and checks the required Java descriptors before Kotlin tests, lint, and assembly.
 - Docker cases own behavior that requires multiple isolated nodes, Compose restarts, network faults, relay topology, cgroups, or cross-container mTLS.
 - Unit/package tests own implementation details, injected failures, races, and state-machine invariants.
 
-The live bind suite now covers the storage lifecycle (upload, subscribe/unsubscribe, sync/open, local-cache deletion, on-demand failure, and tombstone), pending-to-completed task polling plus unknown-task errors, and restart recovery of service schemas, pipeline schemas, VFS metadata, and local blob content. These remain one-process public bind contracts; they do not change the Docker case matrix.
+The live bind suite also covers the storage lifecycle (upload, subscribe/unsubscribe, sync/open, local-cache deletion, on-demand failure, and tombstone), pending-to-completed task polling plus unknown-task errors, and restart recovery of service schemas, pipeline schemas, VFS metadata, and local blob content. These remain one-process public bind contracts; they do not replace the Docker cases.
 
 Do not duplicate a private assertion in Docker merely because an integration test already proves it. Add Docker coverage only when the container or multi-node boundary changes the observable contract.
 
@@ -31,6 +33,8 @@ Run the live integration contracts with:
 
 ```bash
 make test-integration
+go test -count=1 ./cmd/proxyma -run '^TestCLIContractLiveDaemon$'
+make test-android-contract
 ```
 
 ## Harness entry points
@@ -58,11 +62,11 @@ E2E_PROFILE=quarantine ./tests/e2e/run.sh
 
 # One case, several comma-separated cases, or selection preview.
 E2E_CASE=17 ./tests/e2e/run.sh
-E2E_CASE=15,17,24 E2E_PARALLEL=1 ./tests/e2e/run.sh
+E2E_CASE=25,26,27,28 E2E_PARALLEL=1 ./tests/e2e/run.sh
 E2E_PROFILE=full E2E_LIST=true ./tests/e2e/run.sh
 ```
 
-`E2E_CASE` takes precedence over `E2E_PROFILE`. `E2E_PARALLEL` defaults to `3`. `E2E_SKIP_BUILD=true` reuses an already-built `proxyma-e2e-node-3` image. Running `./tests/e2e/run.sh` without a selector uses the synthetic `all` selection, which includes quarantined case 13; use `full` for the stable gate.
+`E2E_CASE` takes precedence over `E2E_PROFILE`. `E2E_PARALLEL` defaults to `3`. `E2E_SKIP_BUILD=true` reuses an already-built `proxyma-e2e-node-3` image. Running `./tests/e2e/run.sh` without a selector defaults to the stable `full` profile. `E2E_PROFILE=all` is the explicit opt-in that also includes quarantined case 13.
 
 The helper facade [`lib/helpers.sh`](lib/helpers.sh) loads:
 
@@ -71,24 +75,27 @@ The helper facade [`lib/helpers.sh`](lib/helpers.sh) loads:
 - [`lib/assert.sh`](lib/assert.sh): assertions over public output.
 - [`lib/faults.sh`](lib/faults.sh): Docker-only fault injection for **Given**.
 - [`lib/dump.sh`](lib/dump.sh): redacted logs and failure diagnostics.
+- [`lib/case.sh`](lib/case.sh): one exit trap that captures diagnostics on failure and always performs deterministic cleanup.
+
+Every executable case uses `set -euo pipefail`, sources the shared facade, installs `install_e2e_case_trap`, and calls `cleanup_e2e` before setup. [`scripts/validate_e2e_profiles.sh`](../../scripts/validate_e2e_profiles.sh), with its fixture contract in [`lib/validate_profiles_test.sh`](lib/validate_profiles_test.sh), checks executable bits, one unique static `E2E_PROJECT_NAME` per case, valid and unambiguous selectors, no duplicate profile entries, the stable/quarantine partition, and `pr`/`functional` parity. Run it through `make test-e2e-harness`.
 
 Profiles are explicit selectors under [`profiles/`](profiles/):
 
-- `functional`: deterministic public-contract cases 08, 15–19, 21, 22, and 24.
+- `functional`: deterministic public-contract cases 08, 15–19, 21, 22, 24, and 26–28.
 - `pr`: currently the same deterministic set required on pull requests.
-- `network`: 02, 03, 04, 07, and 09–11.
+- `network`: 02, 03, 04, 07, 09–11, and 25.
 - `infrastructure`: case 05 only.
 - `smoke`: case 14 only.
 - `quarantine`: case 13 only.
-- `full`: all stable cases; excludes quarantined 13 and the intentionally absent 23.
+- `full`: all 26 stable executable cases; excludes quarantined 13 and the intentionally absent 23.
 
 ## Current case matrix
 
-There are 23 executable cases. Number 23 is intentionally absent.
+There are 27 executable cases: 26 stable cases in `full` and sampler-sensitive case 13 in `quarantine`. Number 23 is intentionally absent.
 
 | ID | Public contract | Profiles / decision |
 |---|---|---|
-| 01 | VFS metadata, subscription-gated blob retrieval, hash/content integrity, and OCR output propagation | `full` |
+| 01 | VFS metadata, subscription-gated blob retrieval, text hash/content integrity, and OCR output propagation whose downloaded PDF is non-empty, has `%PDF-` magic, and matches its manifest SHA-256 | `full` |
 | 02 | Partition isolation followed by public VFS convergence after healing | `network`, `full` |
 | 03 | Relay-topology metadata and exact-content fallback download | `network`, `full` |
 | 04 | Download from a surviving replica after the original source is killed | `network`, `full` |
@@ -112,6 +119,10 @@ There are 23 executable cases. Number 23 is intentionally absent.
 | 22 | Sponsor identity, peer topology, and peer service routing survive restart | `functional`, `pr`, `full` |
 | 23 | No executable case: true bidi multi-message/cancel contract is blocked | intentionally omitted |
 | 24 | A subscribed download intent survives requester restart and resumes without another sync command | `functional`, `pr`, `full` |
+| 25 | A stopped provider becomes publicly OFFLINE and ineligible, then returns ONLINE and runnable after restart | `network`, `full` |
+| 26 | A peer preserves its VFS manifest and blob across restart, then serves exact content to another subscriber | `functional`, `pr`, `full` |
+| 27 | Unsubscribe plus purge preserves remote metadata, removes cached content, and resubscribe plus public open restores the exact blob | `functional`, `pr`, `full` |
+| 28 | Service removal remains absent from provider and requester discovery/run after provider restart | `functional`, `pr`, `full` |
 
 ### Why case 23 is absent
 
@@ -142,12 +153,13 @@ The local verification entry points in the repository [`Makefile`](../../Makefil
 
 ```bash
 make test-cover       # uncached Go coverage pass + package ratchet
-make test-sanitizer   # E2E diagnostic redaction contract
-make test-ci          # test-cover + test-sanitizer + full race pass
+make test-e2e-harness # profile invariants + validator fixtures + redaction
+make test-sanitizer   # compatibility alias for test-e2e-harness
+make test-ci          # test-cover + test-e2e-harness + full race pass
 make coverage         # full E2E run plus unit/E2E/union reports
 ```
 
-`make test-ci` intentionally performs two complete Go test passes: the coverage pass in `test-cover` and the independent `go test -race -count=1 ./...` pass. The sanitizer is a shell contract between them; this target does not run Docker E2E.
+`make test-ci` intentionally performs two complete Go test passes: the coverage pass in `test-cover` and the independent `go test -race -count=1 ./...` pass. The E2E harness checks between them are shell contracts and do not run Docker E2E.
 
 [`scripts/coverage.sh`](../../scripts/coverage.sh) defaults to the stable `full` profile, builds an instrumented [`cmd/proxyma`](../../cmd/proxyma) executable, and requires real Go `covdata`: at least one E2E coverage directory must contain both `covmeta.*` and `covcounters.*`. Missing E2E covdata fails coverage generation. `COVERAGE_ALLOW_MISSING_E2E=true` is an explicit local unit-only escape that creates an empty E2E profile; it must not be presented as E2E coverage.
 
@@ -164,9 +176,9 @@ go run ./cmd/coverage-ratchet check scripts/coverage_baseline.json coverage-unit
 go run ./cmd/coverage-ratchet update scripts/coverage_baseline.json coverage-unit.out
 ```
 
-`check` fails a tracked-package regression or a missing tracked package, reports an untracked package as a warning, and honors documented exclusions. `update` preserves existing exclusions and truncates measured package floors to one decimal place. The baseline allows `0.1` percentage point of drift. In particular, the `internal/p2p` floor is `66.9`, chosen from the repeatable floor across runs rather than a single favorable sample, and still uses the same `0.1` epsilon.
+`check` fails a tracked-package regression or a missing tracked package, reports an untracked package as a warning, and honors documented exclusions. `update` preserves existing exclusions and truncates measured package floors to one decimal place; the allowed drift is `0.1` percentage point.
 
-At the time this contract was updated, unit coverage was approximately `65.7%` overall, `72.3%` for `cmd/proxyma-bind`, and `93.2%` for `internal/telemetry`. These are orientation snapshots, not guaranteed totals; the package baseline and ratchet behavior are the durable contract.
+The baseline was regenerated after the bind, CLI, and Android contracts. The repeatable floors now include bind at 75.3%, P2P at 66.9%, and server at 72.0%; the latter two use conservative repeated-run floors. The verification snapshot reported unit 66.0%, E2E 63.4%, and union 75.1%. These totals are informational—the per-package ratchet, not a transient aggregate, is the enforced contract.
 
 CI splits responsibilities:
 
@@ -186,8 +198,8 @@ CI sanitizes the complete logs directory again before uploading failure artifact
 ## Adding or changing a case
 
 1. Choose `NN_descriptive_name.sh`; number 23 remains reserved for the blocked bidi contract.
-2. Use `set -euo pipefail`, a unique `E2E_PROJECT_NAME`, and a unique `/tmp/proxyma-e2e/...` data directory.
-3. Source [`lib/helpers.sh`](lib/helpers.sh), clean before setup, and install an exit trap. New functional cases should call `dump_e2e_diagnostics` on failure.
+2. Use `set -euo pipefail`, one unique static `E2E_PROJECT_NAME`, and a unique `/tmp/proxyma-e2e/...` data directory.
+3. Source [`lib/helpers.sh`](lib/helpers.sh), call `install_e2e_case_trap`, and run `cleanup_e2e` before setup. The shared trap captures sanitized diagnostics on failure and always cleans up.
 4. Write the scenario as **Given** fixture/topology, **When** public CLI or mTLS action, **Then** public assertion.
 5. Use `wait_until`, `wait_for_output`, `wait_for_node`, or `wait_for_task_completed`; never add a fixed sleep to make timing pass.
 6. Reuse helper modules instead of open-coding Compose, curl certificate flags, polling, assertions, or redaction.
@@ -196,6 +208,7 @@ CI sanitizes the complete logs directory again before uploading failure artifact
 
 ```bash
 bash -n tests/e2e/cases/NN_descriptive_name.sh
+make test-e2e-harness
 E2E_CASE=NN E2E_LIST=true ./tests/e2e/run.sh
 E2E_CASE=NN E2E_PARALLEL=1 ./tests/e2e/run.sh
 ```

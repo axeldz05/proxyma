@@ -23,3 +23,7 @@
 21_vfs_delete_tombstone
 22_peer_restart_persistence
 24_durable_download_restart
+25_peer_offline_visibility
+26_vfs_peer_restart
+27_vfs_unsubscribe_purge
+28_service_remove_restart

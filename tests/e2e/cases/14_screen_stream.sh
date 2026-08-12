@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 export E2E_PROJECT_NAME="e2e_screen_stream"
 export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
@@ -9,8 +9,8 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Screen stream (fake frames)...${NC}"
 
+install_e2e_case_trap "case-14-failure"
 cleanup_e2e
-trap cleanup_e2e EXIT
 
 mkdir -p "$E2E_DATA_DIR/node-1"
 mkdir -p "$E2E_DATA_DIR/node-2"

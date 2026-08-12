@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 # E2E project setup
 export E2E_PROJECT_NAME="e2e_udp_hole_punching"
@@ -11,17 +11,7 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: UDP NAT Hole Punching via STUN & QUIC...${NC}"
 
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}❌ Test failed with exit code $exit_code. Keeping containers for inspection.${NC}"
-    else
-        cleanup_e2e
-    fi
-}
-trap cleanup_on_exit EXIT
-
-# Initial cleanup
+install_e2e_case_trap "case-07-failure"
 cleanup_e2e
 
 # Create directories

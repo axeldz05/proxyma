@@ -9,17 +9,8 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Durable download intent restart...${NC}"
 
+install_e2e_case_trap "case-24-failure"
 cleanup_e2e
-finish_case() {
-    local exit_code=$?
-    trap - EXIT
-    if [ "$exit_code" -ne 0 ]; then
-        dump_e2e_diagnostics "case-24-failure"
-    fi
-    cleanup_e2e
-    exit "$exit_code"
-}
-trap finish_case EXIT
 
 mkdir -p \
     "$E2E_DATA_DIR/node-1" \

@@ -11,3 +11,6 @@
 # accepts one JSON payload and closes input, so it cannot exercise multi-message
 # bidi input or an explicit public cancel end-to-end without faking the case.
 24_durable_download_restart
+26_vfs_peer_restart
+27_vfs_unsubscribe_purge
+28_service_remove_restart

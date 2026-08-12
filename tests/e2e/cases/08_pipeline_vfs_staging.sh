@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 export E2E_PROJECT_NAME="e2e_pipeline_vfs_staging"
 export E2E_DATA_DIR="/tmp/proxyma-e2e/$E2E_PROJECT_NAME"
@@ -9,17 +9,8 @@ source "$SCRIPTPATH/../lib/helpers.sh"
 
 echo -e "${GREEN}🚀 Starting test case: Pipeline VFS auto-staging...${NC}"
 
+install_e2e_case_trap "case-08-failure"
 cleanup_e2e
-finish_case() {
-    local exit_code=$?
-    trap - EXIT
-    if [ "$exit_code" -ne 0 ]; then
-        dump_e2e_diagnostics "case-08-failure"
-    fi
-    cleanup_e2e
-    exit "$exit_code"
-}
-trap finish_case EXIT
 
 mkdir -p "$E2E_DATA_DIR/node-1"
 mkdir -p "$E2E_DATA_DIR/node-2/scripts"

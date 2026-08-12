@@ -6,3 +6,4 @@
 09_invite_join_relay_only
 10_service_bid_failover
 11_ca_rotation_live
+25_peer_offline_visibility

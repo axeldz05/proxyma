@@ -66,7 +66,7 @@ if [ -n "${E2E_CASE:-}" ]; then
         append_case_matches "$selector" || exit 2
     done
 else
-    profile=${E2E_PROFILE:-all}
+    profile=${E2E_PROFILE:-full}
     if [ "$profile" = all ]; then
         TEST_CASES=("${ALL_CASES[@]}")
     else

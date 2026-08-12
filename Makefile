@@ -12,7 +12,7 @@ ANDROID_DIR=cmd/proxyma-android
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test test-integration test-cover test-sanitizer test-race test-ci test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
+.PHONY: all build test test-integration test-cover test-sanitizer test-e2e-harness test-race test-ci test-android-contract test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
 
 all: lint test build ## Run lint, tests, and build
 
@@ -33,19 +33,28 @@ test-cover: ## Run tests with coverage and enforce the coverage ratchet
 	$(GO) test -count=1 -coverprofile=coverage-unit.out ./...
 	$(GO) run ./cmd/coverage-ratchet check scripts/coverage_baseline.json coverage-unit.out
 
-test-sanitizer: ## Verify E2E diagnostic sanitization
-	@echo "$(BLUE)Testing the E2E diagnostic sanitizer...$(NC)"
+test-e2e-harness: ## Validate E2E profiles and diagnostic sanitization
+	@echo "$(BLUE)Validating the E2E harness...$(NC)"
+	bash ./tests/e2e/lib/validate_profiles_test.sh
+	bash ./scripts/validate_e2e_profiles.sh
 	bash ./tests/e2e/lib/dump_sanitize_test.sh
+
+test-sanitizer: test-e2e-harness ## Verify E2E harness sanitization
 
 # The race suite is green. It remains separate from `test` because it is slower.
 test-race: ## Run the Go test suite with race detection
 	@echo "$(BLUE)Running tests with the race detector...$(NC)"
 	$(GO) test -race -count=1 ./...
 
-test-ci: test-cover test-sanitizer test-race ## Run the local CI test gates
+test-ci: test-cover test-e2e-harness test-race ## Run the local CI test gates
+
+test-android-contract: ## Run Android build-tag contracts on the host
+	@echo "$(BLUE)Running Android build-tag contracts on the host...$(NC)"
+	$(GO) test -count=1 -tags=androidcontract \
+		./internal/compute/androidcontract ./internal/server/androidcontract
 
 test-android-bind: ## Build the Android AAR and verify required Java APIs
-test-android: ## Build and test Android against one fresh temporary AAR
+test-android: test-android-contract ## Build and test Android against one fresh temporary AAR
 test-android-bind test-android:
 	@echo "$(BLUE)Building Android bindings for $@...$(NC)"
 	@set -eu; \
@@ -64,7 +73,15 @@ test-android-bind test-android:
 		NR == resolve_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { resolve_path=1 } \
 		$$0 == "  public static native java.lang.String cancelStream(java.lang.String);" { cancel_decl=NR; next } \
 		NR == cancel_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { cancel_stream=1 } \
-		END { if (!run_service || !resolve_path || !cancel_stream) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
+		$$0 == "  public static native java.lang.String getServiceDetails(java.lang.String);" { details_decl=NR; next } \
+		NR == details_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { service_details=1 } \
+		$$0 == "  public static native java.lang.String getPeersJson();" { peers_decl=NR; next } \
+		NR == peers_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { peers_json=1 } \
+		$$0 == "  public static native java.lang.String getBandwidthStatsJson();" { bandwidth_decl=NR; next } \
+		NR == bandwidth_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { bandwidth_json=1 } \
+		$$0 == "  public static native java.lang.String getLogsJson();" { logs_decl=NR; next } \
+		NR == logs_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { logs_json=1 } \
+		END { if (!run_service || !resolve_path || !cancel_stream || !service_details || !peers_json || !bandwidth_json || !logs_json) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
 	if [ "$@" = "test-android" ]; then \
 		java_version="$$($(JAVA) -XshowSettings:properties -version 2>&1 | { \
 			while IFS= read -r line; do \
