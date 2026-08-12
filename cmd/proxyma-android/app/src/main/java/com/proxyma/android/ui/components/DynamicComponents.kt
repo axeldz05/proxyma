@@ -160,6 +160,7 @@ fun ParameterInput(
     enableCamera: Boolean = false
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     
     val stringValue = (value ?: "").toString()
     val boolValue = value as? Boolean ?: false
@@ -175,24 +176,28 @@ fun ParameterInput(
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         if (localFilePath) {
-            try {
-                val path = copyUriToCache(context, uri)
-                onValueChange(path)
-                context.toast("Selected: ${path.substringAfterLast('/')}")
-            } catch (e: Exception) {
-                context.toast("Failed to copy file: ${e.message}", long = true)
+            isFileUploading = true
+            runOnBg(scope, action = { copyUriToCache(context, uri) }) { result ->
+                isFileUploading = false
+                result.onSuccess { path ->
+                    onValueChange(path)
+                    context.toast("Selected: ${path.substringAfterLast('/')}")
+                }
+                result.onFailure { error ->
+                    context.toast("Failed to copy file: ${error.message}", long = true)
+                }
             }
         } else {
             uploadUriToVfs(
+                scope = scope,
                 context = context,
                 uri = uri,
                 onStart = { isFileUploading = true },
                 onComplete = { result ->
                     isFileUploading = false
-                    result.onSuccess {
-                        val fileName = getFileName(context, uri) ?: "file_${System.currentTimeMillis()}"
-                        onValueChange(fileName)
-                        context.toast("File '$fileName' saved to VFS successfully")
+                    result.onSuccess { upload ->
+                        onValueChange(upload.logicalName)
+                        context.toast(upload.message)
                     }
                     result.onFailure { err ->
                         context.toast("VFS upload failed: ${err.message}", long = true)
@@ -324,9 +329,17 @@ fun ParameterInput(
                             Spacer(Modifier.width(4.dp))
                             IconButton(
                                 onClick = {
-                                    val (uri, file) = createTempCameraFile(context)
-                                    cameraPhotoFile = file
-                                    cameraLauncher.launch(uri)
+                                    runOnBg(scope, action = {
+                                        createTempCameraFile(context)
+                                    }) { result ->
+                                        result.onSuccess { (uri, file) ->
+                                            cameraPhotoFile = file
+                                            cameraLauncher.launch(uri)
+                                        }
+                                        result.onFailure { error ->
+                                            context.toast("Failed to prepare camera: ${error.message}", long = true)
+                                        }
+                                    }
                                 },
                                 enabled = !isFileUploading
                             ) {

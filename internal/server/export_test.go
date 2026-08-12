@@ -38,16 +38,18 @@ func (s *Server) FetchBlobFromPeer(ctx context.Context, peerID string, entry pro
 
 // AttachQUICManager mounts a QUICManager for tests that skip CheckNAT (e.g. IsSponsorOverride).
 func (s *Server) AttachQUICManager(qm *p2p.QUICManager) {
+	s.natMu.Lock()
 	s.quicMgr = qm
 	if qm != nil {
-		s.publicUDPAddr = qm.PublicUDPAddr
+		s.publicUDPAddr = qm.PublicUDPAddress()
 		s.peerClient.SetQUICManager(qm)
 	}
+	s.natMu.Unlock()
 }
 
 // QUICManager returns the active QUIC manager (may be nil).
 func (s *Server) QUICManager() *p2p.QUICManager {
-	return s.quicMgr
+	return s.CurrentNATState().QUICManager
 }
 
 // PublicUDPAddr returns the advertised public UDP address.
@@ -67,9 +69,11 @@ func (s *Server) RefreshPublicUDPFromMapping(extIP string, mappedUDP int) {
 
 // SetPublicUDPAddr sets publicUDPAddr for tests.
 func (s *Server) SetPublicUDPAddr(addr string) {
+	s.natMu.Lock()
+	defer s.natMu.Unlock()
 	s.publicUDPAddr = addr
 	if s.quicMgr != nil {
-		s.quicMgr.PublicUDPAddr = addr
+		s.quicMgr.SetPublicUDPAddr(addr)
 	}
 }
 

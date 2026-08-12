@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version-file: go.mod
           cache: true
 
       - name: Install Fyne system dependencies
@@ -42,3 +42,48 @@ jobs:
 
       - name: Smoke Test Binary
         run: ./proxyma --help
+
+  android:
+    name: Android Bind, Test, Lint and Assemble
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          gradle_ndk=26.1.10909125
+          gomobile_ndk=27.0.12077973
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${gradle_ndk}" \
+            "ndk;${gomobile_ndk}"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${gomobile_ndk}" >> "${GITHUB_ENV}"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Resolve module-pinned gomobile
+        run: go tool gomobile help >/dev/null
+
+      - name: Run Android integration checks
+        run: make test-android

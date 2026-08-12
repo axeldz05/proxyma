@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"proxyma/internal/compute"
@@ -111,20 +112,40 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 	if err != nil {
 		return nil, err
 	}
-	schema, err := s.applyServiceAction(serviceName, &localService, protocol.ActionAdd)
+	payload := protocol.ServiceNotification{
+		Action: protocol.ActionAdd,
+		NodeID: s.Config.ID,
+		Schema: protocol.NormalizeServiceSchema(serviceName, localService.Schema, localService.Type),
+	}
+	staged, err := s.prepareOutboxMutation(kindService, serviceName, payload)
 	if err != nil {
 		return nil, err
 	}
-	go s.NotifyService(schema, protocol.ActionAdd)
+	_, mutationErr := s.applyServiceAction(serviceName, &localService, protocol.ActionAdd)
+	finishErr := staged.finish(mutationErr == nil)
+	if mutationErr != nil || finishErr != nil {
+		return nil, errors.Join(mutationErr, finishErr)
+	}
 	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
 }
 
 func (s *Server) LocalServiceRemove(name string) (any, error) {
-	schema, err := s.applyServiceAction(name, nil, protocol.ActionRemove)
+	schema, _ := s.Compute.GetService(name)
+	schema = protocol.NormalizeServiceSchema(name, schema, "")
+	payload := protocol.ServiceNotification{
+		Action: protocol.ActionRemove,
+		NodeID: s.Config.ID,
+		Schema: schema,
+	}
+	staged, err := s.prepareOutboxMutation(kindService, name, payload)
 	if err != nil {
 		return nil, err
 	}
-	go s.NotifyService(schema, protocol.ActionRemove)
+	_, mutationErr := s.applyServiceAction(name, nil, protocol.ActionRemove)
+	finishErr := staged.finish(mutationErr == nil)
+	if mutationErr != nil || finishErr != nil {
+		return nil, errors.Join(mutationErr, finishErr)
+	}
 	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' removed successfully.", name)}, nil
 }
 
@@ -134,7 +155,7 @@ func (s *Server) notifyService(ctx context.Context, peerID string, schema protoc
 		NodeID: s.Config.ID,
 		Schema: schema,
 	}
-	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name+"|"+action, payload, func(ctx context.Context) error {
+	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name, payload, func(ctx context.Context) error {
 		return s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
 	})
 }

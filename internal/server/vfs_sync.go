@@ -14,9 +14,9 @@ import (
 
 func (s *Server) ExecuteSync() error {
 	var (
-		mu       sync.Mutex
-		lastErr  error
-		anyOK    bool
+		mu      sync.Mutex
+		lastErr error
+		anyOK   bool
 	)
 	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync}, func(ctx context.Context, peerID string) error {
 		s.ensureQUICSession(peerID)
@@ -29,7 +29,14 @@ func (s *Server) ExecuteSync() error {
 			mu.Unlock()
 			return err
 		}
-		missingFiles := s.Storage.ProcessRemoteManifest(manifest)
+		_, manifestErr := s.Storage.ProcessRemoteManifestFromSource(manifest, peerID)
+		if manifestErr != nil {
+			s.Config.Logger.Warn("Sync skipped: manifest reconciliation failed", "peer", peerID, "error", manifestErr)
+			mu.Lock()
+			lastErr = manifestErr
+			mu.Unlock()
+			return manifestErr
+		}
 
 		// Push local entries the peer lacks (or has older). Critical after partition
 		// heal: the isolated node can reach the sponsor, but the sponsor often cannot
@@ -60,11 +67,6 @@ func (s *Server) ExecuteSync() error {
 			}
 		}
 
-		for _, file := range missingFiles {
-			if err := s.enqueueDownload(DownloadJob{File: file, Source: peerID}); err != nil {
-				s.Config.Logger.Warn("Download enqueue skipped", "peer", peerID, "file", file.Name, "error", err)
-			}
-		}
 		mu.Lock()
 		anyOK = true
 		mu.Unlock()
@@ -77,41 +79,55 @@ func (s *Server) ExecuteSync() error {
 }
 
 func (s *Server) downloadWorker() {
+	defer s.downloadWG.Done()
 	for {
+		if s.lifetimeCtx.Err() != nil {
+			return
+		}
 		select {
-		case <-s.done:
+		case <-s.lifetimeCtx.Done():
 			return
 		case job, ok := <-s.downloadQueue:
 			if !ok {
 				return
 			}
+			if s.lifetimeCtx.Err() != nil {
+				return
+			}
 			if job.File.Deleted {
-				s.Storage.ProcessRemoteDeletion(job.File)
+				if err := s.Storage.ProcessRemoteDeletion(job.File); err != nil {
+					s.Config.Logger.Error(
+						"Failed to process queued remote deletion",
+						"file", job.File.Name,
+						"source", job.Source,
+						"error", err,
+					)
+				}
 				continue
 			}
 			s.ensureQUICSession(job.Source)
 
-			ctx, cancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
-			err := s.callPeer(ctx, job.Source, func(ctx context.Context, peerID string) error {
-				return s.fetchBlobFromPeer(ctx, peerID, job.File)
-			})
-			cancel()
+			err := s.downloadJobFromPeer(job, job.Source)
+			integrityFailure := errors.Is(err, storage.ErrBlobIntegrity)
 			// Manifest source may only hold metadata (e.g. relay sponsor). Fall back
 			// to any reachable peer that still has the physical blob — skip source so
 			// callPeer does not re-mark it offline via a synthetic error.
-			if err != nil && !errors.Is(err, storage.ErrBlobDiscarded) {
+			if err != nil && !errors.Is(err, storage.ErrBlobDiscarded) && s.lifetimeCtx.Err() == nil {
 				for peerID := range s.GetPeersCopy() {
+					if s.lifetimeCtx.Err() != nil {
+						return
+					}
 					if peerID == s.Config.ID || peerID == job.Source {
 						continue
 					}
-					fbCtx, fbCancel := context.WithTimeout(context.Background(), PeerRPCBlobLong)
-					fbErr := s.callPeer(fbCtx, peerID, func(ctx context.Context, peerID string) error {
-						return s.fetchBlobFromPeer(ctx, peerID, job.File)
-					})
-					fbCancel()
+					fbErr := s.downloadJobFromPeer(job, peerID)
 					if fbErr == nil {
 						err = nil
+						integrityFailure = false
 						break
+					}
+					if errors.Is(fbErr, storage.ErrBlobIntegrity) {
+						integrityFailure = true
 					}
 					if errors.Is(fbErr, storage.ErrBlobDiscarded) {
 						err = fbErr
@@ -119,9 +135,18 @@ func (s *Server) downloadWorker() {
 					}
 				}
 			}
+			if s.lifetimeCtx.Err() != nil {
+				return
+			}
 			if errors.Is(err, storage.ErrBlobDiscarded) {
 				s.Config.Logger.Debug("Blob download discarded due to obsolescence or deletion", "file", job.File.Name, "hash", job.File.Hash)
+			} else if integrityFailure {
+				if quarantineErr := s.Storage.QuarantineCorruptDownload(job.File); quarantineErr != nil {
+					s.Config.Logger.Error("Failed to quarantine corrupt download intent", "file", job.File.Name, "error", quarantineErr)
+				}
+				s.Config.Logger.Error("Rejected corrupt blob source", "hash", job.File.Hash, "peer", job.Source, "error", err)
 			} else if err != nil {
+				s.Storage.ReleaseDownloadAttempt(job.File)
 				s.Config.Logger.Error("Failed to download blob from peer", "hash", job.File.Hash, "peer", job.Source, "error", err)
 			} else {
 				s.Config.Logger.Info("Successfully downloaded and stored blob", "file", job.File.Name, "hash", job.File.Hash)
@@ -130,13 +155,27 @@ func (s *Server) downloadWorker() {
 	}
 }
 
+func (s *Server) downloadJobFromPeer(job DownloadJob, peerID string) error {
+	ctx, cancel := context.WithTimeout(s.lifetimeCtx, PeerRPCBlobLong)
+	defer cancel()
+	return s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
+		return s.fetchBlobFromPeer(ctx, peerID, job.File)
+	})
+}
+
 // fetchBlobFromPeer downloads a blob from peer and stores it locally (L2).
 func (s *Server) fetchBlobFromPeer(ctx context.Context, peerID string, entry protocol.IndexEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	body, err := s.peerClient.DownloadBlob(ctx, peerID, entry.Hash)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = body.Close() }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if entry.Name != "" {
 		return s.Storage.StoreRemoteBlob(entry, body)
 	}
@@ -144,7 +183,10 @@ func (s *Server) fetchBlobFromPeer(ctx context.Context, peerID string, entry pro
 }
 
 func (s *Server) FetchFileOnDemand(name string) error {
-	entry, ok := s.Storage.GetFileMeta(name)
+	entry, ok, err := s.Storage.GetFileMetaE(name)
+	if err != nil {
+		return fmt.Errorf("failed to read VFS metadata for %q: %w", name, err)
+	}
 	if !ok {
 		return fmt.Errorf("file '%s' not found in VFS metadata", name)
 	}
@@ -163,18 +205,24 @@ func (s *Server) FetchFileOnDemand(name string) error {
 	return fmt.Errorf("no peer holds physical replica for file '%s'", name)
 }
 
-func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
+func (s *Server) LocalVFSList() ([]protocol.VFSFileStatus, error) {
 	snapshot, err := s.Storage.GetVFSSnapshot()
 	if err != nil {
 		s.Config.Logger.Error("Failed to load VFS snapshot for list", "error", err)
-		return nil
+		return nil, fmt.Errorf("failed to load VFS snapshot: %w", err)
 	}
 	upSpeed, downSpeed := s.GetCurrentBandwidth()
 
 	var list []protocol.VFSFileStatus
 	for name, entry := range snapshot {
-		hasLocal, _ := s.Storage.HasPhysicalBlob(entry.Hash)
-		isSubscribed := s.Storage.IsSubscribed(name)
+		hasLocal, err := s.Storage.HasPhysicalBlob(entry.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect VFS blob %q: %w", entry.Hash, err)
+		}
+		isSubscribed, err := s.Storage.IsSubscribedE(name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read VFS subscription for %q: %w", name, err)
+		}
 
 		var sentSpeed, recvSpeed float64
 		if hasLocal {
@@ -200,7 +248,7 @@ func (s *Server) LocalVFSList() []protocol.VFSFileStatus {
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].Name < list[j].Name
 	})
-	return list
+	return list, nil
 }
 
 // announceAndSync announces to bootstrap (if set) then runs ExecuteSync.
@@ -240,7 +288,7 @@ func (s *Server) LocalVFSSubscribe(name string, subscribe bool) error {
 		return err
 	}
 	if subscribe {
-		go func() { _ = s.announceAndSync() }()
+		s.goOwned(func() { _ = s.announceAndSync() })
 	}
 	return nil
 }
@@ -257,18 +305,14 @@ func (s *Server) LocalLogs() []protocol.LogRecord {
 	return out
 }
 
-func (s *Server) notifyPeers(fileInfo protocol.IndexEntry) {
+func (s *Server) prepareVFSNotification(fileInfo protocol.IndexEntry) (func(bool) error, error) {
 	payload := protocol.PeerNotification{
 		File:   fileInfo,
 		Source: s.Config.Address,
 	}
-	dedupe := fmt.Sprintf("%s|%s|%d", fileInfo.Name, fileInfo.Hash, fileInfo.Version)
-	if fileInfo.Deleted {
-		dedupe += "|del"
+	staged, err := s.prepareOutboxMutation(kindVFS, fileInfo.Name, payload)
+	if err != nil {
+		return nil, err
 	}
-	s.gossipAll(func(ctx context.Context, peerID string) error {
-		return s.notifyWithOutbox(ctx, peerID, kindVFS, dedupe, payload, func(ctx context.Context) error {
-			return s.peerClient.Notify(ctx, peerID, payload)
-		})
-	})
+	return staged.finish, nil
 }

@@ -30,41 +30,43 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.*
 import com.proxyma.android.ui.screens.*
 import com.proxyma.android.ui.theme.DeepGray
 import com.proxyma.android.ui.theme.ProxymaAppTheme
+import com.proxyma.android.utils.BindMethod
+import com.proxyma.android.utils.bindResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
-    private var proxymaService: ProxymaService? = null
+    private val proxymaService = ObservableBindingState<ProxymaService>()
     private var isBound = false
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as ProxymaService.LocalBinder
-            proxymaService = binder.getService()
+            proxymaService.bind(binder.getService())
             isBound = true
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            proxymaService = null
+            proxymaService.unbind()
             isBound = false
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Set global storage path for Go-mobile bindings
-        val path = java.io.File(filesDir, "proxyma_data").absolutePath
-        proxyma_bind.Proxyma_bind.setStoragePath(path)
 
         // Bind Foreground Service
         val intent = Intent(this, ProxymaService::class.java)
@@ -80,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ProxymaAppTheme {
-                MainLayout(proxymaService)
+                MainLayout(proxymaService.state.value)
             }
         }
     }
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
             unbindService(serviceConnection)
             isBound = false
         }
+        proxymaService.unbind()
         super.onDestroy()
     }
 }
@@ -97,14 +100,23 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainLayout(service: ProxymaService?) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    val servicesViewModel: ServicesViewModel = viewModel()
 
-    val uiDomains = remember {
-        try {
-            val json = proxyma_bind.Proxyma_bind.getUISchemaJSON()
-            Gson().fromJson<List<Map<String, Any>>>(json, object : TypeToken<List<Map<String, Any>>>() {}.type) ?: emptyList()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
+    val uiDomains by produceState<List<Map<String, Any>>>(initialValue = emptyList()) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val json = bindResult(
+                    proxyma_bind.Proxyma_bind.getUISchemaJSON(),
+                    BindMethod.LEGACY_ERROR_PREFIX
+                ).getOrThrow()
+                Gson().fromJson<List<Map<String, Any>>>(
+                    json,
+                    object : TypeToken<List<Map<String, Any>>>() {}.type
+                ) ?: emptyList()
+            } catch (error: Exception) {
+                error.printStackTrace()
+                emptyList()
+            }
         }
     }
 
@@ -149,7 +161,7 @@ fun MainLayout(service: ProxymaService?) {
                 0 -> StatusScreen(telemetryDomain, peersDomain)
                 1 -> PairingScreen(service, clusterDomain)
                 2 -> VFSScreen(storageDomain)
-                3 -> ServicesScreen(serviceDomain)
+                3 -> ServicesScreen(serviceDomain, servicesViewModel)
                 4 -> CollabEditorScreen()
                 5 -> LogsScreen(telemetryDomain)
             }

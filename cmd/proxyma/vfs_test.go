@@ -12,6 +12,7 @@ import (
 )
 
 func TestVfsCmds(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 
 	cfg := protocol.NodeConfig{

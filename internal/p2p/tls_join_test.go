@@ -2,6 +2,7 @@ package p2p_test
 
 import (
 	"proxyma/internal/p2p"
+	"proxyma/internal/testutil"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,4 +87,24 @@ func TestIssueNodeCertificateWritesPaths(t *testing.T) {
 	certPath, keyPath := p2p.NodeCertPaths(nodeDir, "node-y")
 	require.FileExists(t, certPath)
 	require.FileExists(t, keyPath)
+}
+
+func TestTLSConfigTrustCAHashRequiresLeafChainToPinnedCA(t *testing.T) {
+	t.Parallel()
+
+	trusted := testutil.NewNodeTLS(t, "trusted")
+	attacker := testutil.NewNodeTLS(t, "attacker")
+	trustedCA := trusted.ServerTLS.Certificates[0].Certificate[1]
+	trustedHash := p2p.HashCertDER(trustedCA)
+	verify := p2p.TLSConfigTrustCAHash(trustedHash).VerifyPeerCertificate
+
+	require.NoError(t, verify(trusted.ServerTLS.Certificates[0].Certificate, nil))
+
+	forgedChainWithPinnedCAAppended := append(
+		append([][]byte(nil), attacker.ServerTLS.Certificates[0].Certificate...),
+		trustedCA,
+	)
+	err := verify(forgedChainWithPinnedCAAppended, nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "pinned CA")
 }

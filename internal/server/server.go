@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"proxyma/internal/compute"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -15,6 +18,7 @@ import (
 	"proxyma/internal/telemetry"
 	"proxyma/internal/utils"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,35 +36,66 @@ type Server struct {
 	Bandwidth *BandwidthTracker
 	Relays    *RelayManager
 
-	handler       http.Handler
-	httpServer    *http.Server
-	downloadQueue chan DownloadJob
-	unixListener  net.Listener
-	done          chan struct{}
-	shutdownOnce  sync.Once
+	handler             http.Handler
+	httpServer          *http.Server
+	httpListener        net.Listener
+	downloadQueue       chan DownloadJob
+	unixListener        net.Listener
+	ready               chan struct{}
+	readyOnce           sync.Once
+	done                chan struct{}
+	shutdownOnce        sync.Once
+	shutdownDone        chan struct{}
+	shutdownErr         error
+	shutdownRequested   atomic.Bool
+	lifetimeCtx         context.Context
+	cancelLife          context.CancelFunc
+	downloadWG          sync.WaitGroup
+	lifecycleMu         sync.Mutex
+	shutdownStarted     bool
+	listenFunc          func(network, address string) (net.Listener, error)
+	listenerWG          sync.WaitGroup
+	httpShutdownStarted chan struct{}
+	tcpFamilies         tcpFamily
+	workMu              sync.Mutex
+	acceptingWork       bool
+	workWG              sync.WaitGroup
+	unixConnMu          sync.Mutex
+	unixConns           map[net.Conn]struct{}
 
 	routeIndexOnce sync.Once
 	routePolicies  map[string]routePolicy
 
 	isSponsor       bool
 	checkNATOnce    sync.Once
+	natCheck        func(context.Context)
+	natWorkMu       sync.Mutex
+	natWG           sync.WaitGroup
 	serverTLSConfig *tls.Config
 	clientTLSConfig *tls.Config
 	tlsMutex        sync.RWMutex
 	clientMaterial  atomic.Pointer[tlsClientMaterial]
 	serverMaterial  atomic.Pointer[tlsServerMaterial]
 
-	udpConn       *net.UDPConn
-	publicUDPAddr string
-	quicMgr       *p2p.QUICManager
-	natMapper     *p2p.NATMapper
-	natMu         sync.Mutex
+	udpConn          *net.UDPConn
+	publicUDPAddr    string
+	quicMgr          *p2p.QUICManager
+	natMapper        *p2p.NATMapper
+	natMapperFactory func(*slog.Logger, int, int) *p2p.NATMapper
+	natMu            sync.RWMutex
 
 	webrtcPCs   sync.Map
 	webrtcPCSeq uint64
 
 	outboxFlushMu sync.Mutex
 }
+
+type tcpFamily uint8
+
+const (
+	tcpFamilyIPv4 tcpFamily = 1 << iota
+	tcpFamilyIPv6
+)
 
 type DownloadJob struct {
 	File   protocol.IndexEntry
@@ -75,12 +110,22 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 		cfg.Workers = 4
 	}
 	telemetry.InitFromEnv()
+	lifetimeCtx, cancelLife := context.WithCancel(context.Background())
 	s := &Server{
 		Config:        cfg,
 		peerClient:    peerClient,
 		downloadQueue: make(chan DownloadJob, 100),
+		ready:         make(chan struct{}),
 		done:          make(chan struct{}),
+		shutdownDone:  make(chan struct{}),
+		lifetimeCtx:   lifetimeCtx,
+		cancelLife:    cancelLife,
+		listenFunc:    net.Listen,
+		acceptingWork: true,
+		unixConns:     make(map[net.Conn]struct{}),
+		tcpFamilies:   tcpFamilyIPv4,
 	}
+	s.natCheck = s.determineSponsorAndNATStatus
 
 	s.Peers = NewPeerRegistry(cfg.Logger, cfg.ID)
 	s.Invites = NewInviteManager(cfg.Logger)
@@ -88,14 +133,18 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	s.Relays = NewRelayManager(s)
 
 	if s.peerClient != nil {
+		s.peerClient.SetLifetimeContext(lifetimeCtx)
 		s.peerClient.UpdateSponsorAddress(cfg.BootstrapNode)
 		s.peerClient.SetNodeID(cfg.ID)
 		s.peerClient.SetOwnAddress(cfg.Address)
 	}
 
-	s.Compute = compute.NewComputeEngine(cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	s.Compute = compute.NewComputeEngine(lifetimeCtx, cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
 	s.Compute.SetAddress(cfg.Address)
-	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, s.notifyPeers, func(file protocol.IndexEntry, rawSource string) error {
+	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, nil, func(file protocol.IndexEntry, rawSource string) error {
+		if _, ok := s.GetPeersRecordCopy()[rawSource]; ok {
+			return s.enqueueDownload(DownloadJob{File: file, Source: rawSource})
+		}
 		for peerID, record := range s.GetPeersRecordCopy() {
 			if slices.Contains(record.Addresses, rawSource) {
 				return s.enqueueDownload(DownloadJob{File: file, Source: peerID})
@@ -105,9 +154,11 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	})
 	if err != nil {
 		s.Compute.Close()
+		s.cancelLife()
 		return nil, err
 	}
 	s.Storage = engine
+	s.Storage.SetMutationNotificationHook(s.prepareVFSNotification)
 
 	// Load persisted peers from DB and populate registry
 	if peers, err := s.Storage.LoadPeers(); err == nil {
@@ -146,20 +197,28 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	// Load persisted pipeline schemas
 	if schemas, err := s.Storage.LoadPipelineSchemas(); err == nil {
 		for _, schema := range schemas {
-			s.Compute.RegisterPipeline(schema)
+			if err := s.Compute.RegisterPipeline(schema); err != nil {
+				cfg.Logger.Error(
+					"Failed to register persisted pipeline schema",
+					"pipelineID", schema.ID,
+					"version", schema.Version,
+					"error", err,
+				)
+			}
 		}
 	} else {
 		cfg.Logger.Error("Failed to load persisted pipeline schemas", "error", err)
 	}
 
-	s.handler = s.MountHandlers()
+	s.handler = s.trackHTTPHandler(s.MountHandlers())
 
+	s.downloadWG.Add(cfg.Workers)
 	for range cfg.Workers {
 		go s.downloadWorker()
 	}
 	s.startOutboxWorker()
 
-	go func() {
+	s.goOwned(func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -171,16 +230,93 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 				s.Storage.CleanupTempFiles()
 			}
 		}
-	}()
+	})
 	s.Storage.CleanupTempFiles()
 	return s, nil
 }
 
-func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
-	go s.listenUnixSocket()
+func (s *Server) beginOwnedWork() bool {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	if !s.acceptingWork {
+		return false
+	}
+	s.workWG.Add(1)
+	return true
+}
 
+func (s *Server) finishOwnedWork() {
+	s.workWG.Done()
+}
+
+// AcquireWorkLease joins direct in-process work to the server lifetime and shutdown barrier.
+func (s *Server) AcquireWorkLease(ctx context.Context) (context.Context, func(), error) {
+	if !s.beginOwnedWork() {
+		return nil, nil, http.ErrServerClosed
+	}
+	leaseCtx, cancel := s.contextWithServerLifetime(ctx)
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cancel()
+			s.finishOwnedWork()
+		})
+	}
+	return leaseCtx, release, nil
+}
+
+func (s *Server) beginUnixWork(conn net.Conn) bool {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	if !s.acceptingWork {
+		return false
+	}
+	s.workWG.Add(1)
+	s.unixConnMu.Lock()
+	s.unixConns[conn] = struct{}{}
+	s.unixConnMu.Unlock()
+	return true
+}
+
+func (s *Server) goOwned(fn func()) bool {
+	if !s.beginOwnedWork() {
+		return false
+	}
+	go func() {
+		defer s.finishOwnedWork()
+		fn()
+	}()
+	return true
+}
+
+func (s *Server) stopAcceptingOwnedWork() {
+	s.workMu.Lock()
+	s.acceptingWork = false
+	s.workMu.Unlock()
+}
+
+func (s *Server) trackHTTPHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.beginOwnedWork() {
+			http.Error(w, http.ErrServerClosed.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer s.finishOwnedWork()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
+	if s.shutdownRequested.Load() {
+		return http.ErrServerClosed
+	}
+	s.lifecycleMu.Lock()
+	if s.shutdownRequested.Load() || s.shutdownStarted {
+		s.lifecycleMu.Unlock()
+		return http.ErrServerClosed
+	}
 	portStr, _ := s.configTCPPort()
-	addr := "0.0.0.0:" + portStr
+	addr := ":" + portStr
 
 	// http.Server.ServeTLS clones TLSConfig. Static Certificates/ClientCAs on the
 	// original pointer are therefore invisible to the listener after start.
@@ -188,23 +324,157 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	// so RotateCAAndResignPeers / ReloadTLSConfig stay effective without restart.
 	s.armHotReloadServerTLS(serverTLS)
 
+	sockPath := protocol.UnixSockPath(s.Config.StoragePath)
+	_ = os.Remove(sockPath)
+	unixListener, err := s.listenFunc("unix", sockPath)
+	if err != nil {
+		s.lifecycleMu.Unlock()
+		return fmt.Errorf("listen unix socket: %w", err)
+	}
+	if unixListener.Addr() != nil && unixListener.Addr().Network() == "unix" {
+		if err := os.Chmod(sockPath, 0o600); err != nil {
+			_ = unixListener.Close()
+			_ = os.Remove(sockPath)
+			s.lifecycleMu.Unlock()
+			return fmt.Errorf("secure unix socket: %w", err)
+		}
+	}
+	httpListener, err := s.listenFunc("tcp", addr)
+	if err != nil {
+		_ = unixListener.Close()
+		_ = os.Remove(sockPath)
+		s.lifecycleMu.Unlock()
+		return fmt.Errorf("listen TCP: %w", err)
+	}
+	if portStr == "0" {
+		boundAddress, boundErr := addressWithListenerPort(s.Config.Address, httpListener)
+		if boundErr != nil {
+			_ = httpListener.Close()
+			_ = unixListener.Close()
+			_ = os.Remove(sockPath)
+			s.lifecycleMu.Unlock()
+			return fmt.Errorf("resolve bound TCP address: %w", boundErr)
+		}
+		s.SetAddress(boundAddress)
+		if err := protocol.SaveConfig(s.Config); err != nil {
+			_ = httpListener.Close()
+			_ = unixListener.Close()
+			_ = os.Remove(sockPath)
+			s.lifecycleMu.Unlock()
+			return fmt.Errorf("persist bound TCP address: %w", err)
+		}
+		addr = ":" + strconv.Itoa(httpListener.Addr().(*net.TCPAddr).Port)
+	}
+
 	hs := &http.Server{
 		Addr:      addr,
 		Handler:   s.handler, // MountHandlers already wraps bandwidth + mTLS
 		TLSConfig: serverTLS,
 		ErrorLog:  log.New(&tlsErrorWriter{server: s}, "", 0),
 	}
+	httpShutdownStarted := make(chan struct{})
+	hs.RegisterOnShutdown(func() { close(httpShutdownStarted) })
 
 	s.httpServer = hs
+	s.httpListener = httpListener
+	s.tcpFamilies = listenerTCPFamilies(httpListener)
+	s.httpShutdownStarted = httpShutdownStarted
+	s.unixListener = unixListener
+	s.listenerWG.Add(1)
+	go s.serveUnixListener(unixListener, sockPath)
+	s.readyOnce.Do(func() { close(s.ready) })
 	s.Config.Logger.Info("Starting secure P2P node", "address", addr)
 
-	// Run NAT auto-detection asynchronously after a brief delay
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		s.CheckNAT()
-	}()
+	// Run NAT auto-detection asynchronously after a brief delay.
+	s.scheduleNATCheck(100 * time.Millisecond)
+	s.lifecycleMu.Unlock()
 
-	return hs.ListenAndServeTLS("", "")
+	return hs.ServeTLS(httpListener, "", "")
+}
+
+func addressWithListenerPort(configured string, listener net.Listener) (string, error) {
+	parsed, err := url.Parse(configured)
+	if err != nil || parsed.Hostname() == "" {
+		return "", fmt.Errorf("invalid configured address %q", configured)
+	}
+	tcpAddress, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || tcpAddress.Port <= 0 {
+		return "", fmt.Errorf("listener has no bound TCP port")
+	}
+	return protocol.HTTPSAddr(parsed.Hostname(), strconv.Itoa(tcpAddress.Port)), nil
+}
+
+// Ready closes after both Unix and TCP listeners have bound successfully.
+func (s *Server) Ready() <-chan struct{} {
+	return s.ready
+}
+
+// IsReady reports listener readiness while the server is still active.
+func (s *Server) IsReady() bool {
+	if s.shutdownRequested.Load() {
+		return false
+	}
+	select {
+	case <-s.ready:
+		return true
+	default:
+		return false
+	}
+}
+
+func listenerTCPFamilies(listener net.Listener) tcpFamily {
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || addr.IP == nil {
+		return tcpFamilyIPv4
+	}
+	if addr.IP.To4() != nil {
+		return tcpFamilyIPv4
+	}
+	if addr.IP.IsUnspecified() {
+		// Go requests an IPv4-mapped IPv6 wildcard on platforms that support
+		// dual-stack sockets, and falls back before returning the listener.
+		return tcpFamilyIPv4 | tcpFamilyIPv6
+	}
+	return tcpFamilyIPv6
+}
+
+func (s *Server) currentTCPFamilies() tcpFamily {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.tcpFamilies
+}
+
+func (s *Server) serveUnixListener(listener net.Listener, sockPath string) {
+	defer s.listenerWG.Done()
+	defer func() { _ = os.Remove(sockPath) }()
+	s.Config.Logger.Info("Listening for local commands on unix socket", "path", sockPath)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		if !s.beginUnixWork(conn) {
+			_ = conn.Close()
+			continue
+		}
+		go func() {
+			defer s.finishOwnedWork()
+			defer func() {
+				s.unixConnMu.Lock()
+				delete(s.unixConns, conn)
+				s.unixConnMu.Unlock()
+			}()
+			s.handleUnixConnection(conn)
+		}()
+	}
+}
+
+func (s *Server) closeUnixConnections() {
+	s.unixConnMu.Lock()
+	defer s.unixConnMu.Unlock()
+	for conn := range s.unixConns {
+		_ = conn.Close()
+	}
 }
 
 type tlsErrorWriter struct {
@@ -266,50 +536,121 @@ func (w *tlsErrorWriter) Write(p []byte) (n int, err error) {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	var err error
 	s.shutdownOnce.Do(func() {
-		s.Config.Logger.Info("Initiating shutdown...")
-		close(s.done)
-		s.announceOffline(ctx)
-		s.natMu.Lock()
-		nm := s.natMapper
-		s.natMu.Unlock()
-		if nm != nil {
-			nm.Stop()
-		}
-		if s.httpServer != nil {
-			if hsErr := s.httpServer.Shutdown(ctx); hsErr != nil {
-				s.Config.Logger.Error("HTTP server shutdown failed", "error", hsErr)
-				err = hsErr
-			} else {
-				s.Config.Logger.Info("HTTP server stopped accepting connections.")
+		s.shutdownRequested.Store(true)
+		go s.finishShutdown(ctx)
+	})
+
+	select {
+	case <-s.shutdownDone:
+		s.lifecycleMu.Lock()
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	default:
+	}
+	select {
+	case <-s.shutdownDone:
+		s.lifecycleMu.Lock()
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ShutdownDone closes only after all server-owned resources have finalized.
+func (s *Server) ShutdownDone() <-chan struct{} {
+	return s.shutdownDone
+}
+
+func (s *Server) finishShutdown(ctx context.Context) {
+	s.Config.Logger.Info("Initiating shutdown...")
+	s.lifecycleMu.Lock()
+	s.shutdownStarted = true
+	close(s.done)
+	httpServer := s.httpServer
+	httpListener := s.httpListener
+	httpShutdownStarted := s.httpShutdownStarted
+	unixListener := s.unixListener
+	s.stopAcceptingOwnedWork()
+	s.lifecycleMu.Unlock()
+
+	s.cancelServerLifetime()
+	if unixListener != nil {
+		_ = unixListener.Close()
+	}
+	s.closeUnixConnections()
+
+	var httpShutdownDone chan error
+	if httpServer != nil {
+		httpShutdownDone = make(chan error, 1)
+		go func() {
+			httpShutdownDone <- httpServer.Shutdown(ctx)
+		}()
+		if httpShutdownStarted != nil {
+			select {
+			case <-httpShutdownStarted:
+			case <-ctx.Done():
 			}
 		}
+	}
+	if httpListener != nil {
+		_ = httpListener.Close()
+	}
 
-		if s.Compute != nil {
-			s.Compute.Close()
-			s.Config.Logger.Info("Compute Engine closed.")
+	offlineDone := make(chan struct{})
+	go func() {
+		defer close(offlineDone)
+		s.announceOffline(ctx)
+	}()
+	s.stopNATWork()
+
+	if s.Compute != nil {
+		s.Compute.Close()
+		s.Config.Logger.Info("Compute Engine closed.")
+	}
+	s.downloadWG.Wait()
+
+	var shutdownErr error
+	if httpShutdownDone != nil {
+		select {
+		case shutdownErr = <-httpShutdownDone:
+		case <-ctx.Done():
+			shutdownErr = ctx.Err()
 		}
-
-		s.closeWebRTCPeers()
-
-		if s.quicMgr != nil {
-			s.quicMgr.Close()
-			s.Config.Logger.Info("QUIC Manager closed.")
+		if shutdownErr != nil {
+			_ = httpServer.Close()
+			s.Config.Logger.Error("HTTP server shutdown failed", "error", shutdownErr)
+		} else {
+			s.Config.Logger.Info("HTTP server stopped accepting connections.")
 		}
+	}
 
-		if s.unixListener != nil {
-			_ = s.unixListener.Close()
-		}
+	s.listenerWG.Wait()
+	s.workWG.Wait()
+	<-offlineDone
+	if s.peerClient != nil {
+		s.peerClient.Close()
+	}
+	s.closeWebRTCPeers()
 
-		if s.Storage != nil {
-			_ = s.Storage.Close()
-			s.Config.Logger.Info("Storage Engine closed.")
-		}
+	if qm := s.detachQUICManager(); qm != nil {
+		qm.Close()
+		s.Config.Logger.Info("QUIC Manager closed.")
+	}
 
-		s.Config.Logger.Info("Node shutdown complete.")
-	})
-	return err
+	if s.Storage != nil {
+		_ = s.Storage.Close()
+		s.Config.Logger.Info("Storage Engine closed.")
+	}
+
+	s.Config.Logger.Info("Node shutdown complete.")
+	s.lifecycleMu.Lock()
+	s.shutdownErr = shutdownErr
+	close(s.shutdownDone)
+	s.lifecycleMu.Unlock()
 }
 
 // shuttingDown reports whether Shutdown has closed the done channel.
@@ -324,9 +665,12 @@ func (s *Server) shuttingDown() bool {
 
 // enqueueDownload non-blockingly queues a blob download; drops when full or shutting down.
 func (s *Server) enqueueDownload(job DownloadJob) error {
-	select {
-	case <-s.done:
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.shutdownStarted {
 		return fmt.Errorf("download queue closed: shutting down")
+	}
+	select {
 	case s.downloadQueue <- job:
 		return nil
 	default:

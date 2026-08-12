@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"net"
@@ -14,8 +15,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/require"
 )
+
+func TestServerTLSALPNCallbackUsesAllowlist(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(t, testutil.DefaultConfig(t, "tls-alpn"), nil)
+	callback := srv.ServerTLSConfig().GetConfigForClient
+	require.NotNil(t, callback)
+
+	cfg, err := callback(&tls.ClientHelloInfo{
+		SupportedProtos: []string{"attacker-protocol", "h2", "proxyma-p2p"},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, cfg.NextProtos, "attacker-protocol")
+	require.ElementsMatch(t, []string{"h2", "proxyma-p2p"}, cfg.NextProtos)
+}
 
 func TestClusterCARotation(t *testing.T) {
 	// 1. Initialize Sponsor node
@@ -159,11 +176,12 @@ func TestCARotationReloadsQUICTLS(t *testing.T) {
 		sponsorSrv.ClientTLSConfig(), sponsorSrv.ServerTLSConfig(),
 		sponsorSrv.MountHandlers(), sponsorCfg.Logger,
 	)
-	qm.PublicUDPAddr = udp.LocalAddr().String()
+	qm.SetPublicUDPAddr(udp.LocalAddr().String())
 	require.NoError(t, qm.StartListener())
 	t.Cleanup(qm.Close)
 	sponsorSrv.AttachQUICManager(qm)
 
+	listenerBefore := qm.QUICListener
 	oldServerDER := append([]byte(nil), qm.TLSServer.Certificates[0].Certificate[0]...)
 	oldClientDER := append([]byte(nil), qm.TLSClient.Certificates[0].Certificate[0]...)
 
@@ -171,6 +189,7 @@ func TestCARotationReloadsQUICTLS(t *testing.T) {
 
 	qmAfter := sponsorSrv.QUICManager()
 	require.NotNil(t, qmAfter)
+	require.Same(t, listenerBefore, qmAfter.QUICListener, "TLS rotation must not need to restart the live listener")
 	require.NotEmpty(t, qmAfter.TLSServer.Certificates)
 	require.NotEmpty(t, qmAfter.TLSClient.Certificates)
 
@@ -187,4 +206,26 @@ func TestCARotationReloadsQUICTLS(t *testing.T) {
 		"QUIC client TLS must match rotated disk client TLS")
 	require.NotEqual(t, oldServerDER, qmAfter.TLSServer.Certificates[0].Certificate[0])
 	require.NotEqual(t, oldClientDER, qmAfter.TLSClient.Certificates[0].Certificate[0])
+
+	// AUD-003 claimed the live listener kept serving its pre-rotation TLS
+	// material. Prove QUICManager's generation-checked callback instead reads
+	// the rotated snapshot during a real inbound QUIC handshake.
+	rotatedClient := testutil.IssueNode(t, filepath.Dir(caPath), t.TempDir(), "rotated-quic-client")
+	clientTLS := rotatedClient.ClientTLS.Clone()
+	clientTLS.NextProtos = []string{"proxyma-p2p"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := quic.DialAddr(ctx, qmAfter.PacketConn.LocalAddr().String(), clientTLS, &quic.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.CloseWithError(0, "test complete") })
+
+	peerCert := conn.ConnectionState().TLS.PeerCertificates[0]
+	require.Equal(t, stls.Certificates[0].Certificate[0], peerCert.Raw,
+		"the existing listener must present the rotated server certificate")
+	require.NotEqual(t, oldServerDER, peerCert.Raw)
+	require.Eventually(t, func() bool {
+		_, ok := qmAfter.GetSession(rotatedClient.ID)
+		return ok
+	}, 2*time.Second, 10*time.Millisecond, "server must accept the rotated client certificate")
 }

@@ -22,7 +22,23 @@ type NATMapper struct {
 	udpMappedPort   int
 	natDev          nat.NAT
 	discoverGateway func() (nat.NAT, error)
+	joinDiscovery   bool
 	onMapped        func(mappedTCP, mappedUDP int)
+	lifecycleMu     sync.Mutex
+	started         bool
+	stopRequested   bool
+	wg              sync.WaitGroup
+	cleanupOnce     sync.Once
+	ready           chan struct{}
+	readyOnce       sync.Once
+	initialResult   NATMappingResult
+}
+
+type NATMappingResult struct {
+	MappedTCP  int
+	MappedUDP  int
+	ExternalIP net.IP
+	Err        error
 }
 
 func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
@@ -36,6 +52,7 @@ func NewNATMapper(logger *slog.Logger, tcpPort, udpPort int) *NATMapper {
 		tcpPort:         tcpPort,
 		udpPort:         udpPort,
 		discoverGateway: nat.DiscoverGateway,
+		ready:           make(chan struct{}),
 	}
 }
 
@@ -56,35 +73,70 @@ func (nm *NATMapper) SetOnMapped(fn func(mappedTCP, mappedUDP int)) {
 	nm.onMapped = fn
 }
 
+// SetGatewayDiscovery replaces gateway discovery before Start. It is useful for
+// deterministic embedders and tests that must not touch the host network.
+func (nm *NATMapper) SetGatewayDiscovery(fn func() (nat.NAT, error)) {
+	if fn == nil {
+		return
+	}
+	nm.lifecycleMu.Lock()
+	defer nm.lifecycleMu.Unlock()
+	if !nm.started {
+		nm.discoverGateway = fn
+		nm.joinDiscovery = true
+	}
+}
+
 func (nm *NATMapper) Start() {
+	nm.lifecycleMu.Lock()
+	defer nm.lifecycleMu.Unlock()
+	if nm.started || nm.stopRequested {
+		return
+	}
+	nm.started = true
 	if nm.logger != nil {
 		nm.logger.Info("Starting UPnP/NAT-PMP port mapping...")
 	}
-	go nm.runMapper()
+	nm.wg.Add(1)
+	go func() {
+		defer nm.wg.Done()
+		nm.runMapper()
+	}()
 }
 
 func (nm *NATMapper) runMapper() {
 	backoff := time.Second
 	const maxBackoff = 5 * time.Minute
+	startupFailures := 0
 	for {
 		if nm.stopped() {
 			return
 		}
-		dev, err := nm.discoverGateway()
+		dev, err := nm.discover()
 		if nm.stopped() {
+			nm.signalReady(NATMappingResult{Err: nm.ctx.Err()})
 			return
 		}
 		if err != nil {
+			startupFailures++
+			retryIn := backoff
+			if startupFailures == 1 {
+				// One immediate bounded retry absorbs transient gateway startup
+				// failures before readiness is published to the socket owner.
+				retryIn = 10 * time.Millisecond
+			} else {
+				nm.signalReady(NATMappingResult{Err: err})
+			}
 			if nm.logger != nil {
 				nm.logger.Warn("Failed to discover NAT gateway (UPnP/NAT-PMP might be disabled on your router); retrying",
-					"error", err, "retryIn", backoff)
+					"error", err, "retryIn", retryIn)
 			}
 			select {
 			case <-nm.ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(retryIn):
 			}
-			if backoff < maxBackoff {
+			if startupFailures > 1 && backoff < maxBackoff {
 				backoff *= 2
 				if backoff > maxBackoff {
 					backoff = maxBackoff
@@ -102,6 +154,14 @@ func (nm *NATMapper) runMapper() {
 		}
 
 		nm.refreshMappings()
+		mappedTCP, mappedUDP := nm.GetMappedPorts()
+		externalIP, externalErr := nm.GetExternalAddress()
+		nm.signalReady(NATMappingResult{
+			MappedTCP:  mappedTCP,
+			MappedUDP:  mappedUDP,
+			ExternalIP: externalIP,
+			Err:        externalErr,
+		})
 
 		ticker := time.NewTicker(15 * time.Minute)
 		for {
@@ -113,6 +173,48 @@ func (nm *NATMapper) runMapper() {
 				nm.refreshMappings()
 			}
 		}
+	}
+}
+
+type natDiscoveryResult struct {
+	dev nat.NAT
+	err error
+}
+
+func (nm *NATMapper) discover() (nat.NAT, error) {
+	result := make(chan natDiscoveryResult, 1)
+	if nm.joinDiscovery {
+		nm.wg.Add(1)
+	}
+	go func() {
+		if nm.joinDiscovery {
+			defer nm.wg.Done()
+		}
+		dev, err := nm.discoverGateway()
+		result <- natDiscoveryResult{dev: dev, err: err}
+	}()
+	select {
+	case <-nm.ctx.Done():
+		return nil, nm.ctx.Err()
+	case discovered := <-result:
+		return discovered.dev, discovered.err
+	}
+}
+
+func (nm *NATMapper) signalReady(result NATMappingResult) {
+	nm.readyOnce.Do(func() {
+		nm.initialResult = result
+		close(nm.ready)
+	})
+}
+
+func (nm *NATMapper) WaitReady(ctx context.Context) (NATMappingResult, error) {
+	select {
+	case <-ctx.Done():
+		return NATMappingResult{}, ctx.Err()
+	case <-nm.ready:
+		result := nm.initialResult
+		return result, result.Err
 	}
 }
 
@@ -167,8 +269,16 @@ func (nm *NATMapper) mapPort(dev nat.NAT, proto string, port int, desc string, s
 }
 
 func (nm *NATMapper) Stop() {
+	nm.lifecycleMu.Lock()
+	nm.stopRequested = true
 	nm.cancel()
+	nm.lifecycleMu.Unlock()
+	nm.wg.Wait()
+	nm.signalReady(NATMappingResult{Err: context.Canceled})
+	nm.cleanupOnce.Do(nm.removeMappings)
+}
 
+func (nm *NATMapper) removeMappings() {
 	nm.mu.Lock()
 	dev := nm.natDev
 	tcpPort, tcpMapped := nm.tcpPort, nm.tcpMappedPort

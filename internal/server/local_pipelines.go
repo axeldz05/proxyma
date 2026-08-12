@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"proxyma/internal/protocol"
 )
@@ -17,6 +18,7 @@ func (s *Server) parseAndValidatePipeline(schemaJSON string) (protocol.PipelineS
 	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
 		return schema, fmt.Errorf("invalid pipeline schema JSON: %w", err)
 	}
+	schema = protocol.NormalizePipelineSchemaVersion(schema)
 	if err := s.ValidatePipelineSchema(schema); err != nil {
 		return schema, fmt.Errorf("pipeline validation failed: %w", err)
 	}
@@ -25,25 +27,24 @@ func (s *Server) parseAndValidatePipeline(schemaJSON string) (protocol.PipelineS
 
 // applyPipelineAction persists and registers/unregisters a pipeline (L2 SSOT).
 func (s *Server) applyPipelineAction(schema protocol.PipelineSchema, action string) error {
+	schema = protocol.NormalizePipelineSchemaVersion(schema)
 	switch action {
 	case protocol.ActionAdd:
-		if s.Storage != nil {
-			if err := s.Storage.SavePipelineSchema(schema); err != nil {
-				return fmt.Errorf("failed to save pipeline schema to DB: %w", err)
-			}
-		}
-		s.Compute.RegisterPipeline(schema)
 	case protocol.ActionRemove:
-		if s.Storage != nil {
-			if err := s.Storage.DeletePipelineSchema(schema.ID); err != nil {
-				return fmt.Errorf("failed to delete pipeline schema from DB: %w", err)
-			}
-		}
-		s.Compute.UnregisterPipeline(schema.ID)
+		schema.Deleted = true
 	default:
 		return fmt.Errorf("unknown pipeline action %q", action)
 	}
-	return nil
+
+	return s.Compute.ApplyPipelineRevision(schema, func(staged protocol.PipelineSchema) error {
+		if s.Storage == nil {
+			return nil
+		}
+		if err := s.Storage.SavePipelineSchema(staged); err != nil {
+			return fmt.Errorf("failed to save pipeline schema revision to DB: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Server) LocalPipelineValidate(schemaJSON string) error {
@@ -56,23 +57,35 @@ func (s *Server) LocalPipelineAdd(schemaJSON string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.applyPipelineAction(schema, protocol.ActionAdd); err != nil {
+	schema.Deleted = false
+	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: protocol.ActionAdd}
+	staged, err := s.prepareOutboxMutation(kindPipeline, schema.ID, payload)
+	if err != nil {
 		return err
 	}
-	go s.NotifySchema(schema, protocol.ActionAdd)
-	return nil
+	mutationErr := s.applyPipelineAction(schema, protocol.ActionAdd)
+	return errors.Join(mutationErr, staged.finish(mutationErr == nil))
 }
 
 func (s *Server) LocalPipelineRemove(id string) error {
 	if id == "" {
 		return protocol.ErrEmptyPipelineID
 	}
-	schema := protocol.PipelineSchema{ID: id}
-	if err := s.applyPipelineAction(schema, protocol.ActionRemove); err != nil {
+	schema, exists := s.Compute.GetPipeline(id)
+	if !exists {
+		schema, exists = s.Compute.GetPipelineRevision(id)
+		if !exists {
+			return fmt.Errorf("pipeline schema '%s' not found in cluster", id)
+		}
+	}
+	schema.Deleted = true
+	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: protocol.ActionRemove}
+	staged, err := s.prepareOutboxMutation(kindPipeline, schema.ID, payload)
+	if err != nil {
 		return err
 	}
-	go s.NotifySchema(schema, protocol.ActionRemove)
-	return nil
+	mutationErr := s.applyPipelineAction(schema, protocol.ActionRemove)
+	return errors.Join(mutationErr, staged.finish(mutationErr == nil))
 }
 
 func (s *Server) LocalPipelineList() []protocol.PipelineSchema {
@@ -111,8 +124,9 @@ func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string
 }
 
 func (s *Server) notifyPipeline(ctx context.Context, peerID string, schema protocol.PipelineSchema, action string) error {
+	schema = protocol.NormalizePipelineSchemaVersion(schema)
 	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: action}
-	return s.notifyWithOutbox(ctx, peerID, kindPipeline, schema.ID+"|"+action, payload, func(ctx context.Context) error {
+	return s.notifyWithOutbox(ctx, peerID, kindPipeline, schema.ID, payload, func(ctx context.Context) error {
 		return s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
 	})
 }

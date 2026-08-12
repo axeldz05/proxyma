@@ -8,6 +8,7 @@ import (
 )
 
 func TestPeersListDaemonCmd(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 	require.NoError(t, protocol.SaveConfig(protocol.NodeConfig{ID: "test-node", StoragePath: tempDir}))
 
@@ -24,6 +25,7 @@ func TestPeersListDaemonCmd(t *testing.T) {
 }
 
 func TestTelemetryStatsDaemonCmd(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 	require.NoError(t, protocol.SaveConfig(protocol.NodeConfig{ID: "test-node", StoragePath: tempDir}))
 
@@ -43,6 +45,7 @@ func TestTelemetryStatsDaemonCmd(t *testing.T) {
 }
 
 func TestPipelineListDaemonCmd(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 	require.NoError(t, protocol.SaveConfig(protocol.NodeConfig{ID: "test-node", StoragePath: tempDir}))
 
@@ -57,6 +60,7 @@ func TestPipelineListDaemonCmd(t *testing.T) {
 }
 
 func TestPeersListBindErrorPropagates(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 	require.NoError(t, protocol.SaveConfig(protocol.NodeConfig{ID: "test-node", StoragePath: tempDir}))
 

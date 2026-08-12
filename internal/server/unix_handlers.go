@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,21 +14,23 @@ import (
 // If Stream is set, it owns the connection (NDJSON) and Unary is unused.
 type UnixActionHandler struct {
 	Unary  func(s *Server, args map[string]string) (any, error)
-	Stream func(s *Server, args map[string]string, c net.Conn)
+	Stream func(ctx context.Context, s *Server, args map[string]string, streamVersion int, c net.Conn)
 }
 
 // unixHandlers is the daemon SSOT dispatch table keyed by uischema UnixAction strings.
 var unixHandlers = map[string]UnixActionHandler{}
 
-// requireUnixArgs rejects empty required arguments (L1). The daemon re-checks even
-// though bind validates against the Registry, because raw unix clients skip that pass.
-func requireUnixArgs(args map[string]string, names ...string) error {
-	for _, name := range names {
-		if args[name] == "" {
-			return protocol.MissingParamError(name)
-		}
+// validateUnixArgs applies the shared required/type/options contract for raw IPC.
+func validateUnixArgs(unixAction string, args map[string]string) (map[string]string, error) {
+	action, ok := uischema.FindUnixAction(unixAction)
+	if !ok {
+		return nil, fmt.Errorf("unknown action: %s", unixAction)
 	}
-	return nil
+	normalized, err := uischema.NormalizeActionArgs(action.Domain, action.Name, args)
+	if err != nil {
+		return nil, err
+	}
+	return uischema.ValidateActionArgs(action, normalized)
 }
 
 func init() {
@@ -42,7 +45,7 @@ func init() {
 	})
 	register("storage", "list", UnixActionHandler{
 		Unary: func(s *Server, _ map[string]string) (any, error) {
-			return s.LocalVFSList(), nil
+			return s.LocalVFSList()
 		},
 	})
 	register("storage", "upload", UnixActionHandler{
@@ -52,41 +55,26 @@ func init() {
 	})
 	register("storage", "subscribe", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if err := requireUnixArgs(args, "name"); err != nil {
-				return nil, err
-			}
 			return nil, s.LocalVFSSubscribe(args["name"], true)
 		},
 	})
 	register("storage", "unsubscribe", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if err := requireUnixArgs(args, "name"); err != nil {
-				return nil, err
-			}
 			return nil, s.LocalVFSSubscribe(args["name"], false)
 		},
 	})
 	register("storage", "delete", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if err := requireUnixArgs(args, "name"); err != nil {
-				return nil, err
-			}
 			return nil, s.Storage.DeleteLocalFile(args["name"])
 		},
 	})
 	register("storage", "purge", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if err := requireUnixArgs(args, "name"); err != nil {
-				return nil, err
-			}
 			return nil, s.Storage.DeleteLocalCache(args["name"])
 		},
 	})
 	register("storage", "open", UnixActionHandler{
 		Unary: func(s *Server, args map[string]string) (any, error) {
-			if err := requireUnixArgs(args, "name"); err != nil {
-				return nil, err
-			}
 			return nil, s.FetchFileOnDemand(args["name"])
 		},
 	})
@@ -135,13 +123,32 @@ func init() {
 		},
 	})
 	register("service", "stream", UnixActionHandler{
-		Stream: func(s *Server, args map[string]string, c net.Conn) {
-			err := s.LocalServiceStreamRun(args["service"], args["payload"], func(chunk map[string]any) {
-				chunkBytes, _ := json.Marshal(chunk)
-				writeUnixNDJSON(c, protocol.UnixResponse{Success: true, Data: chunkBytes})
+		Stream: func(ctx context.Context, s *Server, args map[string]string, streamVersion int, c net.Conn) {
+			err := s.LocalServiceStreamRunContext(ctx, args["service"], args["payload"], func(chunk map[string]any) error {
+				chunkBytes, err := json.Marshal(chunk)
+				if err != nil {
+					return fmt.Errorf("marshal stream chunk: %w", err)
+				}
+				return writeUnixNDJSON(c, protocol.UnixResponse{
+					Success:       true,
+					Data:          chunkBytes,
+					StreamVersion: streamVersion,
+				})
 			})
 			if err != nil {
-				writeUnixNDJSON(c, protocol.UnixResponse{Success: false, Error: err.Error()})
+				_ = writeUnixNDJSON(c, protocol.UnixResponse{
+					Success:       false,
+					Error:         err.Error(),
+					StreamVersion: streamVersion,
+				})
+				return
+			}
+			if streamVersion == protocol.ServiceStreamVersion {
+				_ = writeUnixNDJSON(c, protocol.UnixResponse{
+					Success:       true,
+					Complete:      true,
+					StreamVersion: streamVersion,
+				})
 			}
 		},
 	})
@@ -228,7 +235,11 @@ func CallUnixUnary(s *Server, unixAction string, args map[string]string) (any, e
 	if h.Unary == nil {
 		return nil, fmt.Errorf("action %s is not a unary handler", unixAction)
 	}
-	return h.Unary(s, args)
+	validatedArgs, err := validateUnixArgs(unixAction, args)
+	if err != nil {
+		return nil, err
+	}
+	return h.Unary(s, validatedArgs)
 }
 
 // HasUnixUnary reports whether unixAction has a unary handler.

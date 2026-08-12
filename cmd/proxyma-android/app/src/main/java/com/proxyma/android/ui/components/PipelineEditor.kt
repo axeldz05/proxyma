@@ -46,13 +46,14 @@ fun PipelineEditorDialog(
     var serviceDetails by remember { mutableStateOf<Map<String, ServiceDetail>>(emptyMap()) }
     var knownPeers by remember { mutableStateOf<List<Peer>>(emptyList()) }
     var localNodeId by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(steps.map { it.service }) {
         val uniqueServices = (services + steps.map { it.service }).distinct()
-        loadServiceDetailsMap(uniqueServices) { map ->
+        loadServiceDetailsMap(scope, uniqueServices) { map ->
             serviceDetails = map
         }
-        runBindOnBg({
+        runBindOnBg(scope, {
             val node = proxyma_bind.Proxyma_bind.getNodeID()
             val rawPeers = proxyma_bind.Proxyma_bind.getPeersJson()
             Gson().toJson(mapOf("node" to node, "peers" to rawPeers))
@@ -181,6 +182,7 @@ fun PipelineEditorDialog(
                     val jsonStr = Gson().toJson(newSchema)
 
                     executeGoCall(
+                        scope = scope,
                         context = context,
                         onStart = {},
                         onComplete = {},

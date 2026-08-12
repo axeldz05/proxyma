@@ -18,53 +18,113 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.proxyma.android.models.ServiceUIConfig
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.ProxymaCard
-import com.proxyma.android.utils.isRunningOnMainThread
+import com.google.gson.Gson
+import com.proxyma.android.utils.BindMethod
+import com.proxyma.android.utils.bindResult
+import com.proxyma.android.utils.bindErrorMessage
+import com.proxyma.android.utils.launchManagedBindStream
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 class ProxymaJSBridge(private val webView: WebView) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val streamJobs = ConcurrentHashMap<String, Job>()
 
     @JavascriptInterface
     fun runService(name: String, payloadJson: String): String {
-        return try {
-            proxyma_bind.Proxyma_bind.runService(name, payloadJson)
-        } catch (e: Exception) {
-            "{\"error\": \"${e.localizedMessage}\"}"
+        return runBlocking(Dispatchers.IO) {
+            try {
+                val response = proxyma_bind.Proxyma_bind.runService(name, payloadJson)
+                bindResult(response, BindMethod.LEGACY_ERROR_PREFIX).fold(
+                    onSuccess = { it },
+                    onFailure = { Gson().toJson(mapOf("error" to (it.message ?: "service failed"))) }
+                )
+            } catch (error: Exception) {
+                Gson().toJson(mapOf("error" to (error.localizedMessage ?: "service failed")))
+            }
         }
     }
 
     @JavascriptInterface
     fun streamService(name: String, payloadJson: String, callbackName: String) {
-        try {
-            proxyma_bind.Proxyma_bind.streamService(name, payloadJson, object : proxyma_bind.StreamEventListener {
-                override fun onChunk(chunkJSON: String) {
-                    isRunningOnMainThread {
-                        val escaped = chunkJSON.replace("'", "\\'").replace("\n", "\\n")
-                        webView.evaluateJavascript("if (typeof window['$callbackName'] === 'function') window['$callbackName']('$escaped');", null)
+        val job = launchManagedBindStream(
+            scope = scope,
+            serviceName = name,
+            payloadJson = payloadJson,
+            listenerFactory = { stop ->
+                object : proxyma_bind.StreamEventListener {
+                    override fun onChunk(chunkJSON: String) {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            webView.evaluateJavascript(
+                                "if (typeof window[${jsString(callbackName)}] === 'function') " +
+                                    "window[${jsString(callbackName)}](${jsString(chunkJSON)});",
+                                null
+                            )
+                        }
                     }
-                }
 
-                override fun onError(errMsg: String) {
-                    android.util.Log.e("ProxymaJSBridge", "Stream error for $name: $errMsg")
-                    isRunningOnMainThread {
-                        val escaped = errMsg.replace("'", "\\'").replace("\n", "\\n")
-                        webView.evaluateJavascript("if (typeof window['${callbackName}_error'] === 'function') window['${callbackName}_error']('$escaped');", null)
+                    override fun onError(errMsg: String) {
+                        val message = bindErrorMessage(errMsg)
+                        android.util.Log.e("ProxymaJSBridge", "Stream error for $name: $message")
+                        scope.launch(Dispatchers.Main.immediate) {
+                            val errorCallback = "${callbackName}_error"
+                            webView.evaluateJavascript(
+                                "if (typeof window[${jsString(errorCallback)}] === 'function') " +
+                                    "window[${jsString(errorCallback)}](${jsString(message)});",
+                                null
+                            )
+                            stop()
+                        }
                     }
-                }
 
-                override fun onComplete() {
-                    isRunningOnMainThread {
-                        webView.evaluateJavascript("if (typeof window['${callbackName}_complete'] === 'function') window['${callbackName}_complete']();", null)
+                    override fun onComplete() {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            val completeCallback = "${callbackName}_complete"
+                            webView.evaluateJavascript(
+                                "if (typeof window[${jsString(completeCallback)}] === 'function') " +
+                                    "window[${jsString(completeCallback)}]();",
+                                null
+                            )
+                            stop()
+                        }
                     }
                 }
-            })
-        } catch (e: Exception) {
-            val errStr = e.localizedMessage ?: "Stream error"
-            android.util.Log.e("ProxymaJSBridge", "Stream exception for $name: $errStr", e)
-            isRunningOnMainThread {
-                val escaped = errStr.replace("'", "\\'").replace("\n", "\\n")
-                webView.evaluateJavascript("if (typeof window['${callbackName}_error'] === 'function') window['${callbackName}_error']('$escaped');", null)
+            },
+            onStartFailure = { error ->
+                val message = error.message ?: "Stream error"
+                android.util.Log.e("ProxymaJSBridge", "Stream exception for $name: $message", error)
+                scope.launch(Dispatchers.Main.immediate) {
+                    val errorCallback = "${callbackName}_error"
+                    webView.evaluateJavascript(
+                        "if (typeof window[${jsString(errorCallback)}] === 'function') " +
+                            "window[${jsString(errorCallback)}](${jsString(message)});",
+                        null
+                    )
+                }
             }
+        )
+        streamJobs.put(callbackName, job)?.cancel()
+        job.invokeOnCompletion {
+            streamJobs.remove(callbackName, job)
         }
     }
+
+    fun close() {
+        streamJobs.values.forEach { it.cancel() }
+        streamJobs.clear()
+        scope.cancel()
+    }
+
+    private fun jsString(value: String): String = JSONObject.quote(value)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,9 +134,18 @@ fun ServiceWebContainerScreen(
     uiConfig: ServiceUIConfig,
     onBack: () -> Unit
 ) {
-    val htmlContent = remember(serviceName) {
-        proxyma_bind.Proxyma_bind.getServiceUIContent(serviceName)
+    val contentResult by produceState<Result<String>?>(initialValue = null, serviceName) {
+        value = try {
+            withContext(Dispatchers.IO) {
+                bindResult(proxyma_bind.Proxyma_bind.getServiceUIContent(serviceName))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
     }
+    val htmlContent = contentResult?.getOrNull().orEmpty()
 
     Column(
         modifier = Modifier
@@ -102,7 +171,16 @@ fun ServiceWebContainerScreen(
         }
 
         ProxymaCard(modifier = Modifier.fillMaxSize()) {
-            if (htmlContent.isBlank() && uiConfig.url.isNullOrBlank()) {
+            if (contentResult == null) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (contentResult?.isFailure == true ||
+                (htmlContent.isBlank() && uiConfig.url.isNullOrBlank())
+            ) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -120,7 +198,9 @@ fun ServiceWebContainerScreen(
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             webViewClient = WebViewClient()
-                            addJavascriptInterface(ProxymaJSBridge(this), "ProxymaBridge")
+                            val bridge = ProxymaJSBridge(this)
+                            tag = bridge
+                            addJavascriptInterface(bridge, "ProxymaBridge")
 
                             if (!uiConfig.url.isNullOrBlank()) {
                                 loadUrl(uiConfig.url)
@@ -129,7 +209,13 @@ fun ServiceWebContainerScreen(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { webView ->
+                        (webView.tag as? ProxymaJSBridge)?.close()
+                        webView.removeJavascriptInterface("ProxymaBridge")
+                        webView.stopLoading()
+                        webView.destroy()
+                    }
                 )
             }
         }

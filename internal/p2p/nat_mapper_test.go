@@ -1,6 +1,8 @@
 package p2p
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/fd/go-nat"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockNAT struct {
@@ -124,4 +127,73 @@ func TestNATMapperOnMappedFiresAfterAsyncMap(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestNATMapperExposesInitialMappingReadiness(t *testing.T) {
+	t.Parallel()
+
+	nm := NewNATMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), 7000, 7001)
+	m := &mockNAT{
+		natType:      "Mock",
+		externalAddr: net.ParseIP("198.51.100.8"),
+		mappings:     make(map[string]int),
+	}
+	nm.discoverGateway = func() (nat.NAT, error) { return m, nil }
+	nm.Start()
+	t.Cleanup(nm.Stop)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := nm.WaitReady(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 7100, result.MappedTCP)
+	require.Equal(t, 7101, result.MappedUDP)
+	require.Equal(t, "198.51.100.8", result.ExternalIP.String())
+}
+
+func TestNATMapperInitialFailureCanStopBeforeRetryMapsPort(t *testing.T) {
+	t.Parallel()
+
+	nm := NewNATMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), 7000, 7001)
+	m := &mockNAT{natType: "Mock", mappings: make(map[string]int)}
+	nm.discoverGateway = func() (nat.NAT, error) {
+		return m, errors.New("transient discovery failure")
+	}
+	nm.Start()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := nm.WaitReady(ctx)
+	require.Error(t, err)
+	require.ErrorContains(t, result.Err, "transient")
+	nm.Stop()
+	require.Zero(t, m.addCalls, "a stopped mapper must not map a port after its owner closes the socket")
+}
+
+func TestNATMapperReadinessRetriesOneTransientDiscoveryFailure(t *testing.T) {
+	t.Parallel()
+
+	nm := NewNATMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), 7000, 7001)
+	m := &mockNAT{
+		natType:      "Mock",
+		externalAddr: net.ParseIP("198.51.100.9"),
+		mappings:     make(map[string]int),
+	}
+	var attempts int
+	nm.SetGatewayDiscovery(func() (nat.NAT, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("transient discovery failure")
+		}
+		return m, nil
+	})
+	nm.Start()
+	t.Cleanup(nm.Stop)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := nm.WaitReady(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 7101, result.MappedUDP)
+	require.Equal(t, 2, attempts)
 }

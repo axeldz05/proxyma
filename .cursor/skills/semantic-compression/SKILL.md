@@ -61,17 +61,37 @@ After compression, altering that behavior should touch **one** SSOT (plus thin c
 | HTTP stream handlers | `BuildHTTP*` / `BuildHandler` (`server_stream`, `http_bidi`, …) |
 | WebRTC DataChannel JSON | `compute.BuildWebRTCHandler` + `ServiceTypeWebRTC` |
 | HTTP JSON helpers | `utils.RespondJSON` / `RespondMessage` / `RespondStatus` / `DecodeJSONOrError` |
+| Server ownership/readiness/shutdown | `Ready` / `goOwned` / `AcquireWorkLease` / `ShutdownDone` |
+| Synchronized NAT state/lifetime | `CurrentNATState` / `beginNATWork` / `stopNATWork`; `NATMapper.Start` / `WaitReady` / `Stop` |
+| Router prewarm/session lifetime | route generations + `AllowPeerSessions` / `BlockPeerSessions` / `PeerClient.Close` |
+| Relay decode/cap/work bound | `decodeRelayJSON` / `rejectOversizedRelay` / capped writer / `RelayManager.workSlots` |
+| Durable gossip mutation | outbox v2 buckets + `stageOutbox` / `notifyWithOutbox` / `prepareOutboxMutation` |
+| Durable blob work | `download_intents` / `pending_blob_gc` reconciliation |
+| Manifest partial progress | `ProcessRemoteManifestE` deterministic error aggregation / `ProcessRemoteManifestFromSource` durable intents |
+| Error-preserving storage reads | `GetFileMetaE` / `IsSubscribedE` / `HasServiceSubscriptionsE` / `IsServiceSubscribedE` |
+| VFS convergence / CAS acceptance | `compareIndexEntries`; physical stage/prepare/commit; exact remote revision verification |
+| `services.json` concurrency | compute Load/Save/Upsert/Delete + canonical locks/flock + atomic `WriteJSONFile` |
+| Pipeline revision/execution | `ValidatePipelineRevision` / `ApplyPipelineRevision` / `PipelineExecutionState.selected_targets` / `CapabilityPipelineState` v2 |
+| Task callback transitions | `AcceptTaskCallback` / `RecordTaskResponse` (`pending`→`ingesting`→terminal) |
+| Negotiated bounded streams | explicit legacy raw+EOF or v1 terminal frames; Unix versions; `CancelStream`; `MaxNDJSONFrameBytes` |
+| Bind lifecycle/storage/join | ready-gated runtime / `StopNodeWithError` / canonical storage / transactional join journal |
+| Android contract gate | temporary verified AAR + hermetic `make test-android` + CI Android job; `!android` WebRTC |
 
 ## What to Avoid
 * Class hierarchies from domain nouns before code exists.
 * Deep inheritance / patterns before duplication.
 * Abstraction from a **single** use case.
 * Copying a “temporary” offline path that duplicates server logic (bind offline must call the same L2 as server).
+* Spawning a goroutine outside its owner (`goOwned`, work lease, ViewModel/Service scope) or publishing readiness before every required listener is bound.
+* Boolean compatibility wrappers in server correctness paths when an error-preserving storage `*E` API exists.
+* A second outbox/WAL, pipeline revision rule, stream frame decoder, services-file lock, or Android bind error parser.
+* Hiding accepted boundaries: enrolled peers are trusted (not cryptographic provenance), mixed-version pipeline continuation is rejected, TURN is absent, and UPnP/NAT-PMP is IPv4-only.
 
 ## Quality Indicators
 * High semantic density; changes are local; new variants follow one pattern; one point of truth for debugging.
 
 ## After You Compress
 Update `.cursorrules.md`, `.agents/AGENTS.md`, and `architecture-and-refactor-auditor` / this skill if you added a new SSOT helper.
+Run the full `go test -race ./...`; H1/H2 are closed and no known-race exemption remains. For bind/Compose changes also run `make test-android`.
 
 **Mantra:** First make it work, then make it reusable — but only after you’ve seen the same pattern twice (or N>2 zones).

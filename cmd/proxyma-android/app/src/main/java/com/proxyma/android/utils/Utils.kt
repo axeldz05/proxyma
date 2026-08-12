@@ -7,18 +7,36 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FormParameter
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.lang.reflect.InvocationTargetException
 import java.text.DecimalFormat
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.DisposableEffect
-import kotlin.concurrent.fixedRateTimer
-import kotlin.concurrent.thread
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 fun formatBytes(bytes: Long): String {
     if (bytes <= 0) return "0 B"
@@ -27,12 +45,16 @@ fun formatBytes(bytes: Long): String {
     return DecimalFormat("#,##0.1").format(bytes / Math.pow(1000.0, digitGroups.toDouble())) + " " + units[digitGroups]
 }
 
-fun openFileNatively(context: Context, path: String, name: String) {
-    try {
+fun openFileNatively(
+    scope: CoroutineScope,
+    context: Context,
+    path: String,
+    name: String
+) {
+    runOnBg(scope, action = {
         val file = File(path)
         if (!file.exists()) {
-            context.toast("Blob does not exist")
-            return
+            throw IllegalStateException("Blob does not exist")
         }
 
         val isPdf = try {
@@ -63,9 +85,11 @@ fun openFileNatively(context: Context, path: String, name: String) {
             setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "Open with"))
-    } catch (e: Exception) {
-        context.toast("Error opening file: ${e.message}", long = true)
+        Intent.createChooser(intent, "Open with")
+    }) { prepared ->
+        consumePrepared(prepared, context::startActivity).onFailure { error ->
+            context.toast("Error opening file: ${error.message}", long = true)
+        }
     }
 }
 
@@ -99,13 +123,27 @@ fun getFileName(context: Context, uri: Uri): String? {
 fun copyUriToCache(context: Context, uri: Uri): String {
     val name = getFileName(context, uri) ?: "input_${System.currentTimeMillis()}"
     val cacheFile = File(context.cacheDir, name)
-    context.contentResolver.openInputStream(uri)?.use { input ->
+    requireContentStream(
+        context.contentResolver.openInputStream(uri),
+        uri.toString()
+    ).use { input ->
         FileOutputStream(cacheFile).use { output ->
             input.copyTo(output)
         }
     }
     return cacheFile.absolutePath
 }
+
+fun requireContentStream(stream: InputStream?, source: String): InputStream =
+    stream ?: throw IOException("Unable to open content stream: $source")
+
+fun <T> consumePrepared(
+    prepared: Result<T>,
+    consume: (T) -> Unit
+): Result<Unit> = prepared.fold(
+    onSuccess = { value -> runCatching { consume(value) } },
+    onFailure = { error -> Result.failure(error) }
+)
 
 fun createTempCameraFile(context: Context): Pair<Uri, File> {
     val photoFile = File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
@@ -114,8 +152,373 @@ fun createTempCameraFile(context: Context): Pair<Uri, File> {
     return Pair(uri, photoFile)
 }
 
-fun isRunningOnMainThread(action: () -> Unit) {
-    android.os.Handler(android.os.Looper.getMainLooper()).post(action)
+/**
+ * Android-side interpretation of the Go bind error envelope.
+ *
+ * Successful JSON payloads, including {"error":""}, remain successful.
+ */
+fun parseBindError(response: String): String {
+    val root = parseJson(response) ?: return ""
+    if (!root.isJsonObject) return ""
+
+    val error = root.asJsonObject.get("error") ?: return ""
+    if (error.isJsonNull) return ""
+    return if (error.isJsonPrimitive && error.asJsonPrimitive.isString) {
+        error.asString
+    } else {
+        error.toString()
+    }
+}
+
+fun isBindError(response: String): Boolean = parseBindError(response).isNotBlank()
+
+enum class BindMethod {
+    JSON_ENVELOPE,
+    LEGACY_ERROR_PREFIX,
+    START_NODE
+}
+
+fun bindResult(
+    response: String,
+    method: BindMethod = BindMethod.JSON_ENVELOPE
+): Result<String> {
+    val error = parseBindError(response)
+    if (error.isNotBlank()) {
+        return Result.failure(BindCallException(error.trim()))
+    }
+
+    // A valid JSON response without a meaningful error field is current-format success.
+    if (parseJson(response) != null) {
+        return Result.success(response)
+    }
+
+    val trimmed = response.trim()
+    val prefixedError = legacyErrorPrefix(trimmed)
+    return when {
+        method == BindMethod.START_NODE && trimmed.isNotEmpty() ->
+            Result.failure(BindCallException(prefixedError ?: trimmed))
+        method == BindMethod.LEGACY_ERROR_PREFIX && prefixedError != null ->
+            Result.failure(BindCallException(prefixedError))
+        else -> Result.success(response)
+    }
+}
+
+class BindCallException(message: String) : Exception(message)
+
+private fun parseJson(response: String) = try {
+    JsonParser.parseString(response)
+} catch (_: Exception) {
+    null
+}
+
+private fun legacyErrorPrefix(response: String): String? {
+    if (!response.startsWith("error:", ignoreCase = true)) return null
+    return response.substringAfter(':').trim().ifEmpty { "bind call failed" }
+}
+
+fun bindErrorMessage(
+    response: String,
+    method: BindMethod = BindMethod.LEGACY_ERROR_PREFIX
+): String = bindResult(response, method).exceptionOrNull()?.message
+    ?: response.trim().ifEmpty { "bind call failed" }
+
+data class VfsUploadResult(
+    val logicalName: String,
+    val message: String
+)
+
+fun normalizeVfsUploadResult(
+    logicalName: String,
+    response: String
+): Result<VfsUploadResult> = bindResult(
+    response,
+    BindMethod.LEGACY_ERROR_PREFIX
+).map {
+    VfsUploadResult(
+        logicalName = logicalName,
+        message = getActionMessage(response).ifBlank { "Uploaded '$logicalName'" }
+    )
+}
+
+enum class StopBindingMode {
+    STOP_NODE_WITH_ERROR,
+    LEGACY_STOP_NODE
+}
+
+data class NodeStopResult(
+    val mode: StopBindingMode
+)
+
+class ReflectiveNodeStopApi(
+    bindingClass: Class<*>,
+    private val receiver: Any? = null
+) {
+    private val stopWithErrorMethod = bindingClass.methods.firstOrNull {
+        it.name == "stopNodeWithError" && it.parameterCount == 0
+    }?.apply { isAccessible = true }
+    private val legacyStopMethod = bindingClass.methods.firstOrNull {
+        it.name == "stopNode" && it.parameterCount == 0
+    }?.apply { isAccessible = true }
+
+    fun stop(): Result<NodeStopResult> = runCatching {
+        val modernMethod = stopWithErrorMethod
+        if (modernMethod != null) {
+            val response = invoke(modernMethod) as? String
+                ?: throw UnsupportedOperationException(
+                    "StopNodeWithError does not return String"
+                )
+            bindResult(response, BindMethod.LEGACY_ERROR_PREFIX).getOrThrow()
+            return@runCatching NodeStopResult(StopBindingMode.STOP_NODE_WITH_ERROR)
+        }
+
+        val legacyMethod = legacyStopMethod
+            ?: throw UnsupportedOperationException(
+                "Bundled proxyma.aar lacks StopNodeWithError and legacy StopNode"
+            )
+        invoke(legacyMethod)
+        NodeStopResult(StopBindingMode.LEGACY_STOP_NODE)
+    }
+
+    private fun invoke(method: java.lang.reflect.Method): Any? = try {
+        method.invoke(receiver)
+    } catch (error: InvocationTargetException) {
+        throw (error.targetException as? Exception ?: error)
+    }
+}
+
+class ReflectiveBindStreamApi(
+    bindingClass: Class<*>,
+    private val receiver: Any? = null
+) {
+    private val streamMethod = bindingClass.methods.firstOrNull {
+        it.name == "streamService" && it.parameterCount == 3
+    }?.apply { isAccessible = true }
+    private val cancelMethod = bindingClass.methods.firstOrNull {
+        it.name == "cancelStream" && it.parameterCount == 1
+    }?.apply { isAccessible = true }
+
+    val supportsCancellableStreams: Boolean =
+        streamMethod?.returnType == String::class.java &&
+            cancelMethod?.returnType == String::class.java
+
+    fun start(name: String, payloadJson: String, listener: Any): Result<StreamLease> =
+        runCatching {
+            if (!supportsCancellableStreams) {
+                throw UnsupportedOperationException(
+                    "Bundled proxyma.aar lacks cancellable StreamService/CancelStream APIs"
+                )
+            }
+            val response = invokeString(streamMethod, name, payloadJson, listener)
+            val normalized = bindResult(
+                response,
+                BindMethod.LEGACY_ERROR_PREFIX
+            ).getOrThrow()
+            val streamID = parseStreamID(normalized)
+                ?: throw BindCallException("StreamService response is missing stream_id")
+            StreamLease(streamID, this)
+        }
+
+    internal fun cancel(streamID: String): Result<String> = runCatching {
+        if (!supportsCancellableStreams) {
+            throw UnsupportedOperationException(
+                "Bundled proxyma.aar lacks CancelStream"
+            )
+        }
+        val response = invokeString(cancelMethod, streamID)
+        bindResult(response, BindMethod.LEGACY_ERROR_PREFIX).getOrThrow()
+    }
+
+    private fun invokeString(method: java.lang.reflect.Method?, vararg args: Any): String {
+        val resolved = method ?: throw UnsupportedOperationException("Bind method unavailable")
+        return try {
+            resolved.invoke(receiver, *args) as? String
+                ?: throw UnsupportedOperationException("Bind method does not return String")
+        } catch (error: InvocationTargetException) {
+            throw (error.targetException as? Exception ?: error)
+        }
+    }
+}
+
+class StreamLease internal constructor(
+    val streamId: String,
+    private val api: ReflectiveBindStreamApi
+) {
+    private val canceled = AtomicBoolean(false)
+
+    fun cancel(): Result<String> {
+        if (!canceled.compareAndSet(false, true)) {
+            return Result.success("")
+        }
+        return api.cancel(streamId)
+    }
+}
+
+private fun parseStreamID(response: String): String? {
+    val root = parseJson(response)?.takeIf { it.isJsonObject }?.asJsonObject
+        ?: return null
+    val streamID = root.get("stream_id") ?: return null
+    return streamID.takeIf {
+        it.isJsonPrimitive && it.asJsonPrimitive.isString
+    }?.asString?.takeIf { it.isNotBlank() }
+}
+
+private val defaultBindStreamApi by lazy {
+    ReflectiveBindStreamApi(proxyma_bind.Proxyma_bind::class.java)
+}
+
+fun launchManagedBindStream(
+    scope: CoroutineScope,
+    serviceName: String,
+    payloadJson: String,
+    listenerFactory: (stop: () -> Unit) -> Any,
+    onStarted: (streamID: String) -> Unit = {},
+    onStartFailure: (Throwable) -> Unit = {},
+    api: ReflectiveBindStreamApi = defaultBindStreamApi,
+    callbackDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate
+): Job {
+    lateinit var job: Job
+    job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        var lease: StreamLease? = null
+        try {
+            val listener = listenerFactory { job.cancel() }
+            val startedLease = api
+                .start(serviceName, payloadJson, listener)
+                .getOrThrow()
+            lease = startedLease
+            withContext(callbackDispatcher) {
+                onStarted(startedLease.streamId)
+            }
+            awaitCancellation()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            withContext(callbackDispatcher) {
+                onStartFailure(error)
+            }
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                lease?.let { activeLease ->
+                    activeLease.cancel().onFailure { error ->
+                        android.util.Log.e(
+                            "ProxymaStream",
+                            "CancelStream failed for ${activeLease.streamId}",
+                            error
+                        )
+                    }
+                }
+            }
+        }
+    }
+    job.start()
+    return job
+}
+
+enum class DaemonState {
+    STOPPED,
+    STARTING,
+    RUNNING,
+    STOPPING,
+    ERROR
+}
+
+enum class StopRequest {
+    EXECUTE,
+    WAIT,
+    ALREADY_STOPPED
+}
+
+class DaemonStateMachine {
+    private val state = AtomicReference(DaemonState.STOPPED)
+
+    val current: DaemonState
+        get() = state.get()
+
+    fun requestStart(): Boolean =
+        state.compareAndSet(DaemonState.STOPPED, DaemonState.STARTING)
+
+    fun markStarted(): Boolean =
+        state.compareAndSet(DaemonState.STARTING, DaemonState.RUNNING)
+
+    fun markStartFailed() {
+        state.compareAndSet(DaemonState.STARTING, DaemonState.STOPPED)
+    }
+
+    fun requestStop(): StopRequest {
+        while (true) {
+            when (val current = state.get()) {
+                DaemonState.STOPPED -> return StopRequest.ALREADY_STOPPED
+                DaemonState.STOPPING -> return StopRequest.WAIT
+                DaemonState.STARTING,
+                DaemonState.RUNNING,
+                DaemonState.ERROR -> {
+                    if (state.compareAndSet(current, DaemonState.STOPPING)) {
+                        return StopRequest.EXECUTE
+                    }
+                }
+            }
+        }
+    }
+
+    fun markStopped() {
+        state.set(DaemonState.STOPPED)
+    }
+
+    fun markStopFailed() {
+        state.compareAndSet(DaemonState.STOPPING, DaemonState.ERROR)
+    }
+}
+
+data class TaskResultReference(
+    val localPath: String? = null,
+    val blobHash: String? = null
+)
+
+/**
+ * Pure counterpart of ResolveTaskResultPath for Android builds whose checked-in
+ * AAR predates that binding. Any blob lookup is performed separately on IO.
+ */
+fun parseTaskResultReference(response: String): TaskResultReference {
+    val root = try {
+        JsonParser.parseString(response).asJsonObject
+    } catch (_: Exception) {
+        return TaskResultReference()
+    }
+    val outputs = root.objectField("outputs")
+        ?: root.objectField("data")?.objectField("outputs")
+        ?: return TaskResultReference()
+
+    for (key in listOf("result_path", "output_path")) {
+        val path = outputs.stringField(key)
+        if (!path.isNullOrBlank() && !path.startsWith("vfs://")) {
+            return TaskResultReference(localPath = path)
+        }
+    }
+
+    val explicitHash = outputs.stringField("output_hash")
+    if (!explicitHash.isNullOrBlank()) {
+        return TaskResultReference(blobHash = explicitHash)
+    }
+    outputs.entrySet().forEach { (_, value) ->
+        if (value.isJsonPrimitive && value.asJsonPrimitive.isString) {
+            val candidate = value.asString
+            if (candidate.startsWith("vfs://") && candidate.length > "vfs://".length) {
+                return TaskResultReference(blobHash = candidate.removePrefix("vfs://"))
+            }
+        }
+    }
+    return TaskResultReference()
+}
+
+private fun JsonObject.objectField(name: String): JsonObject? {
+    val value = get(name) ?: return null
+    return value.takeIf { it.isJsonObject }?.asJsonObject
+}
+
+private fun JsonObject.stringField(name: String): String? {
+    val value = get(name) ?: return null
+    return value.takeIf {
+        it.isJsonPrimitive && it.asJsonPrimitive.isString
+    }?.asString
 }
 
 fun parseJSONMap(json: String): Map<String, Any> {
@@ -126,114 +529,38 @@ fun parseJSONMap(json: String): Map<String, Any> {
     }
 }
 
-fun getActionError(res: String): String = parseJSONField(res, "error")
-
-/** Mirrors Go ParseBindError — sole Android entry for bind error envelopes. */
-fun parseBindError(res: String): String = getActionError(res)
-
-fun isBindError(res: String): Boolean = parseBindError(res).isNotEmpty()
-
 fun getActionMessage(res: String): String = parseJSONField(res, "message")
 
-fun getResultPath(res: String): String =
-    proxyma_bind.Proxyma_bind.resolveTaskResultPath(res)
-
-fun updateFileTask(
-    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
-    taskId: String,
-    transform: (com.proxyma.android.models.FileTask) -> com.proxyma.android.models.FileTask
+fun <T> runOnBg(
+    scope: CoroutineScope,
+    action: () -> T,
+    onResult: (Result<T>) -> Unit
 ) {
-    val index = fileTasks.indexOfFirst { it.taskId == taskId }
-    if (index != -1) {
-        fileTasks[index] = transform(fileTasks[index])
+    scope.launch {
+        val result = try {
+            Result.success(withContext(Dispatchers.IO) { action() })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+        withContext(Dispatchers.Main.immediate) {
+            onResult(result)
+        }
     }
 }
 
 fun runBindOnBg(
+    scope: CoroutineScope,
     action: () -> String,
+    method: BindMethod = BindMethod.LEGACY_ERROR_PREFIX,
     onResult: (Result<String>) -> Unit
 ) {
-    thread {
-        try {
-            val res = action()
-            val err = parseBindError(res)
-            isRunningOnMainThread {
-                if (err.isNotEmpty()) {
-                    onResult(Result.failure(Exception(err)))
-                } else {
-                    onResult(Result.success(res))
-                }
-            }
-        } catch (e: Exception) {
-            isRunningOnMainThread {
-                onResult(Result.failure(e))
-            }
-        }
-    }
-}
-
-fun startUnaryFileTask(
-    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
-    taskId: String,
-    context: Context? = null,
-    action: () -> String,
-    onDone: ((Result<String>) -> Unit)? = null
-) {
-    runBindOnBg(action) { result ->
-        result.fold(
-            onSuccess = { res ->
-                val resPath = getResultPath(res).ifEmpty { null }
-                updateFileTask(fileTasks, taskId) {
-                    it.copy(status = "completed", resultPath = resPath)
-                }
-                context?.toast("✅ Execution completed!")
-                onDone?.invoke(Result.success(res))
-            },
-            onFailure = { err ->
-                val msg = err.message ?: "failed"
-                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = msg) }
-                context?.toast("❌ Execution failed: $msg", long = true)
-                onDone?.invoke(Result.failure(err))
-            }
-        )
-    }
-}
-
-fun attachStreamToFileTask(
-    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
-    taskId: String,
-    serviceName: String,
-    payloadJson: String,
-    context: Context? = null,
-    onDone: ((Result<String>) -> Unit)? = null
-) {
-    proxyma_bind.Proxyma_bind.streamService(serviceName, payloadJson, object : proxyma_bind.StreamEventListener {
-        override fun onChunk(chunkJSON: String) {
-            isRunningOnMainThread {
-                updateFileTask(fileTasks, taskId) { curr ->
-                    val updated = if (curr.streamOutput.isNullOrEmpty()) chunkJSON
-                    else curr.streamOutput + "\n" + chunkJSON
-                    curr.copy(streamOutput = updated)
-                }
-            }
-        }
-
-        override fun onError(errMsg: String) {
-            isRunningOnMainThread {
-                updateFileTask(fileTasks, taskId) { it.copy(status = "failed", error = errMsg) }
-                context?.toast("❌ Stream error: $errMsg", long = true)
-                onDone?.invoke(Result.failure(Exception(errMsg)))
-            }
-        }
-
-        override fun onComplete() {
-            isRunningOnMainThread {
-                updateFileTask(fileTasks, taskId) { it.copy(status = "completed") }
-                context?.toast("✅ Stream completed!")
-                onDone?.invoke(Result.success("Streaming completed"))
-            }
-        }
-    })
+    runOnBg(
+        scope = scope,
+        action = { bindResult(action(), method).getOrThrow() },
+        onResult = onResult
+    )
 }
 
 private fun parseJSONField(json: String, key: String): String {
@@ -242,17 +569,26 @@ private fun parseJSONField(json: String, key: String): String {
 }
 
 @Composable
-fun PollState(period: Long, action: () -> Unit) {
-    DisposableEffect(Unit) {
-        val timer = fixedRateTimer(period = period) {
+fun <T> PollState(
+    period: Long,
+    fetchData: () -> T,
+    onResult: (T) -> Unit
+) {
+    val currentFetch = rememberUpdatedState(fetchData)
+    val currentOnResult = rememberUpdatedState(onResult)
+    LaunchedEffect(period) {
+        while (isActive) {
             try {
-                action()
-            } catch (e: Exception) {
-                e.printStackTrace()
+                val value = withContext(Dispatchers.IO) {
+                    currentFetch.value()
+                }
+                currentOnResult.value(value)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The daemon may be between lifecycle states; keep the last good value.
             }
-        }
-        onDispose {
-            timer.cancel()
+            delay(period.coerceAtLeast(1L))
         }
     }
 }
@@ -261,52 +597,57 @@ fun PollState(period: Long, action: () -> Unit) {
 inline fun <reified T> rememberPolledParsedState(
     period: Long = 2000,
     initialValue: T,
-    crossinline fetchData: () -> String
+    noinline fetchData: () -> String
 ): State<T> {
     val state = remember { mutableStateOf(initialValue) }
     val gson = remember { Gson() }
-    PollState(period = period) {
-        if (proxyma_bind.Proxyma_bind.isNodeRunning()) {
-            val res = fetchData()
-            try {
-                val parsed = gson.fromJson<T>(res, object : TypeToken<T>() {}.type)
-                if (parsed != null) {
-                    state.value = parsed
-                }
-            } catch (e: Exception) {
-                // Suppress parsing errors during node starting phase
+    val type = remember { object : TypeToken<T>() {}.type }
+    PollState(
+        period = period,
+        fetchData = {
+            if (!proxyma_bind.Proxyma_bind.isNodeRunning()) {
+                null
+            } else {
+                val response = bindResult(
+                    fetchData(),
+                    BindMethod.LEGACY_ERROR_PREFIX
+                ).getOrThrow()
+                gson.fromJson<T>(response, type)
+            }
+        },
+        onResult = { parsed ->
+            if (parsed != null) {
+                state.value = parsed
             }
         }
-    }
+    )
     return state
 }
 
 fun uploadUriToVfs(
+    scope: CoroutineScope,
     context: Context,
     uri: Uri,
     onStart: () -> Unit,
-    onComplete: (Result<String>) -> Unit
+    onComplete: (Result<VfsUploadResult>) -> Unit
 ) {
     onStart()
-    val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
-    runBindOnBg({
+    runOnBg(scope, action = {
+        val name = getFileName(context, uri) ?: "upload_${System.currentTimeMillis()}"
         val cachedPath = copyUriToCache(context, uri)
         try {
-            proxyma_bind.Proxyma_bind.uploadFile(name, cachedPath)
+            normalizeVfsUploadResult(
+                logicalName = name,
+                response = proxyma_bind.Proxyma_bind.uploadFile(name, cachedPath)
+            ).getOrThrow()
         } finally {
             File(cachedPath).delete()
         }
-    }) { result ->
-        result.fold(
-            onSuccess = { res ->
-                onComplete(Result.success(getActionMessage(res).ifEmpty { name }))
-            },
-            onFailure = { onComplete(Result.failure(it)) }
-        )
-    }
+    }, onResult = onComplete)
 }
 
 fun executeGoCall(
+    scope: CoroutineScope,
     context: Context,
     onStart: (() -> Unit)? = null,
     onComplete: (() -> Unit)? = null,
@@ -314,6 +655,7 @@ fun executeGoCall(
     onSuccess: ((String) -> Unit)? = null
 ) {
     executeGoSubmit(
+        scope = scope,
         onComplete = { result ->
             onComplete?.invoke()
             result.onFailure { err -> context.toast(err.message ?: "Error", long = true) }
@@ -325,13 +667,14 @@ fun executeGoCall(
 }
 
 fun executeGoSubmit(
+    scope: CoroutineScope,
     onComplete: (Result<String>) -> Unit,
     action: () -> String,
     onSuccess: ((String) -> Unit)? = null,
     onStart: (() -> Unit)? = null
 ) {
     onStart?.invoke()
-    runBindOnBg(action) { result ->
+    runBindOnBg(scope, action) { result ->
         result.onSuccess { res -> onSuccess?.invoke(res) }
         onComplete(result)
     }
@@ -346,7 +689,9 @@ fun formParameterFrom(param: Map<String, Any?>, nameOverride: String? = null): F
         description = (param["description"] as? String) ?: "",
         uiHint = param["uiHint"] as? String,
         defaultValue = param["defaultValue"] as? String,
-        options = param["options"] as? List<String>
+        options = (param["options"] as? List<*>)
+            ?.mapNotNull { it as? String }
+            .orEmpty()
     )
 }
 
@@ -363,50 +708,25 @@ fun formParameterFrom(
         description = src?.description ?: "",
         uiHint = src?.uiHint,
         defaultValue = src?.defaultValue,
-        options = src?.options
+        options = src?.options.orEmpty()
     )
-}
-
-fun enqueueFileTask(
-    fileTasks: MutableList<com.proxyma.android.models.FileTask>,
-    name: String,
-    payloadJson: String,
-    streaming: Boolean,
-    context: Context? = null,
-    unaryAction: (() -> String)? = null,
-    onDone: ((Result<String>) -> Unit)? = null
-): String {
-    val taskId = "task_${System.currentTimeMillis()}"
-    fileTasks.add(
-        0,
-        com.proxyma.android.models.FileTask(
-            taskId = taskId,
-            service = name,
-            input = payloadJson,
-            output = if (streaming) "stream" else "result",
-            status = if (streaming) "streaming" else "running",
-            isStreaming = streaming
-        )
-    )
-    if (streaming) {
-        attachStreamToFileTask(fileTasks, taskId, name, payloadJson, context, onDone)
-    } else {
-        startUnaryFileTask(
-            fileTasks = fileTasks,
-            taskId = taskId,
-            context = context,
-            action = unaryAction ?: { """{"error":"missing unary action"}""" },
-            onDone = onDone
-        )
-    }
-    return taskId
 }
 
 /** Shared Gson parse of bind GetServiceDetails JSON (SSOT for screens). */
 fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
     if (isBindError(raw)) return null
     return try {
-        Gson().fromJson(raw, com.proxyma.android.models.ServiceDetail::class.java)
+        val parsed = Gson().fromJson(raw, com.proxyma.android.models.ServiceDetail::class.java)
+            ?: return null
+        parsed.copy(
+            requiredPermissions = parsed.requiredPermissions.orEmpty(),
+            parameters = parsed.parameters.orEmpty().map { parameter ->
+                parameter.copy(options = parameter.options.orEmpty())
+            },
+            outputs = parsed.outputs.orEmpty().mapValues { (_, parameter) ->
+                parameter.copy(options = parameter.options.orEmpty())
+            }
+        )
     } catch (_: Exception) {
         null
     }
@@ -415,39 +735,48 @@ fun parseServiceDetail(raw: String): com.proxyma.android.models.ServiceDetail? {
 /** L1: sync ServiceDetail fetch via bind (call from bg thread). */
 fun fetchServiceDetail(name: String): com.proxyma.android.models.ServiceDetail? {
     val raw = proxyma_bind.Proxyma_bind.getServiceDetails(name)
-    if (isBindError(raw)) return null
-    return parseServiceDetail(raw)
+    val normalized = bindResult(raw, BindMethod.LEGACY_ERROR_PREFIX).getOrNull()
+        ?: return null
+    return parseServiceDetail(normalized)
 }
 
 /** Background load of ServiceDetail via bind (L3). */
-fun loadServiceDetail(name: String, onResult: (com.proxyma.android.models.ServiceDetail?) -> Unit) {
-    runBindOnBg({ proxyma_bind.Proxyma_bind.getServiceDetails(name) }) { result ->
+fun loadServiceDetail(
+    scope: CoroutineScope,
+    name: String,
+    onResult: (com.proxyma.android.models.ServiceDetail?) -> Unit
+) {
+    runBindOnBg(scope, { proxyma_bind.Proxyma_bind.getServiceDetails(name) }) { result ->
         onResult(result.getOrNull()?.let { parseServiceDetail(it) })
     }
 }
 
 /** Background batch load of ServiceDetail map (L3). */
 fun loadServiceDetailsMap(
+    scope: CoroutineScope,
     names: List<String>,
     onResult: (Map<String, com.proxyma.android.models.ServiceDetail>) -> Unit
 ) {
-    thread {
+    runOnBg(scope, action = {
         val map = mutableMapOf<String, com.proxyma.android.models.ServiceDetail>()
         for (svc in names.distinct()) {
             if (svc.isNotEmpty()) {
                 fetchServiceDetail(svc)?.let { map[svc] = it }
             }
         }
-        isRunningOnMainThread { onResult(map) }
+        map.toMap()
+    }) { result ->
+        onResult(result.getOrDefault(emptyMap()))
     }
 }
 
 /** Background load of run-dialog parameter specs + streaming flag (L3). */
 fun loadRunSpecs(
+    scope: CoroutineScope,
     name: String,
     onResult: (specs: List<com.proxyma.android.models.FormParameter>, isStreaming: Boolean) -> Unit
 ) {
-    loadServiceDetail(name) { detail ->
+    loadServiceDetail(scope, name) { detail ->
         val specs = detail?.parameters?.takeIf { it.isNotEmpty() } ?: DEFAULT_RUN_PARAMS
         onResult(specs, detail?.isStreaming == true)
     }
@@ -460,8 +789,14 @@ fun taskStatusColor(status: String): androidx.compose.ui.graphics.Color = when (
 }
 
 fun parsePipelineSchema(json: String): com.proxyma.android.models.PipelineSchema? {
+    if (isBindError(json)) return null
     return try {
-        Gson().fromJson(json, com.proxyma.android.models.PipelineSchema::class.java)
+        val parsed = Gson().fromJson(json, com.proxyma.android.models.PipelineSchema::class.java)
+            ?: return null
+        parsed.copy(
+            steps = parsed.steps.orEmpty(),
+            connections = parsed.connections.orEmpty()
+        )
     } catch (_: Exception) {
         null
     }

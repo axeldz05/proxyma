@@ -6,6 +6,32 @@ import (
 	"strings"
 )
 
+// ValidatePipelineRevision rejects stale or conflicting replacement schemas.
+func ValidatePipelineRevision(current, next PipelineSchema) error {
+	if current.ID != next.ID {
+		return fmt.Errorf("pipeline schema ID mismatch: current %q, incoming %q", current.ID, next.ID)
+	}
+	if next.Version < current.Version {
+		return fmt.Errorf("pipeline '%s' schema downgrade rejected: incoming version %d is older than current version %d",
+			next.ID, next.Version, current.Version)
+	}
+	if next.Version > current.Version {
+		return nil
+	}
+
+	currentDefinition := current
+	currentDefinition.Deleted = false
+	nextDefinition := next
+	nextDefinition.Deleted = false
+	if PipelineSchemaHash(nextDefinition) != PipelineSchemaHash(currentDefinition) {
+		return fmt.Errorf("pipeline '%s' schema mismatch at version %d", next.ID, next.Version)
+	}
+	if current.Deleted && !next.Deleted {
+		return fmt.Errorf("pipeline '%s' cannot resurrect deleted version %d", next.ID, next.Version)
+	}
+	return nil
+}
+
 // PipelineHasCycle reports whether Connections form a cycle among steps (ignores $initial).
 // Uses Kahn topological sort over the full step graph.
 func PipelineHasCycle(schema PipelineSchema) bool {
@@ -67,8 +93,9 @@ func ValidatePipelineSchema(schema PipelineSchema, lookup func(string) (ServiceS
 
 	stepServices := make(map[string]string)
 	stepNodes := make(map[string]string)
+	stepPositions := make(map[string]int)
 	var stepIDs []string
-	for _, step := range schema.Steps {
+	for position, step := range schema.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step ID cannot be empty")
 		}
@@ -80,6 +107,7 @@ func ValidatePipelineSchema(schema PipelineSchema, lookup func(string) (ServiceS
 		}
 		stepServices[step.ID] = step.Service
 		stepNodes[step.ID] = step.TargetNodeID
+		stepPositions[step.ID] = position
 		stepIDs = append(stepIDs, step.ID)
 	}
 
@@ -122,6 +150,10 @@ func ValidatePipelineSchema(schema PipelineSchema, lookup func(string) (ServiceS
 		if !exists {
 			return fmt.Errorf("invalid connection link [%s].%s ──► [%s].%s: target step '%s' is not defined in pipeline steps %v",
 				conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.ToStep, stepIDs)
+		}
+		if conn.FromStep != "$initial" && stepPositions[conn.FromStep] >= stepPositions[conn.ToStep] {
+			return fmt.Errorf("pipeline steps are not in topological order: connection [%s].%s ──► [%s].%s requires step '%s' to appear before step '%s'",
+				conn.FromStep, conn.FromPort, conn.ToStep, conn.ToPort, conn.FromStep, conn.ToStep)
 		}
 
 		toSchema, toSchemaExists := lookup(toService)

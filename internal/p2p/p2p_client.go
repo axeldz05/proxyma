@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,6 +38,22 @@ type PeerClient interface {
 	UpdateSponsorAddress(addr string)
 	CloseIdleConnections()
 	SetQUICManager(qm *QUICManager)
+	SetLifetimeContext(ctx context.Context)
+	Close()
+}
+
+type NegotiatedServiceStream struct {
+	Body    io.ReadCloser
+	Version int
+}
+
+type ServiceStreamNegotiator interface {
+	StreamServiceNegotiated(
+		ctx context.Context,
+		peerID string,
+		serviceName string,
+		payload map[string]any,
+	) (NegotiatedServiceStream, error)
 }
 
 type HTTPPeerClient struct {
@@ -65,11 +83,11 @@ func (c *HTTPPeerClient) RemovePeerRoute(peerID string) {
 }
 
 func (c *HTTPPeerClient) SetNodeID(id string) {
-	c.router.NodeID = id
+	c.router.SetNodeID(id)
 }
 
 func (c *HTTPPeerClient) SetOwnAddress(addr string) {
-	c.router.OwnAddress = addr
+	c.router.SetOwnAddress(addr)
 }
 
 func (c *HTTPPeerClient) UpdateSponsorAddress(addr string) {
@@ -77,11 +95,19 @@ func (c *HTTPPeerClient) UpdateSponsorAddress(addr string) {
 }
 
 func (c *HTTPPeerClient) SetQUICManager(qm *QUICManager) {
-	c.router.QM = qm
+	c.router.SetQUICManager(qm)
+}
+
+func (c *HTTPPeerClient) SetLifetimeContext(ctx context.Context) {
+	c.router.SetLifetimeContext(ctx)
 }
 
 func (c *HTTPPeerClient) CloseIdleConnections() {
 	c.client.CloseIdleConnections()
+}
+
+func (c *HTTPPeerClient) Close() {
+	c.router.Close()
 }
 
 func (c *HTTPPeerClient) FetchManifest(ctx context.Context, peerID string) (map[string]protocol.IndexEntry, error) {
@@ -139,7 +165,34 @@ func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.Add
 }
 
 func (c *HTTPPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
-	return doJSON[protocol.RelayRequest](ctx, c, "GET", sponsorAddr, protocol.PathRel(protocol.PathRelayPoll)+"?id="+peerID, nil)
+	var relayReq protocol.RelayRequest
+	resp, err := doRequest(ctx, c, "GET", sponsorAddr, protocol.PathRel(protocol.PathRelayPoll)+"?id="+peerID, nil)
+	if err != nil {
+		return relayReq, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := RequireHTTPStatus(resp, 0); err != nil {
+		return relayReq, err
+	}
+	if resp.StatusCode == http.StatusNoContent {
+		return relayReq, nil
+	}
+
+	maxJSONBytes := int64(2 * protocol.MaxRelayBodyBytes)
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONBytes+1))
+	if err != nil {
+		return relayReq, err
+	}
+	if int64(len(payload)) > maxJSONBytes {
+		return relayReq, fmt.Errorf("relay poll response exceeds %dKB encoded limit", maxJSONBytes/1024)
+	}
+	if err := json.Unmarshal(payload, &relayReq); err != nil {
+		return protocol.RelayRequest{}, err
+	}
+	if len(relayReq.Body) > protocol.MaxRelayBodyBytes {
+		return protocol.RelayRequest{}, fmt.Errorf("relay poll payload exceeds %dKB limit", protocol.MaxRelayBodyBytes/1024)
+	}
+	return relayReq, nil
 }
 
 func (c *HTTPPeerClient) ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
@@ -172,4 +225,44 @@ func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, servi
 		return nil, err
 	}
 	return OpenHTTPBody(resp, http.StatusOK)
+}
+
+func (c *HTTPPeerClient) StreamServiceNegotiated(
+	ctx context.Context,
+	peerID string,
+	serviceName string,
+	payload map[string]any,
+) (NegotiatedServiceStream, error) {
+	bodyReader, contentType, err := prepareBody(payload)
+	if err != nil {
+		return NegotiatedServiceStream{}, err
+	}
+	headers := make(http.Header)
+	headers.Set(protocol.HeaderStreamAcceptVersions, fmt.Sprintf("%d", protocol.ServiceStreamVersion))
+	resp, err := c.sendRequestWithHeaders(
+		ctx,
+		http.MethodPost,
+		peerID,
+		protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName),
+		bodyReader,
+		contentType,
+		headers,
+	)
+	if err != nil {
+		return NegotiatedServiceStream{}, err
+	}
+	body, err := OpenHTTPBody(resp, http.StatusOK)
+	if err != nil {
+		return NegotiatedServiceStream{}, err
+	}
+	version := 0
+	switch selected := resp.Header.Get(protocol.HeaderStreamSelectedVersion); selected {
+	case fmt.Sprintf("%d", protocol.ServiceStreamVersion):
+		version = protocol.ServiceStreamVersion
+	case "", protocol.StreamVersionLegacy:
+	default:
+		_ = body.Close()
+		return NegotiatedServiceStream{}, fmt.Errorf("unsupported selected stream version %q", selected)
+	}
+	return NegotiatedServiceStream{Body: body, Version: version}, nil
 }

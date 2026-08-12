@@ -272,9 +272,15 @@ func loadCertAndKey(certPath, keyPath string) (*x509.Certificate, *ecdsa.Private
 		return nil, nil, err
 	}
 	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode certificate PEM")
+	}
+	if block.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("unexpected certificate PEM block type %q", block.Type)
+	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to parse certificate PEM: %w", err)
 	}
 
 	keyPEM, err := os.ReadFile(keyPath)
@@ -282,9 +288,15 @@ func loadCertAndKey(certPath, keyPath string) (*x509.Certificate, *ecdsa.Private
 		return nil, nil, err
 	}
 	block, _ = pem.Decode(keyPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode EC private key PEM")
+	}
+	if block.Type != "EC PRIVATE KEY" {
+		return nil, nil, fmt.Errorf("unexpected EC private key PEM block type %q", block.Type)
+	}
 	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to parse EC private key PEM: %w", err)
 	}
 
 	return cert, key, nil
@@ -417,18 +429,56 @@ func CAHashFromPEM(pemData []byte) (string, error) {
 	return HashCertDER(der), nil
 }
 
-// TLSConfigTrustCAHash builds a TLS client config that accepts peers whose leaf DER hashes to caHash (L1).
+// TLSConfigTrustCAHash builds a TLS client config that accepts only leaf
+// certificates whose chain terminates at the exact CA pinned by caHash.
 func TLSConfigTrustCAHash(caHash string) *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return errors.New("security alert: peer sent no certificate chain")
+			}
+			certs := make([]*x509.Certificate, 0, len(rawCerts))
+			var pinnedCA *x509.Certificate
 			for _, rawCert := range rawCerts {
+				cert, err := x509.ParseCertificate(rawCert)
+				if err != nil {
+					return fmt.Errorf("security alert: parse peer certificate: %w", err)
+				}
+				certs = append(certs, cert)
 				if HashCertDER(rawCert) == caHash {
+					pinnedCA = cert
+				}
+			}
+			if pinnedCA == nil || !pinnedCA.IsCA {
+				return errors.New("security alert: exact pinned CA was not presented")
+			}
+
+			roots := x509.NewCertPool()
+			roots.AddCert(pinnedCA)
+			intermediates := x509.NewCertPool()
+			for _, cert := range certs[1:] {
+				if !cert.Equal(pinnedCA) {
+					intermediates.AddCert(cert)
+				}
+			}
+			chains, err := certs[0].Verify(x509.VerifyOptions{
+				Roots:         roots,
+				Intermediates: intermediates,
+				CurrentTime:   time.Now(),
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			if err != nil {
+				return fmt.Errorf("security alert: leaf does not chain to pinned CA: %w", err)
+			}
+			for _, chain := range chains {
+				if len(chain) > 0 && HashCertDER(chain[len(chain)-1].Raw) == caHash {
 					return nil
 				}
 			}
-			return errors.New("security alert: identity mismatch")
+			return errors.New("security alert: verified chain did not terminate at pinned CA")
 		},
+		MinVersion: tls.VersionTLS13,
 	}
 }
 

@@ -20,11 +20,17 @@ import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
-data class CollabUser(val user_id: String, val user_name: String, val pos: Int = 0)
+data class CollabUser(
+    val user_id: String = "",
+    val user_name: String = "",
+    val pos: Int = 0
+)
 
 data class CollabChunk(
-    val type: String,
+    val type: String = "",
     val doc_id: String? = null,
     val user_id: String? = null,
     val user_name: String? = null,
@@ -33,7 +39,7 @@ data class CollabChunk(
     val text: String? = null,
     val action: String? = null,
     val content: String? = null,
-    val users: Map<String, CollabUser>? = null
+    val users: Map<String, CollabUser> = emptyMap()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,9 +51,11 @@ fun CollabEditorScreen() {
     var isConnected by remember { mutableStateOf(false) }
     var documentContent by remember { mutableStateOf("") }
     val activeUsers = remember { mutableStateMapOf<String, CollabUser>() }
+    val scope = rememberCoroutineScope()
+    var joinJob by remember { mutableStateOf<Job?>(null) }
 
     fun joinDoc() {
-        if (isConnected) return
+        if (isConnected || joinJob?.isActive == true) return
         val myUserId = "user_${System.currentTimeMillis() % 10000}"
         val joinPayload = mapOf(
             "type" to "join",
@@ -57,57 +65,77 @@ fun CollabEditorScreen() {
         )
         val payloadJson = Gson().toJson(joinPayload)
 
-        proxyma_bind.Proxyma_bind.streamService("collab_editor", payloadJson, object : proxyma_bind.StreamEventListener {
-            override fun onChunk(chunkJSON: String) {
-                isRunningOnMainThread {
-                    try {
-                        val msg = Gson().fromJson(chunkJSON, CollabChunk::class.java)
-                        when (msg.type) {
-                            "snapshot" -> {
-                                isConnected = true
-                                if (msg.content != null) {
-                                    documentContent = msg.content
-                                }
-                                if (msg.users != null) {
+        val startedJob = launchManagedBindStream(
+            scope = scope,
+            serviceName = "collab_editor",
+            payloadJson = payloadJson,
+            listenerFactory = { stop ->
+                object : proxyma_bind.StreamEventListener {
+                    override fun onChunk(chunkJSON: String) {
+                        val msg = try {
+                            Gson().fromJson(chunkJSON, CollabChunk::class.java)
+                        } catch (_: Exception) {
+                            null
+                        } ?: return
+                        scope.launch {
+                            when (msg.type) {
+                                "snapshot" -> {
+                                    isConnected = true
+                                    if (msg.content != null) {
+                                        documentContent = msg.content
+                                    }
                                     activeUsers.clear()
-                                    activeUsers.putAll(msg.users)
+                                    activeUsers.putAll(msg.users.orEmpty())
                                 }
-                            }
-                            "user_joined" -> {
-                                if (msg.users != null) {
+                                "user_joined" -> {
                                     activeUsers.clear()
-                                    activeUsers.putAll(msg.users)
+                                    activeUsers.putAll(msg.users.orEmpty())
                                 }
-                            }
-                            "user_left" -> {
-                                if (msg.user_id != null) {
-                                    activeUsers.remove(msg.user_id)
+                                "user_left" -> {
+                                    if (msg.user_id != null) {
+                                        activeUsers.remove(msg.user_id)
+                                    }
                                 }
-                            }
-                            "op" -> {
-                                if (msg.content != null) {
-                                    documentContent = msg.content
+                                "op" -> {
+                                    if (msg.content != null) {
+                                        documentContent = msg.content
+                                    }
                                 }
                             }
                         }
-                    } catch (_: Exception) {}
-                }
-            }
+                    }
 
-            override fun onError(errMsg: String) {
-                isRunningOnMainThread {
-                    isConnected = false
-                    context.toast("❌ Collab stream error: $errMsg")
-                }
-            }
+                    override fun onError(errMsg: String) {
+                        val message = bindErrorMessage(errMsg)
+                        scope.launch {
+                            isConnected = false
+                            context.toast("❌ Collab stream error: $message")
+                            stop()
+                        }
+                    }
 
-            override fun onComplete() {
-                isRunningOnMainThread {
-                    isConnected = false
-                    context.toast("Disconnected from collab session.")
+                    override fun onComplete() {
+                        scope.launch {
+                            isConnected = false
+                            context.toast("Disconnected from collab session.")
+                            stop()
+                        }
+                    }
+                }
+            },
+            onStartFailure = { error ->
+                isConnected = false
+                context.toast("❌ Collab stream error: ${error.message ?: "failed"}")
+            }
+        )
+        joinJob = startedJob
+        startedJob.invokeOnCompletion {
+            scope.launch {
+                if (joinJob === startedJob) {
+                    joinJob = null
                 }
             }
-        })
+        }
     }
 
     fun sendTextInsert(newText: String) {
@@ -125,11 +153,30 @@ fun CollabEditorScreen() {
             )
             val jsonStr = Gson().toJson(opPayload)
             // Perform streaming update
-            proxyma_bind.Proxyma_bind.streamService("collab_editor", jsonStr, object : proxyma_bind.StreamEventListener {
-                override fun onChunk(chunkJSON: String) {}
-                override fun onError(errMsg: String) {}
-                override fun onComplete() {}
-            })
+            launchManagedBindStream(
+                scope = scope,
+                serviceName = "collab_editor",
+                payloadJson = jsonStr,
+                listenerFactory = { stop ->
+                    object : proxyma_bind.StreamEventListener {
+                        override fun onChunk(chunkJSON: String) {}
+                        override fun onError(errMsg: String) {
+                            val message = bindErrorMessage(errMsg)
+                            scope.launch {
+                                context.toast("❌ Collab update failed: $message")
+                                stop()
+                            }
+                        }
+
+                        override fun onComplete() {
+                            stop()
+                        }
+                    }
+                },
+                onStartFailure = { error ->
+                    context.toast("❌ Collab update failed: ${error.message ?: "failed"}")
+                }
+            )
         }
         documentContent = newText
     }

@@ -336,6 +336,57 @@ func TestHandleNotificationRespectsSubscription(t *testing.T) {
 	}
 }
 
+func TestHandleNotificationRetriesMissingSubscribedBlobAfterQueueFull(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "notif-queue-full-retry")
+	attempts := 0
+
+	engine, err := storage.NewStorageEngine(
+		cfg.Logger,
+		cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error {
+			attempts++
+			if attempts == 1 {
+				return fmt.Errorf("download queue full")
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, engine.Close()) })
+
+	const fileName = "queued.txt"
+	require.NoError(t, engine.SetSubscription(fileName, true))
+	notification := protocol.PeerNotification{
+		File: protocol.IndexEntry{
+			Name:    fileName,
+			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Version: 1,
+		},
+		Source: "https://peer-b",
+	}
+	body, err := json.Marshal(notification)
+	require.NoError(t, err)
+
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, protocol.PathNotify, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.HandleNotification(w, req)
+		return w
+	}
+
+	require.Equal(t, http.StatusServiceUnavailable, post().Code)
+	require.Equal(t, http.StatusAccepted, post().Code,
+		"unchanged metadata must not suppress retry while the subscribed blob is absent")
+	require.Equal(t, 2, attempts)
+
+	hasBlob, err := engine.HasPhysicalBlob(notification.File.Hash)
+	require.NoError(t, err)
+	require.False(t, hasBlob)
+}
+
 func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-remote-del-new")
@@ -347,7 +398,7 @@ func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	}
 
 	// Should not panic or error — the file never existed locally
-	engine.ProcessRemoteDeletion(tombstone)
+	require.NoError(t, engine.ProcessRemoteDeletion(tombstone))
 
 	meta, exists := engine.GetFileMeta("never_existed.txt")
 	require.True(t, exists, "A tombstone record should have been created")

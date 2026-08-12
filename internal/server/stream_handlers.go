@@ -1,12 +1,12 @@
 package server
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
+	"strings"
 )
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
@@ -17,7 +17,12 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
 		return
 	}
-	if !s.Storage.IsServiceSubscribed(req.Schema.Name) {
+	subscribed, err := s.Storage.IsServiceSubscribedE(req.Schema.Name)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read service subscriptions")
+		return
+	}
+	if !subscribed {
 		s.Config.Logger.Debug("Ignoring unsolicited service notify", "service", req.Schema.Name, "peer", req.NodeID)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -34,6 +39,7 @@ func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
 	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
 		return
 	}
+	req.Schema = protocol.NormalizePipelineSchemaVersion(req.Schema)
 	s.Config.Logger.Info("Received pipeline schema notification", "pipelineID", req.Schema.ID, "action", req.Action)
 	if req.Action == protocol.ActionAdd {
 		if err := s.ValidatePipelineSchema(req.Schema); err != nil {
@@ -78,17 +84,20 @@ func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
 
 	s.Config.Logger.Info("Received hole punch initialization request", "sender", msg.SenderID, "senderUDP", msg.PublicUDP)
 
+	natState := s.CurrentNATState()
 	// Respond with our own public UDP address
 	resp := p2p.HolePunchMessage{
 		SenderID:  s.Config.ID,
-		PublicUDP: s.publicUDPAddr,
+		PublicUDP: natState.PublicUDPAddr,
 	}
 
 	utils.RespondJSON(w, http.StatusOK, resp)
 
 	// Callee-side punch: same dialer rule as initiator (lower ID dials).
-	if s.quicMgr != nil && msg.PublicUDP != "" {
-		go s.quicMgr.RespondToHolePunch(context.Background(), msg.SenderID, msg.PublicUDP)
+	if natState.QUICManager != nil && msg.PublicUDP != "" {
+		s.goOwned(func() {
+			natState.QUICManager.RespondToHolePunch(s.lifetimeCtx, msg.SenderID, msg.PublicUDP)
+		})
 	}
 }
 
@@ -103,6 +112,11 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+	payload, err := parseServicePayload(string(bodyBytes))
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -110,15 +124,43 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	streamVersion := 0
+	for _, advertised := range strings.Split(r.Header.Get(protocol.HeaderStreamAcceptVersions), ",") {
+		if strings.TrimSpace(advertised) == "1" {
+			streamVersion = protocol.ServiceStreamVersion
+			break
+		}
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
+	if streamVersion == protocol.ServiceStreamVersion {
+		w.Header().Set(protocol.HeaderStreamSelectedVersion, "1")
+	} else {
+		w.Header().Set(protocol.HeaderStreamSelectedVersion, protocol.StreamVersionLegacy)
+	}
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	if err := s.LocalServiceStreamRun(serviceName, string(bodyBytes), func(chunk map[string]any) {
-		_ = utils.WriteNDJSON(w, chunk)
+	streamCtx, cancel := s.contextWithServerLifetime(r.Context())
+	defer cancel()
+	err = s.localServiceStreamRun(streamCtx, serviceName, payload, func(chunk map[string]any) error {
+		frame := any(chunk)
+		if streamVersion == protocol.ServiceStreamVersion {
+			frame = protocol.NewServiceStreamChunk(chunk)
+		}
+		if err := utils.WriteNDJSON(w, frame); err != nil {
+			return err
+		}
 		flusher.Flush()
-	}); err != nil {
-		_ = utils.WriteNDJSON(w, map[string]any{"error": err.Error()})
-		flusher.Flush()
+		return nil
+	})
+
+	if streamVersion == protocol.ServiceStreamVersion {
+		terminal := protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameComplete, "")
+		if err != nil {
+			terminal = protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameError, err.Error())
+		}
+		if writeErr := utils.WriteNDJSON(w, terminal); writeErr == nil {
+			flusher.Flush()
+		}
 	}
 }

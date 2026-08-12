@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,11 +25,13 @@ func NewLogger(w io.Writer, debug bool) *slog.Logger {
 }
 
 type TaskRequest struct {
-	TaskID          string         `json:"task_id"`
-	Service         string         `json:"service"`
-	RequesterNodeID string         `json:"requester_node_id"`
-	ReplyTo         string         `json:"reply_to"`
-	Payload         map[string]any `json:"payload"`
+	TaskID                 string                  `json:"task_id"`
+	Service                string                  `json:"service"`
+	RequesterNodeID        string                  `json:"requester_node_id"`
+	ReplyTo                string                  `json:"reply_to"`
+	Payload                map[string]any          `json:"payload"`
+	PipelineState          *PipelineExecutionState `json:"pipeline_state,omitempty"`
+	ExpectedProducerNodeID string                  `json:"-"`
 }
 
 type PipelineConnection struct {
@@ -49,6 +52,30 @@ type PipelineSchema struct {
 	Version     int                  `json:"version"`
 	Steps       []PipelineStep       `json:"steps"`
 	Connections []PipelineConnection `json:"connections,omitempty"`
+	Deleted     bool                 `json:"deleted,omitempty"`
+}
+
+// PipelineSchemaHash binds an execution to the exact ordered schema it started with.
+func PipelineSchemaHash(schema PipelineSchema) string {
+	encoded, _ := json.Marshal(schema)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+// ClonePipelineSchema isolates mutable slice storage at registry and API boundaries.
+func ClonePipelineSchema(schema PipelineSchema) PipelineSchema {
+	schema.Steps = append([]PipelineStep(nil), schema.Steps...)
+	schema.Connections = append([]PipelineConnection(nil), schema.Connections...)
+	return schema
+}
+
+// NormalizePipelineSchemaVersion upgrades legacy omitted/zero versions to the
+// first durable revision before validation, persistence, or notification.
+func NormalizePipelineSchemaVersion(schema PipelineSchema) PipelineSchema {
+	schema = ClonePipelineSchema(schema)
+	if schema.Version <= 0 {
+		schema.Version = 1
+	}
+	return schema
 }
 
 const (
@@ -77,25 +104,108 @@ type PipelineNotification struct {
 	Action string         `json:"action"` // ActionAdd / ActionRemove
 }
 
-type PipelineContext struct {
-	Steps       []PipelineStep            `json:"steps"`
-	CurrentStep int                       `json:"current_step"`
-	Outputs     map[string]map[string]any `json:"outputs"`
+// PipelineExecutionState is engine-owned continuation metadata carried between nodes.
+// It is deliberately outside TaskRequest.Payload so service input cannot alter execution.
+type PipelineExecutionState struct {
+	PipelineID      string                    `json:"pipeline_id"`
+	PipelineVersion int                       `json:"pipeline_version"`
+	SchemaHash      string                    `json:"schema_hash"`
+	CurrentStep     int                       `json:"current_step"`
+	Outputs         map[string]map[string]any `json:"outputs,omitempty"`
+	OutputProducers map[string]string         `json:"output_producers,omitempty"`
+	SelectedTargets map[string]string         `json:"selected_targets,omitempty"`
+}
+
+// CloneJSONMap recursively copies JSON-shaped maps and slices.
+func CloneJSONMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = cloneJSONValue(value)
+	}
+	return cloned
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return CloneJSONMap(typed)
+	case map[string]map[string]any:
+		cloned := make(map[string]map[string]any, len(typed))
+		for key, nested := range typed {
+			cloned[key] = CloneJSONMap(nested)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneJSONValue(item)
+		}
+		return cloned
+	default:
+		return typed
+	}
+}
+
+// ClonePipelineExecutionState recursively isolates execution output maps.
+func ClonePipelineExecutionState(state *PipelineExecutionState) *PipelineExecutionState {
+	if state == nil {
+		return nil
+	}
+	cloned := *state
+	if state.Outputs != nil {
+		cloned.Outputs = make(map[string]map[string]any, len(state.Outputs))
+		for stepID, outputs := range state.Outputs {
+			cloned.Outputs[stepID] = CloneJSONMap(outputs)
+		}
+	}
+	if state.OutputProducers != nil {
+		cloned.OutputProducers = make(map[string]string, len(state.OutputProducers))
+		for stepID, producer := range state.OutputProducers {
+			cloned.OutputProducers[stepID] = producer
+		}
+	}
+	if state.SelectedTargets != nil {
+		cloned.SelectedTargets = make(map[string]string, len(state.SelectedTargets))
+		for stepID, target := range state.SelectedTargets {
+			cloned.SelectedTargets[stepID] = target
+		}
+	}
+	return &cloned
+}
+
+// CloneTaskRequest isolates caller-owned payload and execution state.
+func CloneTaskRequest(request TaskRequest) TaskRequest {
+	request.Payload = CloneJSONMap(request.Payload)
+	request.PipelineState = ClonePipelineExecutionState(request.PipelineState)
+	return request
 }
 
 type DiscoveryQuery struct {
-	Service          string   `json:"service"`
-	RequiredParams   []string `json:"required_params"`
-	SortStrategy     string   `json:"sort_strategy"`
-	PayloadSizeBytes int64    `json:"payload_size_bytes"`
+	Service              string         `json:"service"`
+	RequiredParams       []string       `json:"required_params"`
+	RequiredCapabilities map[string]int `json:"required_capabilities,omitempty"`
+	SortStrategy         string         `json:"sort_strategy"`
+	PayloadSizeBytes     int64          `json:"payload_size_bytes"`
 }
 
 type ServiceTaskResponse struct {
-	TaskID  string         `json:"task_id"`
-	Service string         `json:"service"`
-	Status  string         `json:"status"`
-	Error   string         `json:"error,omitempty"`
-	Outputs map[string]any `json:"outputs,omitempty"`
+	TaskID         string         `json:"task_id"`
+	Service        string         `json:"service"`
+	Status         string         `json:"status"`
+	Error          string         `json:"error,omitempty"`
+	Outputs        map[string]any `json:"outputs,omitempty"`
+	ProducerNodeID string         `json:"producer_node_id,omitempty"`
+}
+
+const TaskStatusIngesting = "ingesting"
+
+// CloneServiceTaskResponse isolates nested outputs at status boundaries.
+func CloneServiceTaskResponse(response ServiceTaskResponse) ServiceTaskResponse {
+	response.Outputs = CloneJSONMap(response.Outputs)
+	return response
 }
 
 type IndexEntry struct {
@@ -119,14 +229,61 @@ type VFSFileStatus struct {
 }
 
 type UnixRequest struct {
-	Action string            `json:"action"`
-	Args   map[string]string `json:"args,omitempty"`
+	Action         string            `json:"action"`
+	Args           map[string]string `json:"args,omitempty"`
+	StreamVersions []int             `json:"stream_versions,omitempty"`
 }
 
 type UnixResponse struct {
-	Success bool            `json:"success"`
-	Error   string          `json:"error,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Success       bool            `json:"success"`
+	Error         string          `json:"error,omitempty"`
+	Data          json.RawMessage `json:"data,omitempty"`
+	Complete      bool            `json:"complete,omitempty"`
+	StreamVersion int             `json:"stream_version,omitempty"`
+}
+
+const (
+	ServiceStreamVersion           = 1
+	HeaderStreamAcceptVersions     = "X-Proxyma-Stream-Accept"
+	HeaderStreamSelectedVersion    = "X-Proxyma-Stream-Version"
+	StreamVersionLegacy            = "legacy"
+	CapabilityPipelineState        = "pipeline_state"
+	PipelineStateCapabilityVersion = 2
+)
+
+type ServiceStreamFrameKind string
+
+const (
+	ServiceStreamFrameChunk    ServiceStreamFrameKind = "chunk"
+	ServiceStreamFrameError    ServiceStreamFrameKind = "error"
+	ServiceStreamFrameComplete ServiceStreamFrameKind = "complete"
+)
+
+// ServiceStreamFrame is the versioned NDJSON wire envelope for peer streams.
+// Wrapping every v1 record keeps service payload keys disjoint from stream control.
+// A record without ProxymaStreamVersion is legacy data and must never be guessed
+// to be a v1 control record.
+type ServiceStreamFrame struct {
+	ProxymaStreamVersion int                    `json:"proxyma_stream_version"`
+	Kind                 ServiceStreamFrameKind `json:"kind"`
+	Chunk                map[string]any         `json:"chunk,omitempty"`
+	Error                string                 `json:"error,omitempty"`
+}
+
+func NewServiceStreamChunk(chunk map[string]any) ServiceStreamFrame {
+	return ServiceStreamFrame{
+		ProxymaStreamVersion: ServiceStreamVersion,
+		Kind:                 ServiceStreamFrameChunk,
+		Chunk:                chunk,
+	}
+}
+
+func NewServiceStreamTerminal(kind ServiceStreamFrameKind, message string) ServiceStreamFrame {
+	return ServiceStreamFrame{
+		ProxymaStreamVersion: ServiceStreamVersion,
+		Kind:                 kind,
+		Error:                message,
+	}
 }
 
 type ServiceUIConfig struct {
@@ -442,15 +599,25 @@ type LocalService struct {
 }
 
 type ServiceBid struct {
-	NodeID          string        `json:"node_id"`
-	NodeAddr        string        `json:"node_addr"`
-	Schema          ServiceSchema `json:"schema"`
-	EstimatedMillis int64         `json:"estimated_millis"`
-	CPULoad         float64       `json:"cpu_load,omitempty"`
-	MemPressure     float64       `json:"mem_pressure,omitempty"`
-	CostUnits       int64         `json:"cost_units,omitempty"`
-	PowerScore      int64         `json:"power_score,omitempty"`
-	CanAccept       bool          `json:"can_accept"`
+	NodeID          string         `json:"node_id"`
+	NodeAddr        string         `json:"node_addr"`
+	Schema          ServiceSchema  `json:"schema"`
+	EstimatedMillis int64          `json:"estimated_millis"`
+	CPULoad         float64        `json:"cpu_load,omitempty"`
+	MemPressure     float64        `json:"mem_pressure,omitempty"`
+	CostUnits       int64          `json:"cost_units,omitempty"`
+	PowerScore      int64          `json:"power_score,omitempty"`
+	CanAccept       bool           `json:"can_accept"`
+	Capabilities    map[string]int `json:"capabilities,omitempty"`
+}
+
+func SupportsCapabilities(available, required map[string]int) bool {
+	for name, version := range required {
+		if version <= 0 || available[name] < version {
+			return false
+		}
+	}
+	return true
 }
 
 type NodeConfig struct {
@@ -678,4 +845,3 @@ type BandwidthStats struct {
 	TotalSent     int64 `json:"total_sent"`
 	TotalReceived int64 `json:"total_received"`
 }
-

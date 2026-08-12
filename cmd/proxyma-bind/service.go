@@ -1,9 +1,13 @@
 package proxyma_bind
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
@@ -168,17 +172,24 @@ func UnsubscribeService(name string) string {
 	return InvokeDomainAction("service", "unsubscribe", map[string]string{"name": name})
 }
 
-// RunService runs a task and waits up to 30s.
-// Optional sortStrategy: fastest|cheapest|low_power (or canonical proxyma/strategy/* URNs).
-func RunService(name string, payloadJson string, sortStrategy ...string) string {
-	strategy := ""
-	if len(sortStrategy) > 0 {
-		strategy = sortStrategy[0]
+// RunService runs with the default strategy. Its two-argument signature is an
+// intentional breaking Go API change; migrate old three-argument calls to
+// RunServiceWithStrategy.
+func RunService(name string, payloadJson string) string {
+	return RunServiceWithStrategy(name, payloadJson, "")
+}
+
+// RunServiceWithStrategy is the migration API for callers that need an
+// explicit bid strategy while keeping gomobile exports non-variadic.
+// sortStrategy: fastest|cheapest|low_power (or canonical proxyma/strategy/* URNs).
+func RunServiceWithStrategy(name string, payloadJson string, sortStrategy string) string {
+	if err := validateServicePayloadObject(payloadJson); err != nil {
+		return BindErrorJSON(err)
 	}
 	return InvokeDomainAction("service", "run", map[string]string{
 		"service":  name,
 		"payload":  payloadJson,
-		"strategy": strategy,
+		"strategy": sortStrategy,
 	})
 }
 
@@ -188,11 +199,40 @@ type StreamEventListener interface {
 	OnComplete()
 }
 
+type activeBindStream struct {
+	cancel context.CancelFunc
+}
+
+var (
+	bindStreamSequence atomic.Uint64
+	activeBindStreams  sync.Map
+)
+
+func validateServicePayloadObject(payloadJSON string) error {
+	if strings.TrimSpace(payloadJSON) == "" {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return fmt.Errorf("invalid service payload: %w", err)
+	}
+	if payload == nil {
+		return fmt.Errorf("invalid service payload: expected a JSON object")
+	}
+	return nil
+}
+
 // StreamService runs a streaming task notifying listener of chunks in real time.
 func StreamService(name string, payloadJson string, listener StreamEventListener) string {
 	detail, ok := uischema.FindAction("service", "stream")
 	if !ok || detail.UnixAction == "" {
 		return BindErrorJSON(fmt.Errorf("no unix action for service.stream"))
+	}
+	if err := validateServicePayloadObject(payloadJson); err != nil {
+		return BindErrorJSON(err)
+	}
+	if listener == nil {
+		return BindErrorJSON(fmt.Errorf("stream listener is required"))
 	}
 	norm, err := NormalizeActionArgs("service", "stream", map[string]string{
 		"name":    name,
@@ -207,11 +247,18 @@ func StreamService(name string, payloadJson string, listener StreamEventListener
 	}
 	svc := norm["service"]
 	payload := norm["payload"]
+	if err := validateServicePayloadObject(payload); err != nil {
+		return BindErrorJSON(err)
+	}
+	streamID := fmt.Sprintf("stream-%d", bindStreamSequence.Add(1))
+	streamCtx, cancel := context.WithCancel(context.Background())
+	activeBindStreams.Store(streamID, &activeBindStream{cancel: cancel})
 	dispatchUnixStreamOrLocal(
+		streamCtx,
 		detail.UnixAction,
 		norm,
-		func(s *server.Server, onChunk func(map[string]any)) error {
-			return s.LocalServiceStreamRun(svc, payload, onChunk)
+		func(ctx context.Context, s *server.Server, onChunk func(map[string]any) error) error {
+			return s.LocalServiceStreamRunContext(ctx, svc, payload, onChunk)
 		},
 		func(chunkJSON string) {
 			if listener != nil {
@@ -224,12 +271,30 @@ func StreamService(name string, payloadJson string, listener StreamEventListener
 			}
 		},
 		func() {
-			if listener != nil {
-				listener.OnComplete()
-			}
+			listener.OnComplete()
+		},
+		func() {
+			activeBindStreams.Delete(streamID)
+			cancel()
 		},
 	)
-	return `{"status": "streaming_started"}`
+	response, _ := json.Marshal(map[string]string{
+		"status":    "streaming_started",
+		"stream_id": streamID,
+	})
+	return string(response)
+}
+
+// CancelStream stops a StreamService operation by its returned stream_id.
+// The string-only signature remains compatible with gomobile bindings.
+func CancelStream(streamID string) string {
+	value, loaded := activeBindStreams.LoadAndDelete(streamID)
+	if !loaded {
+		return BindMessageJSON("Stream is not running.")
+	}
+	stream := value.(*activeBindStream)
+	stream.cancel()
+	return BindMessageJSON("Stream cancellation requested.")
 }
 
 // GetTaskStatus queries the status of a specific task.

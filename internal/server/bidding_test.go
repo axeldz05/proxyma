@@ -64,6 +64,11 @@ func TestServiceBidIncludesLiveResourceScore(t *testing.T) {
 	require.Equal(t, 0.75, bid.CPULoad)
 	require.Equal(t, 0.4, bid.MemPressure)
 	require.Greater(t, bid.CostUnits, bid.EstimatedMillis)
+	require.Equal(
+		t,
+		protocol.PipelineStateCapabilityVersion,
+		bid.Capabilities[protocol.CapabilityPipelineState],
+	)
 	require.Greater(t, bid.PowerScore, int64(0))
 
 	restore2 := compute.SetHostResourceSampler(func() (cpuLoad, memPressure float64) {
@@ -75,4 +80,12 @@ func TestServiceBidIncludesLiveResourceScore(t *testing.T) {
 	require.True(t, ok)
 	require.Less(t, bidLow.CostUnits, bid.CostUnits)
 	require.Less(t, bidLow.PowerScore, bid.PowerScore)
+
+	_, ok = sv.Compute.BuildServiceBid(protocol.DiscoveryQuery{
+		Service: "ocr",
+		RequiredCapabilities: map[string]int{
+			protocol.CapabilityPipelineState: protocol.PipelineStateCapabilityVersion + 1,
+		},
+	})
+	require.False(t, ok)
 }

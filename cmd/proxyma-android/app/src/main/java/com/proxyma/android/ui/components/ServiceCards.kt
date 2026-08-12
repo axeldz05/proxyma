@@ -88,11 +88,11 @@ fun TaskLogCardItem(
                     color = statusColor
                 )
             }
-            Spacer(modifier.height(6.dp))
+            Spacer(Modifier.height(6.dp))
             Text("Input: ${task.input}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
             Text("Output: ${task.output}", fontSize = 12.sp, color = Color.LightGray, maxLines = 1)
             if (task.status == "completed" && task.resultPath != null) {
-                Spacer(modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { onOpenResult(task.resultPath, task.output) },
                     colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
@@ -104,7 +104,7 @@ fun TaskLogCardItem(
                     Text("Open Result", fontSize = 12.sp, color = Color.White)
                 }
             } else if (task.status == "failed" && task.error != null) {
-                Spacer(modifier.height(6.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(task.error, fontSize = 11.sp, color = Color.Red, maxLines = 2)
             }
         }
@@ -174,7 +174,7 @@ fun ServiceCardItem(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.CloudQueue, contentDescription = "Compute", tint = VioletSecondary)
-                Spacer(modifier.width(12.dp))
+                Spacer(Modifier.width(12.dp))
                 Text(svcName, fontWeight = FontWeight.Bold, color = Color.White)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {

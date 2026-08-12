@@ -17,13 +17,13 @@ import com.proxyma.android.ProxymaService
 import com.proxyma.android.models.FormParameter
 import com.proxyma.android.ui.components.*
 import com.proxyma.android.utils.*
-import kotlin.concurrent.thread
 
 @Suppress("UNCHECKED_CAST")
 @Composable
 fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
     var generatedToken by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val title = (clusterDomain?.get("title") as? String) ?: "Pairing Controller"
     val actions = clusterDomain?.get("actions") as? List<Map<String, Any>>
@@ -53,11 +53,12 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                         parameters = emptyList(),
                         submitButtonText = actionTitle,
                         onSubmit = { _, onComplete ->
-                            executeGoSubmit(onComplete, {
-                                proxyma_bind.Proxyma_bind.generateInviteToken()
-                            }) { token ->
-                                generatedToken = token
-                            }
+                            executeGoSubmit(
+                                scope = scope,
+                                onComplete = onComplete,
+                                action = { proxyma_bind.Proxyma_bind.generateInviteToken() },
+                                onSuccess = { token -> generatedToken = token }
+                            )
                         }
                     )
 
@@ -92,14 +93,18 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                         parameters = formParams,
                         submitButtonText = "Pair with Cluster",
                         onSubmit = { inputs, onComplete ->
-                            executeGoSubmit(onComplete, {
-                                val storagePath = proxyma_bind.Proxyma_bind.getStoragePath()
-                                val token = inputs["token"]?.toString() ?: ""
-                                val nodeId = inputs["node_id"]?.toString() ?: ""
-                                val port = inputs["port"]?.toString()?.takeIf { it.isNotBlank() }
-                                    ?: formParams.firstOrNull { it.name == "port" }?.defaultValue.orEmpty()
-                                proxyma_bind.Proxyma_bind.joinCluster(storagePath, token, nodeId, port)
-                            })
+                            executeGoSubmit(
+                                scope = scope,
+                                onComplete = onComplete,
+                                action = {
+                                    val storagePath = proxyma_bind.Proxyma_bind.getStoragePath()
+                                    val token = inputs["token"]?.toString() ?: ""
+                                    val nodeId = inputs["node_id"]?.toString() ?: ""
+                                    val port = inputs["port"]?.toString()?.takeIf { it.isNotBlank() }
+                                        ?: formParams.firstOrNull { it.name == "port" }?.defaultValue.orEmpty()
+                                    proxyma_bind.Proxyma_bind.joinCluster(storagePath, token, nodeId, port)
+                                }
+                            )
                         }
                     )
                 }

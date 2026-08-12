@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +19,11 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
+
+const maxRelayJSONBytes = int64(2 * protocol.MaxRelayBodyBytes)
+const relayQueueSize = 10
+
+var errRelayResponseTooLarge = errors.New("relay response body exceeds limit")
 
 // relayCapExceeded reports whether size is over the relay body cap (L1).
 func relayCapExceeded(size int) bool {
@@ -39,12 +46,86 @@ func rejectOversizedRelay(w http.ResponseWriter, size int, what string) bool {
 	return true
 }
 
+// decodeRelayJSON bounds the encoded JSON envelope before decoding. The
+// envelope allowance covers base64 expansion of a maximum-size Body plus
+// ordinary request metadata.
+func decodeRelayJSON[T any](w http.ResponseWriter, r *http.Request, what string) (T, bool) {
+	var payload T
+	if r.ContentLength > maxRelayJSONBytes {
+		utils.RespondError(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("%s JSON exceeds %dKB encoded limit", what, maxRelayJSONBytes/1024))
+		return payload, false
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRelayJSONBytes)
+	err := json.NewDecoder(r.Body).Decode(&payload)
+	if err == nil {
+		return payload, true
+	}
+
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		utils.RespondError(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("%s JSON exceeds %dKB encoded limit", what, maxRelayJSONBytes/1024))
+	} else {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+	}
+	return payload, false
+}
+
+// cappedRelayResponseWriter stops local handlers while they write past the
+// relay cap, keeping the recorder itself bounded.
+type cappedRelayResponseWriter struct {
+	recorder *httptest.ResponseRecorder
+	written  int
+	exceeded bool
+}
+
+func newCappedRelayResponseWriter() *cappedRelayResponseWriter {
+	return &cappedRelayResponseWriter{recorder: httptest.NewRecorder()}
+}
+
+func (w *cappedRelayResponseWriter) Header() http.Header {
+	return w.recorder.Header()
+}
+
+func (w *cappedRelayResponseWriter) WriteHeader(statusCode int) {
+	w.recorder.WriteHeader(statusCode)
+}
+
+func (w *cappedRelayResponseWriter) Write(p []byte) (int, error) {
+	remaining := protocol.MaxRelayBodyBytes - w.written
+	if len(p) <= remaining {
+		n, err := w.recorder.Write(p)
+		w.written += n
+		return n, err
+	}
+
+	w.exceeded = true
+	if remaining == 0 {
+		return 0, errRelayResponseTooLarge
+	}
+	n, err := w.recorder.Write(p[:remaining])
+	w.written += n
+	if err != nil {
+		return n, err
+	}
+	return n, errRelayResponseTooLarge
+}
+
+// Flush preserves the interface exposed by httptest.ResponseRecorder.
+func (w *cappedRelayResponseWriter) Flush() {
+	w.recorder.Flush()
+}
+
 // RelayManager manages the relay communication queues and response waiters for tunneling HTTP requests.
 type RelayManager struct {
 	server  *Server
 	queues  map[string]chan protocol.RelayRequest
 	waiters map[string]*relayWaiter
 	mu      sync.RWMutex
+
+	workSlots chan struct{}
 }
 
 type relayWaiter struct {
@@ -55,10 +136,43 @@ type relayWaiter struct {
 // NewRelayManager creates a new RelayManager.
 func NewRelayManager(server *Server) *RelayManager {
 	return &RelayManager{
-		server:  server,
-		queues:  make(map[string]chan protocol.RelayRequest),
-		waiters: make(map[string]*relayWaiter),
+		server:    server,
+		queues:    make(map[string]chan protocol.RelayRequest),
+		waiters:   make(map[string]*relayWaiter),
+		workSlots: make(chan struct{}, relayQueueSize),
 	}
+}
+
+func (rm *RelayManager) lifetime() context.Context {
+	if rm.server != nil && rm.server.lifetimeCtx != nil {
+		return rm.server.lifetimeCtx
+	}
+	return context.Background()
+}
+
+func (rm *RelayManager) beginWork(ctx context.Context) (finish func(), ok bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case <-rm.lifetime().Done():
+		return nil, false
+	case rm.workSlots <- struct{}{}:
+	}
+
+	if rm.lifetime().Err() != nil {
+		<-rm.workSlots
+		return nil, false
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-rm.workSlots
+		})
+	}, true
 }
 
 // GetOrCreateQueue returns or initializes the request queue for a peer.
@@ -73,7 +187,7 @@ func (rm *RelayManager) GetOrCreateQueue(peerID string) (chan protocol.RelayRequ
 	defer rm.mu.Unlock()
 	queue, exists := rm.queues[peerID]
 	if !exists {
-		queue = make(chan protocol.RelayRequest, 10)
+		queue = make(chan protocol.RelayRequest, relayQueueSize)
 		rm.queues[peerID] = queue
 	}
 	return queue, nil
@@ -141,7 +255,7 @@ func (s *Server) HandleRelayPoll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.RelayRequest](w, r)
+	req, ok := decodeRelayJSON[protocol.RelayRequest](w, r, "Relay request")
 	if !ok {
 		return
 	}
@@ -205,7 +319,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
-	resp, ok := utils.DecodeJSONOrError[protocol.RelayResponse](w, r)
+	resp, ok := decodeRelayJSON[protocol.RelayResponse](w, r, "Relay response")
 	if !ok {
 		return
 	}
@@ -242,6 +356,15 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
+	lifetime := s.Relays.lifetime()
+	select {
+	case <-ctx.Done():
+		return
+	case <-lifetime.Done():
+		return
+	default:
+	}
+	s.peerClient.UpdateSponsorAddress(sponsorAddr)
 	s.Config.Logger.Info("Starting Relay Polling", "sponsor", sponsorAddr)
 
 	minInterval := time.Duration(s.Config.MinRelayPollInterval) * time.Second
@@ -259,6 +382,8 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-lifetime.Done():
+			return
 		default:
 		}
 
@@ -266,14 +391,23 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-lifetime.Done():
+				return
 			case <-time.After(currentSleep):
 			}
 		}
 
+		finishWork, ok := s.Relays.beginWork(ctx)
+		if !ok {
+			return
+		}
 		pollCtx, pollCancel := context.WithTimeout(ctx, PeerRPCRelayTick)
+		stopLifetimeCancel := context.AfterFunc(lifetime, pollCancel)
 		relayReq, err := s.peerClient.PollRelay(pollCtx, sponsorAddr, s.Config.ID)
+		stopLifetimeCancel()
 		pollCancel()
 		if err != nil {
+			finishWork()
 			s.Config.Logger.Debug("Relay poll failed, trying to failover", "error", err)
 
 			s.peerClient.CloseIdleConnections()
@@ -281,23 +415,33 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 			// Try to find another sponsor from GetSponsorPeers()
 			sponsors := s.GetSponsorPeers()
 			if len(sponsors) > 0 {
-				found := false
+				nextSponsor := ""
+				fallback := false
 				for id, addr := range sponsors {
 					if addr != sponsorAddr && s.IsPeerOnline(id) {
-						s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", addr)
-						sponsorAddr = addr
-						found = true
+						nextSponsor = addr
 						break
 					}
 				}
-				if !found {
+				if nextSponsor == "" {
 					for _, addr := range sponsors {
 						if addr != sponsorAddr {
-							s.Config.Logger.Info("Switching relay sponsor (fallback to offline/any)", "old", sponsorAddr, "new", addr)
-							sponsorAddr = addr
+							nextSponsor = addr
+							fallback = true
 							break
 						}
 					}
+				}
+				if nextSponsor != "" {
+					if fallback {
+						s.Config.Logger.Info("Switching relay sponsor (fallback to offline/any)", "old", sponsorAddr, "new", nextSponsor)
+					} else {
+						s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", nextSponsor)
+					}
+					// Keep outbound relay and hole-punch routing synchronized with
+					// the sponsor used by this polling loop.
+					s.peerClient.UpdateSponsorAddress(nextSponsor)
+					sponsorAddr = nextSponsor
 				}
 			}
 
@@ -305,12 +449,15 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-lifetime.Done():
+				return
 			case <-time.After(3 * time.Second):
 			}
 			continue
 		}
 
 		if relayReq.ReqID == "" {
+			finishWork()
 			// Timeout reached without messages (204 No Content)
 			// Increase sleep interval adaptively
 			if currentSleep == 0 {
@@ -328,15 +475,44 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 		currentSleep = 0
 
 		// Process the request asynchronously so we can keep polling
-		go s.processRelayRequest(sponsorAddr, relayReq)
+		requestSponsor, request := sponsorAddr, relayReq
+		if !s.goOwned(func() {
+			defer finishWork()
+			s.processRelayRequestContext(s.lifetimeCtx, requestSponsor, request)
+		}) {
+			finishWork()
+			return
+		}
 	}
 }
 
 func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.RelayRequest) {
+	s.processRelayRequestContext(context.Background(), sponsorAddr, relayReq)
+}
+
+func (s *Server) processRelayRequestContext(ctx context.Context, sponsorAddr string, relayReq protocol.RelayRequest) {
+	if relayCapExceeded(len(relayReq.Body)) {
+		s.sendRelayResponseContext(ctx, sponsorAddr, protocol.RelayResponse{
+			ReqID:      relayReq.ReqID,
+			StatusCode: http.StatusRequestEntityTooLarge,
+			Body:       []byte(fmt.Sprintf(`{"error":%q}`, relayCapMessage("relay payload"))),
+		})
+		return
+	}
+
 	// Reconstruct the HTTP request and pass it to our own local HTTP handler
 	// (Simulate an incoming HTTP request)
 	reqURL := fmt.Sprintf("http://127.0.0.1%s", relayReq.Path)
-	req, _ := http.NewRequest(relayReq.Method, reqURL, bytes.NewBuffer(relayReq.Body))
+	req, err := http.NewRequestWithContext(ctx, relayReq.Method, reqURL, bytes.NewBuffer(relayReq.Body))
+	if err != nil {
+		s.Config.Logger.Warn("Reject malformed relay request", "reqID", relayReq.ReqID, "error", err)
+		s.sendRelayResponseContext(ctx, sponsorAddr, protocol.RelayResponse{
+			ReqID:      relayReq.ReqID,
+			StatusCode: http.StatusBadRequest,
+			Body:       []byte(`{"error":"invalid relay request"}`),
+		})
+		return
+	}
 	for k, v := range relayReq.Headers {
 		req.Header.Set(k, v)
 	}
@@ -350,33 +526,35 @@ func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.Relay
 		}
 	}
 
-	w := httptest.NewRecorder()
+	w := newCappedRelayResponseWriter()
 	// Route it through our own cached mux
 	s.handler.ServeHTTP(w, req)
 
-	res := w.Result()
+	res := w.recorder.Result()
 	relayRes := protocol.RelayResponse{
 		ReqID:      relayReq.ReqID,
 		StatusCode: res.StatusCode,
 		Headers:    p2p.FlattenHTTPHeader(res.Header),
 	}
-	limited := io.LimitReader(res.Body, int64(protocol.MaxRelayBodyBytes)+1)
-	bodyBytes, _ := io.ReadAll(limited)
+	bodyBytes, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if relayCapExceeded(len(bodyBytes)) {
-		s.Config.Logger.Warn("Relay response body exceeds cap; truncating to error", "reqID", relayReq.ReqID, "size", len(bodyBytes))
+	if w.exceeded {
+		s.Config.Logger.Warn("Relay response body exceeds cap; replacing with error", "reqID", relayReq.ReqID)
 		relayRes.StatusCode = http.StatusRequestEntityTooLarge
 		relayRes.Body = []byte(fmt.Sprintf(`{"error":%q}`, relayCapMessage("relay response")))
 	} else {
 		relayRes.Body = bodyBytes
 	}
 
-	// Send reply back to Sponsor
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCSync)
+	s.sendRelayResponseContext(ctx, sponsorAddr, relayRes)
+}
+
+func (s *Server) sendRelayResponseContext(parent context.Context, sponsorAddr string, relayRes protocol.RelayResponse) {
+	ctx, cancel := context.WithTimeout(parent, PeerRPCSync)
 	defer cancel()
 
 	err := s.peerClient.ReplyRelay(ctx, sponsorAddr, relayRes)
 	if err != nil {
-		s.Config.Logger.Error("Failed to reply to relay", "err", err, "reqID", relayReq.ReqID)
+		s.Config.Logger.Error("Failed to reply to relay", "err", err, "reqID", relayRes.ReqID)
 	}
 }

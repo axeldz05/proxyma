@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"sync"
@@ -15,6 +18,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+type relayHTTPResult struct {
+	resp *http.Response
+	err  error
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += n
+	return n, err
+}
 
 func TestRelayLongPollingIntegration(t *testing.T) {
 	t.Parallel()
@@ -44,13 +63,11 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	defer pollCancel()
 	pollReq = pollReq.WithContext(pollCtx)
 
-	pollResultCh := make(chan *http.Response)
+	pollResultCh := make(chan relayHTTPResult, 1)
 	go func() {
-		resp, _ := targetClient.Do(pollReq)
-		pollResultCh <- resp
+		resp, err := targetClient.Do(pollReq)
+		pollResultCh <- relayHTTPResult{resp: resp, err: err}
 	}()
-
-	time.Sleep(100 * time.Millisecond) // Let the poll arrive
 
 	// 3. Send a forward request from "sender-node" destined to "target-node"
 	relayReq := protocol.RelayRequest{
@@ -66,14 +83,21 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	fwdReq, _ := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathRelayForward, bytes.NewBuffer(bodyBytes))
 	fwdReq.Header.Set("Content-Type", "application/json")
 
-	fwdResultCh := make(chan *http.Response)
+	fwdResultCh := make(chan relayHTTPResult, 1)
 	go func() {
-		resp, _ := sponsor.Client().Do(fwdReq)
-		fwdResultCh <- resp
+		resp, err := sponsor.Client().Do(fwdReq)
+		fwdResultCh <- relayHTTPResult{resp: resp, err: err}
 	}()
 
 	// 4. target-node's poll should complete and receive the request
-	pollResp := <-pollResultCh
+	var pollResult relayHTTPResult
+	select {
+	case pollResult = <-pollResultCh:
+	case <-pollCtx.Done():
+		t.Fatal("timeout waiting for target relay poll")
+	}
+	require.NoError(t, pollResult.err)
+	pollResp := pollResult.resp
 	require.NotNil(t, pollResp)
 	require.Equal(t, http.StatusOK, pollResp.StatusCode)
 
@@ -101,7 +125,14 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 	_ = replyResp.Body.Close()
 
 	// 6. sender-node's forward request should complete with the response
-	fwdResp := <-fwdResultCh
+	var fwdResult relayHTTPResult
+	select {
+	case fwdResult = <-fwdResultCh:
+	case <-pollCtx.Done():
+		t.Fatal("timeout waiting for relay forward response")
+	}
+	require.NoError(t, fwdResult.err)
+	fwdResp := fwdResult.resp
 	require.NotNil(t, fwdResp)
 	require.Equal(t, http.StatusOK, fwdResp.StatusCode)
 
@@ -116,33 +147,71 @@ func TestRelayLongPollingIntegration(t *testing.T) {
 func TestAdaptiveRelayPollingAndFailover(t *testing.T) {
 	t.Parallel()
 
-	sponsorCh := make(chan string, 10)
-	pollCount := 0
-
-	mockClient := &testutil.MockPeerClient{
-		OnPollRelay: func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
-			pollCount++
-			sponsorCh <- sponsorAddr
-			if sponsorAddr == "https://first-sponsor:8443" && pollCount == 1 {
-				// Fail the first poll to trigger failover
-				return protocol.RelayRequest{}, fmt.Errorf("connection failed")
+	firstPoll := make(chan struct{}, 1)
+	firstSponsor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case protocol.PathRelayPoll:
+			select {
+			case firstPoll <- struct{}{}:
+			default:
 			}
-			// Otherwise return empty response (timeout / 204 No Content)
-			return protocol.RelayRequest{}, nil
-		},
-	}
+			http.Error(w, "poll failed", http.StatusBadGateway)
+		case protocol.PathRelayForward:
+			http.Error(w, "relay failed", http.StatusBadGateway)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(firstSponsor.Close)
+
+	secondForward := make(chan protocol.RelayRequest, 1)
+	handlerErr := make(chan error, 1)
+	secondSponsor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case protocol.PathRelayPoll:
+			w.WriteHeader(http.StatusNoContent)
+		case protocol.PathRelayForward:
+			var req protocol.RelayRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			select {
+			case secondForward <- req:
+			default:
+			}
+			if err := json.NewEncoder(w).Encode(protocol.RelayResponse{
+				ReqID:      req.ReqID,
+				StatusCode: http.StatusOK,
+				Body:       []byte(`{}`),
+			}); err != nil {
+				select {
+				case handlerErr <- err:
+				default:
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(secondSponsor.Close)
 
 	cfg := testutil.DefaultConfig(t, "adaptive-client")
-	srv := NewServer(t, cfg, mockClient)
+	cfg.BootstrapNode = firstSponsor.URL
+	peerClient := p2p.NewHTTPPeerClient(http.DefaultTransport, firstSponsor.URL, cfg.Logger)
+	srv := NewServer(t, cfg, peerClient)
 
-	// Register two sponsors in the registry
+	srv.AddPeer("target", protocol.AddressRecord{
+		Addresses: []string{"http://127.0.0.1:0"},
+		Sequence:  1,
+	})
 	srv.AddPeer("sponsor1", protocol.AddressRecord{
-		Addresses: []string{"https://first-sponsor:8443"},
+		Addresses: []string{firstSponsor.URL},
 		Sequence:  1,
 		IsSponsor: true,
 	})
 	srv.AddPeer("sponsor2", protocol.AddressRecord{
-		Addresses: []string{"https://second-sponsor:8443"},
+		Addresses: []string{secondSponsor.URL},
 		Sequence:  1,
 		IsSponsor: true,
 	})
@@ -151,24 +220,127 @@ func TestAdaptiveRelayPollingAndFailover(t *testing.T) {
 	srv.SetPeerOnline("sponsor2", true)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
+	pollingDone := make(chan struct{})
+	go func() {
+		defer close(pollingDone)
+		srv.StartRelayPolling(ctx, firstSponsor.URL)
+	}()
 
-	// Start the relay polling in a goroutine
-	go srv.StartRelayPolling(ctx, "https://first-sponsor:8443")
-
-	// Verify we switch to the second sponsor after the first one fails
 	select {
-	case firstSponsor := <-sponsorCh:
-		require.Equal(t, "https://first-sponsor:8443", firstSponsor)
+	case <-firstPoll:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Timeout waiting for first poll")
+		cancel()
+		t.Fatal("timeout waiting for first sponsor poll")
 	}
 
+	require.Eventually(t, func() bool {
+		callCtx, callCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer callCancel()
+		_, err := srv.PeerClient().FetchManifest(callCtx, "target")
+		return err == nil
+	}, 2*time.Second, 20*time.Millisecond,
+		"outbound relay routing must follow the polling failover sponsor")
+
 	select {
-	case secondSponsor := <-sponsorCh:
-		require.Equal(t, "https://second-sponsor:8443", secondSponsor)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for failover poll to second sponsor")
+	case req := <-secondForward:
+		require.Equal(t, "target", req.Target)
+		require.Equal(t, protocol.PathManifest, req.Path)
+	case err := <-handlerErr:
+		t.Fatalf("failover sponsor response failed: %v", err)
+	default:
+		t.Fatal("successful outbound relay did not reach the failover sponsor")
+	}
+
+	cancel()
+	select {
+	case <-pollingDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay polling did not stop after cancellation")
+	}
+}
+
+func TestRelayPollingPublishesInitialSponsorToRouter(t *testing.T) {
+	t.Parallel()
+
+	staleSponsor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "stale sponsor", http.StatusBadGateway)
+	}))
+	t.Cleanup(staleSponsor.Close)
+
+	polled := make(chan struct{}, 1)
+	forwarded := make(chan protocol.RelayRequest, 1)
+	handlerErr := make(chan error, 1)
+	activeSponsor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case protocol.PathRelayPoll:
+			select {
+			case polled <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case protocol.PathRelayForward:
+			var req protocol.RelayRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			forwarded <- req
+			if err := json.NewEncoder(w).Encode(protocol.RelayResponse{
+				ReqID:      req.ReqID,
+				StatusCode: http.StatusOK,
+				Body:       []byte(`{}`),
+			}); err != nil {
+				handlerErr <- err
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(activeSponsor.Close)
+
+	cfg := testutil.DefaultConfig(t, "initial-sponsor-client")
+	cfg.BootstrapNode = staleSponsor.URL
+	peerClient := p2p.NewHTTPPeerClient(http.DefaultTransport, staleSponsor.URL, cfg.Logger)
+	srv := NewServer(t, cfg, peerClient)
+	srv.AddPeer("target", protocol.AddressRecord{
+		Addresses: []string{"http://127.0.0.1:0"},
+		Sequence:  1,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	pollingDone := make(chan struct{})
+	go func() {
+		defer close(pollingDone)
+		srv.StartRelayPolling(ctx, activeSponsor.URL)
+	}()
+
+	select {
+	case <-polled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for initial sponsor poll")
+	}
+
+	callCtx, callCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer callCancel()
+	_, err := srv.PeerClient().FetchManifest(callCtx, "target")
+	require.NoError(t, err, "outbound router must use StartRelayPolling's initial sponsor")
+
+	select {
+	case req := <-forwarded:
+		require.Equal(t, "target", req.Target)
+	case err := <-handlerErr:
+		t.Fatalf("active sponsor response failed: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial sponsor did not receive outbound relay")
+	}
+
+	cancel()
+	select {
+	case <-pollingDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay polling did not stop")
 	}
 }
 
@@ -202,9 +374,12 @@ func TestRelayResponseEnforcesSizeCap(t *testing.T) {
 		},
 	}
 	sv2 := NewServer(t, testutil.DefaultConfig(t, "relay-cap-proc"), mock)
+	var handlerWritten int
+	var handlerWriteErr error
 	sv2.SetHTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(bytes.Repeat([]byte("X"), protocol.MaxRelayBodyBytes+512))
+		w.Header().Set("X-Relay-Header", "preserved")
+		w.WriteHeader(http.StatusCreated)
+		handlerWritten, handlerWriteErr = w.Write(bytes.Repeat([]byte("X"), protocol.MaxRelayBodyBytes*4))
 	}))
 	sv2.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
 		ReqID:        "cap-proc",
@@ -214,8 +389,111 @@ func TestRelayResponseEnforcesSizeCap(t *testing.T) {
 	})
 	mu.Lock()
 	defer mu.Unlock()
+	require.Error(t, handlerWriteErr, "the local handler must be stopped while writing past the cap")
+	require.LessOrEqual(t, handlerWritten, protocol.MaxRelayBodyBytes)
 	require.Equal(t, http.StatusRequestEntityTooLarge, got.StatusCode)
+	require.Equal(t, "preserved", got.Headers["X-Relay-Header"])
 	require.LessOrEqual(t, len(got.Body), protocol.MaxRelayBodyBytes)
+}
+
+func TestRelayForwardBoundsOversizedJSONBeforeDecode(t *testing.T) {
+	t.Parallel()
+
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-request-read-cap"), nil)
+	payload, err := json.Marshal(protocol.RelayRequest{
+		ReqID:  "oversized-request",
+		Target: sv.Config.ID,
+		Method: http.MethodPost,
+		Path:   protocol.PathClusterJoin,
+		Body:   bytes.Repeat([]byte("X"), protocol.MaxRelayBodyBytes*8),
+	})
+	require.NoError(t, err)
+
+	source := &countingReader{r: bytes.NewReader(payload)}
+	req := httptest.NewRequest(http.MethodPost, protocol.PathRelayForward, source)
+	rec := httptest.NewRecorder()
+
+	sv.HandleRelayForward(rec, req)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	require.LessOrEqual(t, source.n, 2*protocol.MaxRelayBodyBytes+1,
+		"relay JSON decoding must stop at a bounded envelope size")
+}
+
+func TestProcessRelayRequestRejectsMalformedConstruction(t *testing.T) {
+	t.Parallel()
+
+	var replies []protocol.RelayResponse
+	mock := &testutil.MockPeerClient{
+		OnReplyRelay: func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
+			replies = append(replies, resp)
+			return nil
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-malformed"), mock)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{
+			name:   "malformed method on anonymous join",
+			method: "POST invalid",
+			path:   protocol.PathClusterJoin,
+		},
+		{
+			name:   "malformed request URL",
+			method: http.MethodPost,
+			path:   "/invalid/%zz",
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				sv.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
+					ReqID:  fmt.Sprintf("malformed-%d", i),
+					Method: tt.method,
+					Path:   tt.path,
+				})
+			})
+			require.Len(t, replies, i+1)
+			require.Equal(t, http.StatusBadRequest, replies[i].StatusCode)
+			require.Equal(t, fmt.Sprintf("malformed-%d", i), replies[i].ReqID)
+			require.Contains(t, string(replies[i].Body), "invalid relay request")
+		})
+	}
+}
+
+func TestProcessRelayResponsePreservesStatusAndHeaders(t *testing.T) {
+	t.Parallel()
+
+	var got protocol.RelayResponse
+	mock := &testutil.MockPeerClient{
+		OnReplyRelay: func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error {
+			got = resp
+			return nil
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-response-metadata"), mock)
+	var handlerErr error
+	sv.SetHTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Relay-Header", "value")
+		w.WriteHeader(http.StatusCreated)
+		_, handlerErr = w.Write([]byte("created"))
+	}))
+
+	sv.ProcessRelayRequest("https://sponsor.invalid", protocol.RelayRequest{
+		ReqID:        "metadata",
+		Method:       http.MethodGet,
+		Path:         "/metadata",
+		OriginPeerID: "alice",
+	})
+
+	require.NoError(t, handlerErr)
+	require.Equal(t, http.StatusCreated, got.StatusCode)
+	require.Equal(t, "value", got.Headers["X-Relay-Header"])
+	require.Equal(t, "created", string(got.Body))
 }
 
 func TestRelayedRequestPreservesOriginIdentity(t *testing.T) {

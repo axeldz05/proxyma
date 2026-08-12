@@ -27,7 +27,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 		return bid, nil
 	})
 	for _, bid := range peerBids {
-		if bid.CanAccept {
+		if bid.CanAccept && protocol.SupportsCapabilities(bid.Capabilities, query.RequiredCapabilities) {
 			bids = append(bids, bid)
 		}
 	}
@@ -72,9 +72,12 @@ func bidStrategyScore(bid protocol.ServiceBid, strategy string) int64 {
 	}
 }
 
-func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func() error) error {
+func (s *Server) submitTrackedTask(req protocol.TaskRequest, submit func(protocol.TaskRequest) error) error {
+	if err := s.Compute.PreparePipelineTargets(&req); err != nil {
+		return fmt.Errorf("prepare pipeline targets: %w", err)
+	}
 	s.Compute.RegisterOutgoingTask(req)
-	if err := submit(); err != nil {
+	if err := submit(req); err != nil {
 		s.Compute.MarkTaskAsFailed(req, err.Error())
 		return err
 	}
@@ -85,22 +88,60 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 	if req.RequesterNodeID == "" {
 		req.RequesterNodeID = s.Config.ID
 	}
+	req.ExpectedProducerNodeID = targetPeerID
+	if err := s.Compute.BindPipelineTask(&req); err != nil {
+		return fmt.Errorf("bind pipeline task: %w", err)
+	}
+	if err := s.Compute.BindPipelineStepTarget(&req, targetPeerID); err != nil {
+		return fmt.Errorf("bind pipeline step target: %w", err)
+	}
 	if err := s.Storage.StageAndRewrite(req.Payload, false); err != nil {
 		return fmt.Errorf("stage payload for dispatch: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
 	defer cancel()
+	if req.PipelineState != nil && req.PipelineState.CurrentStep > 0 {
+		schema, exists := s.Compute.GetPipeline(req.Service)
+		if !exists || req.PipelineState.CurrentStep >= len(schema.Steps) {
+			return fmt.Errorf("cannot validate pipeline continuation capability for step %d", req.PipelineState.CurrentStep)
+		}
+		query := protocol.DiscoveryQuery{
+			Service: schema.Steps[req.PipelineState.CurrentStep].Service,
+			RequiredCapabilities: map[string]int{
+				protocol.CapabilityPipelineState: protocol.PipelineStateCapabilityVersion,
+			},
+		}
+		bid, err := s.peerClient.FetchServiceBid(ctx, targetPeerID, query)
+		if err != nil {
+			return fmt.Errorf("verify pipeline continuation capability: %w", err)
+		}
+		if !bid.CanAccept || !protocol.SupportsCapabilities(bid.Capabilities, query.RequiredCapabilities) {
+			return fmt.Errorf(
+				"peer %q does not support pipeline state capability v%d",
+				targetPeerID,
+				protocol.PipelineStateCapabilityVersion,
+			)
+		}
+		// Capability claims are trusted only because callbacks and dispatch are
+		// restricted to enrolled mTLS peers; this is not cryptographic provenance.
+	}
 
-	return s.submitTrackedTask(req, func() error {
+	submit := func(prepared protocol.TaskRequest) error {
 		return s.callPeer(ctx, targetPeerID, func(ctx context.Context, peerID string) error {
-			return s.peerClient.SubmitTask(ctx, peerID, req)
+			return s.peerClient.SubmitTask(ctx, peerID, prepared)
 		})
-	})
+	}
+	if req.RequesterNodeID != s.Config.ID {
+		return submit(req)
+	}
+	return s.submitTrackedTask(req, submit)
 }
 
 func (s *Server) ensureQUICSession(peerID string) {
-	if s.quicMgr == nil {
+	natState := s.CurrentNATState()
+	qm := natState.QUICManager
+	if qm == nil {
 		return
 	}
 	record, ok := s.Peers.GetPeerRecord(peerID)
@@ -110,13 +151,13 @@ func (s *Server) ensureQUICSession(peerID string) {
 	if _, ok := p2p.FirstQUICAddr(record.Addresses); !ok {
 		return
 	}
-	if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
+	if _, sessionExists := qm.GetSession(peerID); sessionExists {
 		return
 	}
 
 	s.peerClient.UpdatePeerRoute(peerID, record)
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), PeerRPCQUICWait)
+	waitCtx, waitCancel := context.WithTimeout(s.lifetimeCtx, PeerRPCQUICWait)
 	defer waitCancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -125,7 +166,7 @@ func (s *Server) ensureQUICSession(peerID string) {
 		case <-waitCtx.Done():
 			return
 		case <-ticker.C:
-			if _, sessionExists := s.quicMgr.GetSession(peerID); sessionExists {
+			if _, sessionExists := qm.GetSession(peerID); sessionExists {
 				return
 			}
 		}

@@ -44,7 +44,7 @@ func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
 		appleSrv.ClientTLSConfig(), appleSrv.ServerTLSConfig(),
 		appleSrv.MountHandlers(), appleCfg.Logger,
 	)
-	appleQM.PublicUDPAddr = appleUDP.LocalAddr().String()
+	appleQM.SetPublicUDPAddr(appleUDP.LocalAddr().String())
 	require.NoError(t, appleQM.StartListener())
 	t.Cleanup(appleQM.Close)
 	appleSrv.AttachQUICManager(appleQM)
@@ -54,7 +54,7 @@ func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
 		zebraSrv.ClientTLSConfig(), zebraSrv.ServerTLSConfig(),
 		zebraSrv.MountHandlers(), zebraCfg.Logger,
 	)
-	zebraQM.PublicUDPAddr = zebraUDP.LocalAddr().String()
+	zebraQM.SetPublicUDPAddr(zebraUDP.LocalAddr().String())
 	require.NoError(t, zebraQM.StartListener())
 	t.Cleanup(zebraQM.Close)
 	zebraSrv.AttachQUICManager(zebraQM)
@@ -89,7 +89,7 @@ func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	sess, err := zebraQM.InitiateHolePunch(ctx, "apple", []string{p2p.FormatQUICAddr(appleQM.PublicUDPAddr)}, sendRelayReq)
+	sess, err := zebraQM.InitiateHolePunch(ctx, "apple", []string{p2p.FormatQUICAddr(appleQM.PublicUDPAddress())}, sendRelayReq)
 	require.NoError(t, err, "higher-ID initiator must establish session (apple dials)")
 	require.NotNil(t, sess)
 

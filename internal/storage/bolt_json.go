@@ -23,7 +23,7 @@ func boltGetJSON[T any](tx *bbolt.Tx, bucket, key string) (T, bool, error) {
 	var zero T
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
-		return zero, false, nil
+		return zero, false, fmt.Errorf("%s bucket not found", bucket)
 	}
 	data := b.Get([]byte(key))
 	if data == nil {
@@ -52,9 +52,12 @@ func boltPutFlag(tx *bbolt.Tx, bucket, key string) error {
 	return b.Put([]byte(key), []byte("true"))
 }
 
-func boltHasKey(tx *bbolt.Tx, bucket, key string) bool {
+func boltHasKey(tx *bbolt.Tx, bucket, key string) (bool, error) {
 	b := tx.Bucket([]byte(bucket))
-	return b != nil && b.Get([]byte(key)) != nil
+	if b == nil {
+		return false, fmt.Errorf("%s bucket not found", bucket)
+	}
+	return b.Get([]byte(key)) != nil, nil
 }
 
 func boltLoadMapJSON[T any](db *bbolt.DB, bucket string) (map[string]T, error) {
@@ -62,7 +65,7 @@ func boltLoadMapJSON[T any](db *bbolt.DB, bucket string) (map[string]T, error) {
 	err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucket))
 		if b == nil {
-			return nil
+			return fmt.Errorf("%s bucket not found", bucket)
 		}
 		return b.ForEach(func(k, v []byte) error {
 			var item T

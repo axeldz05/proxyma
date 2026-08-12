@@ -47,6 +47,24 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ---
 
+## Remediation Contracts (Current)
+
+* **Server lifetime**: `Ready`/`IsReady` mean both Unix and TCP listeners are bound. Server-owned goroutines and in-process calls join the shutdown barrier through `goOwned` / `AcquireWorkLease`; HTTP and Unix work is tracked too. Shutdown stops admission, cancels `lifetimeCtx`, closes listeners/connections, joins NAT/listener/work/download/compute/router/QUIC/storage owners, and only then closes `ShutdownDone`.
+* **Compute lifetime**: construct with `compute.NewComputeEngine(parentCtx, ...)`. Its private `lifetimeCtx` / `cancelLifetime` own workers and derived RPC/handler timeouts; parent cancellation closes the engine. Request contexts still travel as method arguments—never store a request context on `ComputeEngine`.
+* **NAT / QUIC / router**: access published NAT state through `CurrentNATState` / `natMu`; schedule and join setup with `beginNATWork` / `stopNATWork`. `NATMapper.Start` / `WaitReady` / `Stop` is one synchronized lifetime. Router prewarms are cancellation- and generation-bound; route removal blocks late QUIC sessions, and `PeerClient.Close` joins router work.
+* **Relay**: queue capacity and `RelayManager.workSlots` bound pending and active work. Decode through `decodeRelayJSON`; enforce `MaxRelayBodyBytes` on requests and the capped response writer. Poll/request work must remain server-owned and lifetime-cancelable.
+* **Durable mutation ordering**: outbox v2 uses separate entry/generation/reservation buckets. `notifyWithOutbox` stages a generation before send and compare-deletes only the acknowledged bytes; `prepareOutboxMutation` stages gossip before VFS/pipeline commit and reconciles on commit/rollback. Legacy migration moves only structurally recognized metadata. Download work (`download_intents`) and orphan cleanup (`pending_blob_gc`) are durable intents reconciled after restart.
+* **Storage integrity / manifests**: server paths use error-preserving APIs (`GetFileMetaE`, `IsSubscribedE`, `HasServiceSubscriptionsE`, `IsServiceSubscribedE`, `ProcessRemoteManifestE`). Manifest reconciliation processes every entry in deterministic name order, preserves successful decisions, aggregates per-entry errors, and `ProcessRemoteManifestFromSource` still stages durable intents for every successful missing entry. VFS ordering is total: version, tombstone, hash, size, name. Blob writes stage/verify outside the metadata lock, then commit; remote content is accepted only when SHA-256 and the current name/version/hash/live tuple match.
+* **`services.json`**: use compute Load/Save/Upsert/Delete helpers only. They combine a canonical-path in-process RW lock, Linux/Android advisory `flock`, and atomic `utils.WriteJSONFile` (temp + fsync + rename + parent fsync).
+* **Pipelines / tasks**: `PipelineSchema.Version`, `Deleted`, `PipelineSchemaHash`, `ValidatePipelineRevision`, and `ApplyPipelineRevision` define revision/tombstone integrity. `PipelineExecutionState` is engine-owned and binds ID/version/hash/current step/outputs/producers plus pinned `selected_targets`; continuations require `CapabilityPipelineState` **v2**. Authenticated producer/delegate checks guard callbacks. Task status transitions are `pending` → `ingesting` when output import is required → `completed`, or `failed`; terminal states do not regress and retention is bounded.
+* **Streams**: HTTP peers and Unix clients explicitly negotiate legacy or v1 framing. Legacy carries raw object chunks and ends successfully at EOF; v1 uses `ServiceStreamFrame` / versioned `UnixResponse` chunk/error/complete frames and requires a terminal frame. Never guess control records or accept mixed legacy/v1 framing. Cancellation propagates from bind `CancelStream` through contexts, and every NDJSON path uses `utils.MaxNDJSONFrameBytes`.
+* **Bind runtime**: the singleton node runtime is guarded by `srvMutex`; `StartNode` publishes it only after `Server.Ready`, `IsNodeRunning` requires readiness, and `StopNodeWithError` waits for finalization while leaving timed-out state marked stopping. Join installation is a journaled stage/backup/swap transaction recovered before start. Capture one `canonicalStoragePath` per operation, and normalize Unix unavailability separately from daemon/application errors so offline fallback cannot mask a live daemon failure.
+* **gomobile / Android**: keep exported gomobile signatures stable. Hermetic `make test-android` builds one temporary fresh AAR, verifies Java signatures, isolates Android user state, and passes that exact AAR to Kotlin unit tests, lint, and assemble; the dedicated CI Android job provisions pinned Go/Java/SDK/NDK/Gradle inputs and runs this target. Android builds intentionally return unsupported for WebRTC service/signaling (`*_android.go` build tags); Pion helpers exist only on `!android`. Compose work belongs to `ViewModel`/`viewModelScope`, cancellable streams own a `StreamLease`, `ProxymaService` owns daemon start/stop, and UI binding state must unbind on Activity destruction.
+* **Accepted trust/network limits**: enrolled mTLS peers and explicitly selected pipeline delegates are trusted; capability/provenance fields are authorization metadata, not cryptographic proofs. Mixed-version distributed pipeline continuations are rejected unless the peer supports pipeline-state v2. There is no TURN fallback, and UPnP/NAT-PMP mapping is IPv4-only.
+* **Race gate**: H1 (live TLS mutation) and H2 (NAT-after-shutdown) are closed. A full `go test -race ./...` / `make test-race` is required; do not preserve a “known race failure” exemption.
+
+---
+
 ## Repository Map (Current)
 
 ### CLI — `cmd/proxyma/`
@@ -64,7 +82,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `GetServiceSchema` offline arm; `resolveServiceSchema` / `GetServiceDetails`; `RunPipeline` → `RunService`.
 
 ### Server — `internal/server/`
-* `server.go` lifecycle (`Shutdown` always closes Compute/WebRTC/QUIC/unix/Storage even if HTTP Shutdown fails; VFS resolver errors if blob still missing); `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
+* `server.go` lifecycle (`Ready`, `goOwned`, `AcquireWorkLease`, `ShutdownDone`; shutdown joins every owner even if HTTP shutdown fails); `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
 * `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction` + **`requireUnixArgs`**; `unix_listener.go` accept loop only.
 * `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`. **`routeIndex`** memoizes policy with `sync.Once` (policy only, never handlers); subtree paths keep the default.
 * `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not. **`AddPeer` → `(updated, evicted)`**; equal-seq merge keeps `Addresses[0]`.
@@ -100,7 +118,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
-* Android-as-interpreter (when UI returns): `VisibleRegistry` + **`InvokeDomainAction`** + `ProjectRows`; typed JNI wrappers optional; no hardcoded admin `domain.action` screens. Trust bind `uiHint`.
+* Android registry interpreter: `VisibleRegistry` + **`InvokeDomainAction`** + `ProjectRows`; typed JNI wrappers optional; no hardcoded admin `domain.action` screens. Trust bind `uiHint`.
 
 ### Examples — `services-examples/`
 * Lab services: `sensor.telemetry` (server_stream), `music.resolve`/`convert`/`stream`, `remote.screen`/`input`, `media.resize`/`watermark`, `clipboard.sync`, `shell.attach`.
@@ -127,7 +145,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Result path | `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` |
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
 | Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
-| Notify outbox | `notifyWithOutbox` (L2) / `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (Bolt `notify_outbox`) |
+| Notify outbox | `notifyWithOutbox` / `prepareOutboxMutation` / `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (v2 entries + generations + reservations; legacy reconciled) |
 | Endpoint + auth policy | `httpRoutes` / `routeIndex` / `routeAuth` / `relayAllowsAnonymous` |
 | Per-peer state | `peerState` in `registry.go` (one lock; `hasRecord` = registered) |
 | Validation error wording | `protocol.ParamTypeError` / `ParamOptionError` / `MissingParamError` / `ErrEmptyPipelineID` |
@@ -157,7 +175,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Default TCP port | `protocol.DefaultTCPPort` |
 | Unix sock path | `protocol.SockFileName` / `UnixSockPath` |
 | Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` |
-| Bolt bucket names | `storage` `allBuckets` / `bucket*` / `vfsIndexBucket` |
+| Bolt bucket names | `storage` `allBuckets` / `bucket*` / `vfsIndexBucket` (outbox v2, download intents, pending GC included) |
 | Admin UI actions | `uischema.Registry` / `UnixAction` / `FindAction` / `VisibleRegistry` / `SuccessMessage` |
 | Unix/CLI dispatch | `server.CallUnixUnary` / `InvokeDomainAction` / `InvokeDomainActionPrepared` / `offlineHooks` / `cliEscapes` |
 | Unix IPC | Dial/Write/Read/Scan + `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal` |

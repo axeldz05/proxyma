@@ -7,8 +7,11 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
+	"sync"
 	"time"
 )
+
+const shutdownOfflineTimeout = 100 * time.Millisecond
 
 func (s *Server) SetPeerOnline(peerID string, online bool) {
 	s.Peers.SetPeerOnline(peerID, online)
@@ -31,10 +34,24 @@ func (s *Server) RemovePeer(peerID string) {
 }
 
 func (s *Server) announceOffline(ctx context.Context) {
+	if s.peerClient == nil {
+		return
+	}
 	payload := protocol.PeerIDRequest{ID: s.Config.ID}
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
-		return s.peerClient.Offline(ctx, peerID, payload)
-	})
+	var wg sync.WaitGroup
+	for peerID := range s.GetPeersCopy() {
+		if peerID == s.Config.ID {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			callCtx, cancel := context.WithTimeout(ctx, shutdownOfflineTimeout)
+			defer cancel()
+			_ = s.peerClient.Offline(callCtx, peerID, payload)
+		}()
+	}
+	wg.Wait()
 }
 
 func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSchema {
@@ -44,6 +61,9 @@ func (s *Server) GetClusterServices(peerID string) map[string]protocol.ServiceSc
 func (s *Server) SetAddress(addr string) {
 	s.Config.Address = addr
 	s.Compute.SetAddress(addr)
+	if s.peerClient != nil {
+		s.peerClient.SetOwnAddress(addr)
+	}
 }
 
 func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
@@ -65,7 +85,7 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 		if s.peerClient != nil {
 			s.peerClient.UpdatePeerRoute(peerID, addressRecord)
 		}
-		go s.syncCatalogToPeer(peerID)
+		s.goOwned(func() { s.syncCatalogToPeer(peerID) })
 	}
 }
 
@@ -77,27 +97,33 @@ func (s *Server) GetSponsorPeers() map[string]string {
 	return s.Peers.GetSponsorPeers()
 }
 
-func (s *Server) AnnouncePresence(sponsorAddress string) error {
-	s.CheckNAT()
-	tcpPortStr := s.advertisedTCPPort()
+func (s *Server) buildPresenceAddresses(tcpPortStr string, natState NATState, localIPs []net.IP) []string {
 	addresses := []string{s.Config.Address}
 	seen := map[string]bool{s.Config.Address: true}
-	// LAN/container IPs as fallbacks when node-ID DNS is unavailable (bare metal).
-	if ips, err := utils.GetLocalIPs(); err == nil {
-		for _, ip := range ips {
-			if ip.To4() == nil || ip.IsLoopback() {
-				continue
-			}
-			addr := protocol.HTTPSAddr(ip.String(), tcpPortStr)
-			if !seen[addr] {
-				addresses = append(addresses, addr)
-				seen[addr] = true
-			}
+	families := s.currentTCPFamilies()
+	for _, ip := range localIPs {
+		if ip == nil || !ip.IsGlobalUnicast() {
+			continue
+		}
+		if ip.To4() != nil && families&tcpFamilyIPv4 == 0 {
+			continue
+		}
+		if ip.To4() == nil && families&tcpFamilyIPv6 == 0 {
+			continue
+		}
+		addr := protocol.HTTPSAddr(ip.String(), tcpPortStr)
+		if !seen[addr] {
+			addresses = append(addresses, addr)
+			seen[addr] = true
 		}
 	}
-	if s.isSponsor && s.publicUDPAddr != "" {
-		host, _, err := net.SplitHostPort(s.publicUDPAddr)
-		if err == nil {
+	if natState.IsSponsor && natState.PublicUDPAddr != "" {
+		host, _, err := net.SplitHostPort(natState.PublicUDPAddr)
+		publicIP := net.ParseIP(host)
+		familySupported := publicIP == nil ||
+			(publicIP.To4() != nil && families&tcpFamilyIPv4 != 0) ||
+			(publicIP.To4() == nil && families&tcpFamilyIPv6 != 0)
+		if err == nil && familySupported {
 			publicTCPAddr := protocol.HTTPSAddr(host, tcpPortStr)
 			if !seen[publicTCPAddr] {
 				addresses = append(addresses, publicTCPAddr)
@@ -105,14 +131,27 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 			}
 		}
 	}
-	if s.publicUDPAddr != "" {
-		addresses = append(addresses, p2p.FormatQUICAddr(s.publicUDPAddr))
+	if natState.PublicUDPAddr != "" {
+		addresses = append(addresses, p2p.FormatQUICAddr(natState.PublicUDPAddr))
 	}
+	return addresses
+}
+
+func (s *Server) AnnouncePresence(sponsorAddress string) error {
+	s.CheckNAT()
+	tcpPortStr := s.advertisedTCPPort()
+	natState := s.CurrentNATState()
+	var localIPs []net.IP
+	// Routable IPv4 and IPv6 interfaces are fallbacks when node-ID DNS is unavailable.
+	if ips, err := utils.GetRoutableLocalIPs(); err == nil {
+		localIPs = ips
+	}
+	addresses := s.buildPresenceAddresses(tcpPortStr, natState, localIPs)
 	payload := protocol.AddPeerRequest{
 		ID: s.Config.ID,
 		Address: protocol.AddressRecord{
 			Addresses: addresses,
-			IsSponsor: s.isSponsor,
+			IsSponsor: natState.IsSponsor,
 		},
 	}
 
@@ -128,16 +167,18 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		}
 	}
 	s.Config.Logger.Info("Successfully synced topology from sponsor", "peers_count", len(announceResp))
-	go func() {
+	s.goOwned(func() {
 		_ = s.ExecuteSync()
-	}()
+	})
 	return nil
 }
 
 func (s *Server) CheckNAT() {
-	s.checkNATOnce.Do(func() {
-		s.determineSponsorAndNATStatus()
-	})
+	if !s.beginNATWork() {
+		return
+	}
+	defer s.natWG.Done()
+	s.runNATCheck()
 }
 
 func (s *Server) AddPendingInvite(secret string, expiration time.Time) {

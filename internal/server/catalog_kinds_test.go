@@ -40,7 +40,7 @@ func TestOutboxKeyIsScopedByKind(t *testing.T) {
 	if a == b {
 		t.Errorf("outbox keys collide across kinds: %q", a)
 	}
-	if got := s.outboxKey("peer-1", kindVFS, "f|h|1"); got != "peer-1|vfs|f|h|1" {
-		t.Errorf("unexpected outbox key %q", got)
+	if got := s.outboxKey("peer-1", kindVFS, "f|h|1"); got == legacyOutboxKey("peer-1", kindVFS, "f|h|1") {
+		t.Errorf("outbox key retained ambiguous legacy encoding: %q", got)
 	}
 }

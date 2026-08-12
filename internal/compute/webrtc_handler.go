@@ -1,3 +1,5 @@
+//go:build !android
+
 package compute
 
 import (
@@ -6,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"sync"
 	"sync/atomic"
@@ -13,6 +16,17 @@ import (
 
 	"github.com/pion/webrtc/v4"
 )
+
+// buildWebRTCService is intentionally platform-specific: non-Android builds
+// validate the signaling URL and construct the real Pion handler.
+func buildWebRTCService(exec string) (ServiceHandler, error) {
+	if err := requireHTTPExec(exec, protocol.ServiceTypeWebRTC, "signaling URL"); err != nil {
+		return nil, err
+	}
+	return BuildWebRTCHandler(exec, protocol.HandlerDialStream), nil
+}
+
+var _ func(string) (ServiceHandler, error) = buildWebRTCService
 
 // newHostOnlyPeerConnection creates a PeerConnection with UDP4 host candidates only (no STUN).
 func newHostOnlyPeerConnection() (*webrtc.PeerConnection, error) {

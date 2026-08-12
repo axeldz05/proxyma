@@ -21,7 +21,7 @@ func getDefaultStorage() string {
 // lets cobra print it and set the exit code; helpers must not kill the process.
 func requireConfig(storagePath string) error {
 	if _, err := protocol.LoadConfig(storagePath); err != nil {
-		return fmt.Errorf("couldn't find config.json in %s: run 'proxyma init' or 'proxyma join' first", storagePath)
+		return fmt.Errorf("couldn't find config.json in %s: run 'proxyma init' or 'proxyma cluster join' first", storagePath)
 	}
 	return nil
 }

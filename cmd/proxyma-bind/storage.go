@@ -49,7 +49,7 @@ func GetLocalBlobPath(hash string) string {
 	if s := getSrv(); s != nil {
 		return s.Storage.GetBlobPath(hash)
 	}
-	return filepath.Join(appStorage, hash)
+	return filepath.Join(GetStoragePath(), hash)
 }
 
 // ResolveTaskResultPath extracts a local filesystem path from a run/stream JSON response (L2).

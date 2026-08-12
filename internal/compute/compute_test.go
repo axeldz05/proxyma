@@ -31,7 +31,7 @@ func TestCannotRegisterDuplicateServices(t *testing.T) {
 func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
-	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node")
+	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
 	defer engine.Close()
 
 	schema := protocol.ServiceSchema{
@@ -139,7 +139,7 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
 
-	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node-grpc")
+	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node-grpc")
 	defer engine.Close()
 
 	mockServer := setupMockGRPCWebhookServer(t)
@@ -261,7 +261,7 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 func TestPipelineStepInputValidation(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
-	engine := compute.NewComputeEngine(logger, mockPeerClient, 1, "test-node")
+	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
 	defer engine.Close()
 
 	// Register a service with required parameters

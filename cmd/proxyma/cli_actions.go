@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/protocol"
@@ -25,6 +28,55 @@ func retErr(msg string) string {
 }
 
 type cliActionHandler func(args map[string]string) string
+
+type cliStreamStart func(string, string, proxyma_bind.StreamEventListener) string
+
+var (
+	joinCluster             = proxyma_bind.JoinCluster
+	clonePipelineSchemaJSON = proxyma_bind.ClonePipelineSchemaJson
+	addPipelineRaw          = proxyma_bind.AddPipelineRaw
+)
+
+type cliActionStreamListener struct {
+	stdout   io.Writer
+	stderr   io.Writer
+	terminal chan error
+	once     sync.Once
+}
+
+func (l *cliActionStreamListener) OnChunk(chunkJSON string) {
+	_, _ = fmt.Fprintln(l.stdout, chunkJSON)
+}
+
+func (l *cliActionStreamListener) OnError(message string) {
+	l.once.Do(func() { l.terminal <- fmt.Errorf("%s", message) })
+}
+
+func (l *cliActionStreamListener) OnComplete() {
+	l.once.Do(func() { l.terminal <- nil })
+}
+
+func executeCLIServiceStream(
+	serviceName string,
+	payloadJSON string,
+	start cliStreamStart,
+	stdout io.Writer,
+	stderr io.Writer,
+) string {
+	listener := &cliActionStreamListener{
+		stdout:   stdout,
+		stderr:   stderr,
+		terminal: make(chan error, 1),
+	}
+	result := start(serviceName, payloadJSON, listener)
+	if proxyma_bind.IsBindError(result) {
+		return result
+	}
+	if err := <-listener.terminal; err != nil {
+		return retErr(err.Error())
+	}
+	return proxyma_bind.BindMessageJSON("Streaming completed.")
+}
 
 // cliEscapes are UX-only overrides; everything else uses InvokeDomainAction.
 var cliEscapes = map[string]cliActionHandler{
@@ -50,7 +102,7 @@ var cliEscapes = map[string]cliActionHandler{
 		if port == "" {
 			port = protocol.DefaultTCPPort
 		}
-		errStr := proxyma_bind.JoinCluster(cliStorage, token, args["node_id"], port)
+		errStr := joinCluster(cliStorage, token, args["node_id"], port)
 		if errStr == "" {
 			return proxyma_bind.BindMessageJSON("Joined cluster successfully!")
 		}
@@ -80,44 +132,37 @@ var cliEscapes = map[string]cliActionHandler{
 		}
 
 		if schema != nil && schema.IsStreaming() {
-			done := make(chan struct{})
-			listener := &cliStreamListener{
-				onChunkFunc: func(chunk string) {
-					fmt.Println(chunk)
-				},
-				onDoneFunc: func() {
-					close(done)
-				},
-			}
-
-			res := proxyma_bind.StreamService(serviceName, payloadJSON, listener)
-			if proxyma_bind.IsBindError(res) {
-				return res
-			}
-
-			<-done
-			return proxyma_bind.BindMessageJSON("Streaming completed.")
+			return executeCLIServiceStream(
+				serviceName,
+				payloadJSON,
+				proxyma_bind.StreamService,
+				os.Stdout,
+				os.Stderr,
+			)
 		}
 
-		return proxyma_bind.RunService(serviceName, payloadJSON, args["strategy"])
+		return proxyma_bind.RunServiceWithStrategy(serviceName, payloadJSON, args["strategy"])
 	},
 
 	"service.clone_pipeline": func(args map[string]string) string {
 		id := args["id"]
 		newID := args["new_id"]
 		targetNode := args["target_node"]
-		clonedJson := proxyma_bind.ClonePipelineSchemaJson(id, newID, targetNode)
-		if proxyma_bind.IsBindError(clonedJson) {
-			return clonedJson
+		clonedJSON := clonePipelineSchemaJSON(id, newID, targetNode)
+		if proxyma_bind.IsBindError(clonedJSON) {
+			return clonedJSON
 		}
-		errStr := proxyma_bind.AddPipelineRaw(newID, clonedJson)
-		if errStr != "" {
-			if proxyma_bind.IsBindError(errStr) {
-				return errStr
-			}
-			return retErr(errStr)
+		var cloned protocol.PipelineSchema
+		if err := json.Unmarshal([]byte(clonedJSON), &cloned); err != nil {
+			return retErr(fmt.Sprintf("invalid cloned pipeline schema: %v", err))
 		}
-		return proxyma_bind.BindMessageJSON(fmt.Sprintf("Pipeline '%s' successfully cloned and registered locally!", id))
+		if cloned.ID == "" {
+			return retErr("cloned pipeline schema has no ID")
+		}
+		if addResult := addPipelineRaw(cloned.ID, clonedJSON); proxyma_bind.IsBindError(addResult) {
+			return addResult
+		}
+		return clonedJSON
 	},
 
 	"service.edit_pipeline": func(args map[string]string) string {

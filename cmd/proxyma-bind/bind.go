@@ -2,8 +2,8 @@ package proxyma_bind
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"proxyma/internal/p2p"
@@ -21,14 +22,38 @@ import (
 )
 
 var (
-	srv        *server.Server
-	srvTLS     *tls.Config
-	srvMutex   sync.RWMutex
-	appStorage string
-	appLogger  *slog.Logger
-	appCtx     context.Context
-	appCancel  context.CancelFunc
+	srv          *server.Server
+	srvMutex     sync.RWMutex
+	appStorage   string
+	appLogger    *slog.Logger
+	appCtx       context.Context
+	appCancel    context.CancelFunc
+	appWork      *sync.WaitGroup
+	appStopping  bool
+	appFinalizer *nodeFinalizer
+
+	unixResponseIdleTimeout = protocol.RPCTimeoutTaskWait
+	startupBootstrapWait    = waitForStartupBootstrap
+	nodeShutdownTimeout     = 3 * time.Second
 )
+
+type bootstrapWaitFunc func(context.Context) bool
+
+type nodeFinalizer struct {
+	done chan struct{}
+	err  error
+}
+
+func waitForStartupBootstrap(ctx context.Context) bool {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
 
 func getSrv() *server.Server {
 	srvMutex.RLock()
@@ -36,10 +61,19 @@ func getSrv() *server.Server {
 	return srv
 }
 
+func getDispatchSrv() *server.Server {
+	srvMutex.RLock()
+	defer srvMutex.RUnlock()
+	if appStopping {
+		return nil
+	}
+	return srv
+}
+
 // SetStoragePath configures the active storage path for the out-of-process CLI fallback.
 func SetStoragePath(path string) {
 	srvMutex.Lock()
-	appStorage = path
+	appStorage = canonicalStoragePath(path)
 	srvMutex.Unlock()
 }
 
@@ -50,28 +84,82 @@ func GetStoragePath() string {
 	return appStorage
 }
 
-func dispatchUnixOrLocal(action string, args map[string]string, localCall func(s *server.Server) (any, error)) string {
-	return dispatchUnixLocalOrOffline(action, args, localCall, nil)
+func canonicalStoragePath(path string) string {
+	path = canonicalFilesystemPath(path)
+	cfg, err := protocol.LoadConfig(path)
+	if err == nil && cfg.StoragePath != "" {
+		return canonicalFilesystemPath(cfg.StoragePath)
+	}
+	return path
+}
+
+func canonicalFilesystemPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		absolute = filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(resolved)
+	}
+	current := absolute
+	var missing []string
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved)
+		}
+	}
+	return filepath.Clean(absolute)
 }
 
 // dispatchUnixStreamOrLocal runs a streaming action in-process or over unix NDJSON (L2).
 // onChunk receives each successful data payload; onError/onComplete follow stream lifecycle.
 func dispatchUnixStreamOrLocal(
+	ctx context.Context,
 	action string,
 	args map[string]string,
-	localStream func(s *server.Server, onChunk func(map[string]any)) error,
+	localStream func(context.Context, *server.Server, func(map[string]any) error) error,
 	onChunkJSON func(chunkJSON string),
 	onError func(errMsg string),
 	onComplete func(),
+	onDone func(),
 ) {
-	s := getSrv()
+	s := getDispatchSrv()
 	if s != nil {
+		leaseCtx, release, leaseErr := s.AcquireWorkLease(ctx)
+		if leaseErr != nil {
+			go func() {
+				if onDone != nil {
+					defer onDone()
+				}
+				if onError != nil {
+					onError(leaseErr.Error())
+				}
+			}()
+			return
+		}
 		go func() {
-			err := localStream(s, func(chunk map[string]any) {
+			defer release()
+			if onDone != nil {
+				defer onDone()
+			}
+			err := localStream(leaseCtx, s, func(chunk map[string]any) error {
 				if onChunkJSON != nil {
-					b, _ := json.Marshal(chunk)
+					b, err := json.Marshal(chunk)
+					if err != nil {
+						return fmt.Errorf("failed to marshal stream chunk: %w", err)
+					}
 					onChunkJSON(string(b))
 				}
+				return nil
 			})
 			if err != nil {
 				if onError != nil {
@@ -86,8 +174,18 @@ func dispatchUnixStreamOrLocal(
 		return
 	}
 
+	storagePath := GetStoragePath()
 	go func() {
-		conn, err := DialUnix(appStorage)
+		if onDone != nil {
+			defer onDone()
+		}
+		if err := ctx.Err(); err != nil {
+			if onError != nil {
+				onError(err.Error())
+			}
+			return
+		}
+		conn, err := DialUnix(storagePath)
 		if err != nil {
 			if onError != nil {
 				onError(err.Error())
@@ -95,21 +193,40 @@ func dispatchUnixStreamOrLocal(
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stopClose()
 
-		if err := WriteUnixRequest(conn, action, args); err != nil {
+		if err := WriteUnixStreamRequest(conn, action, args); err != nil {
 			if onError != nil {
 				onError(err.Error())
 			}
 			return
 		}
 
-		streamErr := false
+		selectedVersion := -1
+		completed := false
+		protocolErr := ""
 		scanErr := ScanUnixNDJSON(conn, func(resp protocol.UnixResponse) bool {
+			if resp.StreamVersion != 0 && resp.StreamVersion != protocol.ServiceStreamVersion {
+				protocolErr = fmt.Sprintf("unsupported Unix stream version %d", resp.StreamVersion)
+				return false
+			}
+			if selectedVersion == -1 {
+				selectedVersion = resp.StreamVersion
+			} else if selectedVersion != resp.StreamVersion {
+				protocolErr = fmt.Sprintf(
+					"Unix stream changed framing version from %d to %d",
+					selectedVersion,
+					resp.StreamVersion,
+				)
+				return false
+			}
 			if !resp.Success {
-				streamErr = true
-				if onError != nil {
-					onError(resp.Error)
-				}
+				protocolErr = resp.Error
+				return false
+			}
+			if resp.Complete {
+				completed = true
 				return false
 			}
 			if onChunkJSON != nil && resp.Data != nil {
@@ -117,14 +234,29 @@ func dispatchUnixStreamOrLocal(
 			}
 			return true
 		})
-		if scanErr != nil {
-			streamErr = true
+		if protocolErr != "" {
 			if onError != nil {
-				onError(scanErr.Error())
+				onError(protocolErr)
 			}
+			return
 		}
-		// Mirror local path: OnComplete only after a clean stream (no error).
-		if !streamErr && onComplete != nil {
+		if scanErr != nil {
+			if onError != nil {
+				if ctx.Err() != nil {
+					onError(ctx.Err().Error())
+				} else {
+					onError(scanErr.Error())
+				}
+			}
+			return
+		}
+		if selectedVersion == protocol.ServiceStreamVersion && !completed {
+			if onError != nil {
+				onError("negotiated v1 Unix stream ended without a terminal event")
+			}
+			return
+		}
+		if onComplete != nil {
 			onComplete()
 		}
 	}()
@@ -132,10 +264,17 @@ func dispatchUnixStreamOrLocal(
 
 // BindErrorJSON formats an error for bind/CLI consumers (SSOT).
 func BindErrorJSON(err error) string {
-	if err == nil {
-		return `{"error":""}`
+	message := ""
+	if err != nil {
+		message = err.Error()
 	}
-	return fmt.Sprintf(`{"error": %q}`, err.Error())
+	encoded, marshalErr := json.Marshal(struct {
+		Error string `json:"error"`
+	}{Error: message})
+	if marshalErr != nil {
+		return `{"error":"failed to marshal bind error"}`
+	}
+	return string(encoded)
 }
 
 // bindErrorJSON is the unexported alias used inside this package.
@@ -184,19 +323,34 @@ func dispatchUnixLocalOrOffline(
 	localCall func(s *server.Server) (any, error),
 	offline func() (any, error),
 ) string {
-	s := getSrv()
+	return dispatchUnixLocalOrOfflineAt(GetStoragePath(), action, args, localCall, offline)
+}
+
+func dispatchUnixLocalOrOfflineAt(
+	storagePath string,
+	action string,
+	args map[string]string,
+	localCall func(s *server.Server) (any, error),
+	offline func() (any, error),
+) string {
+	s := getDispatchSrv()
 	if s != nil {
+		_, release, leaseErr := s.AcquireWorkLease(context.Background())
+		if leaseErr != nil {
+			return bindErrorJSON(leaseErr)
+		}
+		defer release()
 		res, err := localCall(s)
 		if err != nil {
 			return bindErrorJSON(err)
 		}
 		return bindOKJSON(res)
 	}
-	data, err := sendUnixSocketCommand(appStorage, action, args)
+	data, err := sendUnixSocketCommand(storagePath, action, args)
 	if err == nil {
 		return string(data)
 	}
-	if offline != nil {
+	if offline != nil && isDaemonUnavailable(err) {
 		res, offErr := offline()
 		if offErr != nil {
 			return bindErrorJSON(offErr)
@@ -206,23 +360,60 @@ func dispatchUnixLocalOrOffline(
 	return bindErrorJSON(err)
 }
 
+type daemonUnavailableError struct {
+	err error
+}
+
+func (e *daemonUnavailableError) Error() string { return e.err.Error() }
+func (e *daemonUnavailableError) Unwrap() error { return e.err }
+
+func isDaemonUnavailable(err error) bool {
+	var unavailable *daemonUnavailableError
+	return errors.As(err, &unavailable)
+}
+
+func isUnavailableDialError(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
 // DialUnix opens a connection to the daemon unix socket (L1).
 func DialUnix(storagePath string) (net.Conn, error) {
+	socketStorage := storagePath
 	cfg, err := protocol.LoadConfig(storagePath)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't load config: %w", err)
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("couldn't load config: %w", err)
+		}
+	} else if cfg.StoragePath != "" {
+		socketStorage = canonicalFilesystemPath(cfg.StoragePath)
 	}
-	sockPath := protocol.UnixSockPath(cfg.StoragePath)
+	sockPath := protocol.UnixSockPath(socketStorage)
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
-		return nil, fmt.Errorf("daemon is unreachable. Is 'proxyma run' active? Error: %w", err)
+		dialErr := fmt.Errorf("daemon is unreachable. Is 'proxyma run' active? Error: %w", err)
+		if isUnavailableDialError(err) {
+			return nil, &daemonUnavailableError{err: dialErr}
+		}
+		return nil, dialErr
 	}
 	return conn, nil
 }
 
 // WriteUnixRequest marshals and writes a UnixRequest (L1).
 func WriteUnixRequest(conn net.Conn, action string, args map[string]string) error {
-	req := protocol.UnixRequest{Action: action, Args: args}
+	return writeUnixRequest(conn, protocol.UnixRequest{Action: action, Args: args})
+}
+
+// WriteUnixStreamRequest advertises supported stream framing versions.
+func WriteUnixStreamRequest(conn net.Conn, action string, args map[string]string) error {
+	return writeUnixRequest(conn, protocol.UnixRequest{
+		Action:         action,
+		Args:           args,
+		StreamVersions: []int{protocol.ServiceStreamVersion},
+	})
+}
+
+func writeUnixRequest(conn net.Conn, req protocol.UnixRequest) error {
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -242,7 +433,7 @@ func ReadUnixResponse(conn net.Conn) (protocol.UnixResponse, error) {
 	var respBytes []byte
 	buf := make([]byte, 4096)
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(protocol.RPCTimeoutTaskWait))
+		_ = conn.SetReadDeadline(time.Now().Add(unixResponseIdleTimeout))
 		n, err := conn.Read(buf)
 		if n > 0 {
 			respBytes = append(respBytes, buf[:n]...)
@@ -301,27 +492,41 @@ func sendUnixSocketCommand(storagePath string, action string, args map[string]st
 // StartNode launches the proxyma node.
 // Returns empty string on success, or BindErrorJSON on failure.
 func StartNode(storagePath string, debug bool) string {
+	storagePath = canonicalStoragePath(storagePath)
+	joinMutex.Lock()
+	defer joinMutex.Unlock()
+	recoveryErr := recoverJoinInstallation(storagePath)
+	if recoveryErr != nil {
+		return BindErrorJSON(fmt.Errorf("failed to recover interrupted join: %w", recoveryErr))
+	}
+	return startNode(storagePath, debug)
+}
+
+func startNode(storagePath string, debug bool) string {
 	srvMutex.Lock()
 	defer srvMutex.Unlock()
 
 	if srv != nil {
+		if appStopping {
+			return BindErrorJSON(fmt.Errorf("node is stopping"))
+		}
 		return BindErrorJSON(fmt.Errorf("node is already running"))
 	}
 
-	appStorage = storagePath
+	configStorage := canonicalStoragePath(storagePath)
 	writer := &protocol.LogWriter{Stdout: os.Stdout}
-	appLogger = protocol.NewLogger(writer, debug)
+	logger := protocol.NewLogger(writer, debug)
 
-	cfg, err := protocol.LoadConfig(appStorage)
+	cfg, err := protocol.LoadConfig(configStorage)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Auto initialize configuration with default port if not found
 			nid := utils.GenerateDefaultNodeID()
 			localAddr := protocol.HTTPSAddr("127.0.0.1", protocol.DefaultTCPPort)
-			if err := p2p.SetupNewNode(appStorage, nid, localAddr); err != nil {
+			if err := p2p.SetupNewNode(configStorage, nid, localAddr); err != nil {
 				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %v", err))
 			}
-			cfg, err = protocol.LoadConfig(appStorage)
+			cfg, err = protocol.LoadConfig(configStorage)
 			if err != nil {
 				return BindErrorJSON(fmt.Errorf("failed to load initial config: %v", err))
 			}
@@ -329,7 +534,9 @@ func StartNode(storagePath string, debug bool) string {
 			return BindErrorJSON(fmt.Errorf("failed to load config: %v", err))
 		}
 	}
-	cfg.Logger = appLogger
+	cfg.StoragePath = configStorage
+	appStorage = configStorage
+	cfg.Logger = logger
 
 	certsDir := filepath.Dir(cfg.CAPath)
 	nodeCertFile, nodeKeyFile := p2p.NodeCertPaths(certsDir, cfg.ID)
@@ -339,67 +546,230 @@ func StartNode(storagePath string, debug bool) string {
 		return BindErrorJSON(fmt.Errorf("failed to load mTLS certs: %v", err))
 	}
 
-	srvTLS = stls
 	baseTransport := &http.Transport{TLSClientConfig: ctls}
 	wrappedTransport := &p2p.BandwidthRoundTripper{Base: baseTransport}
-	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, appLogger)
+	peerClient := p2p.NewHTTPPeerClient(wrappedTransport, cfg.BootstrapNode, logger)
 
-	srv, err = server.New(cfg, peerClient)
+	startedServer, err := server.New(cfg, peerClient)
 	if err != nil {
 		return BindErrorJSON(fmt.Errorf("failed to start node: %v", err))
 	}
-	srv.SetTLSConfigs(stls, ctls)
-	wrappedTransport.Recorder = srv
-	srv.LoadLocalServices()
+	startedServer.SetTLSConfigs(stls, ctls)
+	wrappedTransport.Recorder = startedServer
+	startedServer.LoadLocalServices()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- startedServer.ListenAndServe(stls)
+	}()
+
+	select {
+	case <-startedServer.Ready():
+	case serveErr := <-serveResult:
+		cancel()
+		shutdownServerAfterFailedStart(startedServer)
+		return BindErrorJSON(fmt.Errorf("failed to start node listeners: %w", serveErr))
+	}
+
+	srv = startedServer
+	appLogger = logger
 	appCtx = ctx
 	appCancel = cancel
+	appStopping = false
+	appFinalizer = nil
+	backgroundWork := &sync.WaitGroup{}
+	bootstrapWait := startupBootstrapWait
+	if cfg.BootstrapNode != "" {
+		backgroundWork.Add(1)
+	}
+	appWork = backgroundWork
 
-	go func() {
-		if err := srv.ListenAndServe(srvTLS); err != nil && appLogger != nil {
-			appLogger.Error("Server ListenAndServe failed", "error", err)
-		}
-	}()
+	go monitorStartedServer(startedServer, serveResult, cancel, logger, backgroundWork)
 
 	if cfg.BootstrapNode != "" {
 		go func() {
-			time.Sleep(2 * time.Second)
-			if err := srv.AnnouncePresence(cfg.BootstrapNode); err != nil {
-				if appLogger != nil {
-					appLogger.Error("AnnouncePresence failed", "error", err)
-				}
-				return
-			}
-			go srv.StartRelayPolling(appCtx, cfg.BootstrapNode)
+			defer backgroundWork.Done()
+			runDelayedBootstrap(ctx, startedServer, cfg.BootstrapNode, logger, bootstrapWait)
 		}()
 	}
 
 	return ""
 }
 
-// StopNode stops the proxyma node if it is running.
-func StopNode() {
-	srvMutex.Lock()
-	defer srvMutex.Unlock()
-
-	if srv == nil {
-		return
-	}
-
-	if appCancel != nil {
-		appCancel()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(ctx)
-	srv = nil
+func shutdownServerAfterFailedStart(startedServer *server.Server) {
+	_ = startedServer.Shutdown(context.Background())
 }
 
-// IsNodeRunning returns true if the server is instantiated.
+func monitorStartedServer(
+	startedServer *server.Server,
+	serveResult <-chan error,
+	cancel context.CancelFunc,
+	logger *slog.Logger,
+	backgroundWork *sync.WaitGroup,
+) {
+	serveErr := <-serveResult
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		logger.Error("Server ListenAndServe failed", "error", serveErr)
+	}
+	finalizer := ensureNodeFinalizer(startedServer, cancel, backgroundWork)
+	if finalizer != nil {
+		<-finalizer.done
+	}
+}
+
+func ensureNodeFinalizer(
+	startedServer *server.Server,
+	cancel context.CancelFunc,
+	backgroundWork *sync.WaitGroup,
+) *nodeFinalizer {
+	srvMutex.Lock()
+	if srv != startedServer {
+		srvMutex.Unlock()
+		return nil
+	}
+	if appFinalizer != nil {
+		finalizer := appFinalizer
+		srvMutex.Unlock()
+		return finalizer
+	}
+	finalizer := &nodeFinalizer{done: make(chan struct{})}
+	appStopping = true
+	appFinalizer = finalizer
+	srvMutex.Unlock()
+
+	go func() {
+		if cancel != nil {
+			cancel()
+		}
+		if backgroundWork != nil {
+			backgroundWork.Wait()
+		}
+		shutdownErr := startedServer.Shutdown(context.Background())
+
+		srvMutex.Lock()
+		finalizer.err = shutdownErr
+		if srv == startedServer && appFinalizer == finalizer {
+			clearNodeGlobalsLocked()
+		}
+		close(finalizer.done)
+		srvMutex.Unlock()
+	}()
+	return finalizer
+}
+
+func runDelayedBootstrap(
+	ctx context.Context,
+	startedServer *server.Server,
+	bootstrapNode string,
+	logger *slog.Logger,
+	wait bootstrapWaitFunc,
+) {
+	if !wait(ctx) {
+		return
+	}
+	leaseCtx, release, err := startedServer.AcquireWorkLease(ctx)
+	if err != nil {
+		return
+	}
+	defer release()
+	if err := leaseCtx.Err(); err != nil {
+		return
+	}
+	if err := startedServer.AnnouncePresence(bootstrapNode); err != nil {
+		if leaseCtx.Err() == nil {
+			logger.Error("AnnouncePresence failed", "error", err)
+		}
+		return
+	}
+	if leaseCtx.Err() == nil {
+		startedServer.StartRelayPolling(leaseCtx, bootstrapNode)
+	}
+}
+
+func startNodeBackgroundWork(
+	startedServer *server.Server,
+	work func(context.Context),
+) bool {
+	srvMutex.Lock()
+	if srv != startedServer || appStopping || appWork == nil || appCtx == nil {
+		srvMutex.Unlock()
+		return false
+	}
+	backgroundWork := appWork
+	ctx := appCtx
+	backgroundWork.Add(1)
+	srvMutex.Unlock()
+
+	go func() {
+		defer backgroundWork.Done()
+		leaseCtx, release, err := startedServer.AcquireWorkLease(ctx)
+		if err != nil {
+			return
+		}
+		defer release()
+		work(leaseCtx)
+	}()
+	return true
+}
+
+func clearNodeGlobalsLocked() {
+	srv = nil
+	appCtx = nil
+	appCancel = nil
+	appWork = nil
+	appStopping = false
+	appFinalizer = nil
+}
+
+// StopNode stops the proxyma node if it is running.
+func StopNode() {
+	_ = StopNodeWithError()
+}
+
+// StopNodeWithError stops the node and returns a bind error if the shutdown
+// deadline expires. Globals remain in the stopping state until finalization.
+func StopNodeWithError() string {
+	srvMutex.RLock()
+	if srv == nil {
+		srvMutex.RUnlock()
+		return ""
+	}
+	startedServer := srv
+	cancelApp := appCancel
+	backgroundWork := appWork
+	timeout := nodeShutdownTimeout
+	srvMutex.RUnlock()
+
+	finalizer := ensureNodeFinalizer(startedServer, cancelApp, backgroundWork)
+	if finalizer == nil {
+		return ""
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-finalizer.done:
+		if finalizer.err != nil {
+			return BindErrorJSON(fmt.Errorf("failed to stop node: %w", finalizer.err))
+		}
+		return ""
+	case <-timer.C:
+		return BindErrorJSON(fmt.Errorf("failed to stop node: %w", context.DeadlineExceeded))
+	}
+}
+
+// IsNodeRunning returns true only after both listeners are ready.
 func IsNodeRunning() bool {
-	return getSrv() != nil
+	srvMutex.RLock()
+	defer srvMutex.RUnlock()
+	return srv != nil && !appStopping && srv.IsReady()
+}
+
+// IsNodeStopping reports that shutdown started but has not finalized.
+func IsNodeStopping() bool {
+	srvMutex.RLock()
+	defer srvMutex.RUnlock()
+	return srv != nil && appStopping
 }
 
 // GetNodeID returns the active node's ID, or empty string.

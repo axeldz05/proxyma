@@ -23,7 +23,6 @@ func TestResolveTaskResultPathFromNestedData(t *testing.T) {
 }
 
 func TestResolveTaskResultPathFromOutputHash(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	StopNode()
 	SetStoragePath(dir)

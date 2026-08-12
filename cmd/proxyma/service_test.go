@@ -1,19 +1,26 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	proxyma_bind "proxyma/cmd/proxyma-bind"
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
+	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 )
 
 type LocalService = protocol.LocalService
 
 func TestServiceAddCmd(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 
 	// Create a mock config.json so LoadConfig doesn't fail
@@ -131,6 +138,7 @@ func TestServiceAddCmd(t *testing.T) {
 }
 
 func TestServiceDaemonCmds(t *testing.T) {
+	resetRootCommandState(t)
 	tempDir := t.TempDir()
 
 	cfg := protocol.NodeConfig{
@@ -193,4 +201,195 @@ func TestServiceDaemonCmds(t *testing.T) {
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
+}
+
+func TestExecuteCLIServiceStreamReturnsErrorEnvelope(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	result := executeCLIServiceStream(
+		"broken-stream",
+		`{}`,
+		func(_ string, _ string, listener proxyma_bind.StreamEventListener) string {
+			listener.OnChunk(`{"n":1}`)
+			listener.OnError("upstream exploded")
+			return `{"status":"streaming_started"}`
+		},
+		&stdout,
+		&stderr,
+	)
+
+	if !proxyma_bind.IsBindError(result) {
+		t.Fatalf("result = %s, want bind error envelope", result)
+	}
+	if !strings.Contains(proxyma_bind.ParseBindError(result), "upstream exploded") {
+		t.Fatalf("result = %s, want stream error", result)
+	}
+	if strings.Contains(result, "Streaming completed") {
+		t.Fatalf("stream error became completion: %s", result)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != `{"n":1}` {
+		t.Fatalf("stdout = %q, want prior stream chunk", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stream listener wrote directly to stderr: %q", stderr.String())
+	}
+}
+
+func resetRootCommandState(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		var resetCommand func(*cobra.Command)
+		resetCommand = func(command *cobra.Command) {
+			resetFlags := func(flag *pflag.Flag) {
+				if err := flag.Value.Set(flag.DefValue); err != nil {
+					t.Fatalf("reset flag %s: %v", flag.Name, err)
+				}
+				flag.Changed = false
+			}
+			command.Flags().VisitAll(resetFlags)
+			command.PersistentFlags().VisitAll(resetFlags)
+			for _, child := range command.Commands() {
+				resetCommand(child)
+			}
+		}
+		resetCommand(rootCmd)
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(os.Stdout)
+		rootCmd.SetErr(os.Stderr)
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+func TestExecuteRootWritesOneErrorAndReturnsNonzero(t *testing.T) {
+	resetRootCommandState(t)
+
+	rootCmd.SetArgs([]string{"--definitely-invalid"})
+	var stderr bytes.Buffer
+	if code := executeRoot(&stderr); code == 0 {
+		t.Fatal("invalid CLI invocation returned zero")
+	}
+	if count := strings.Count(stderr.String(), "unknown flag"); count != 1 {
+		t.Fatalf("stderr = %q, want exactly one error", stderr.String())
+	}
+}
+
+func TestRunCommandSurfacesShutdownFailure(t *testing.T) {
+	resetRootCommandState(t)
+	originalStart := runStartNode
+	originalStop := runStopNodeWithError
+	originalWait := runWaitForSignal
+	t.Cleanup(func() {
+		runStartNode = originalStart
+		runStopNodeWithError = originalStop
+		runWaitForSignal = originalWait
+	})
+	runStartNode = func(string, bool) string { return "" }
+	runStopNodeWithError = func() string {
+		return proxyma_bind.BindErrorJSON(errors.New("injected shutdown failure"))
+	}
+	runWaitForSignal = func() {}
+
+	rootCmd.SetArgs([]string{"run", "--storage", t.TempDir()})
+	var stderr bytes.Buffer
+	if code := executeRoot(&stderr); code == 0 {
+		t.Fatal("run shutdown failure returned zero")
+	}
+	if !strings.Contains(stderr.String(), "injected shutdown failure") {
+		t.Fatalf("stderr = %q, want shutdown failure", stderr.String())
+	}
+}
+
+func TestClusterJoinFreshStorageUsesDefaultPort(t *testing.T) {
+	resetRootCommandState(t)
+	storagePath := t.TempDir()
+
+	originalJoin := joinCluster
+	t.Cleanup(func() { joinCluster = originalJoin })
+
+	var gotStorage, gotToken, gotNodeID, gotPort string
+	joinCluster = func(storagePath, token, nodeID, port string) string {
+		gotStorage = storagePath
+		gotToken = token
+		gotNodeID = nodeID
+		gotPort = port
+		return ""
+	}
+
+	rootCmd.SetArgs([]string{
+		"cluster", "join",
+		"--storage", storagePath,
+		"--token", "invite-token",
+		"--node_id", "fresh-node",
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("fresh cluster join: %v", err)
+	}
+	if gotStorage != storagePath || gotToken != "invite-token" || gotNodeID != "fresh-node" {
+		t.Fatalf("join args = storage %q token %q node %q", gotStorage, gotToken, gotNodeID)
+	}
+	if gotPort != protocol.DefaultTCPPort {
+		t.Fatalf("join port = %q, want default %q", gotPort, protocol.DefaultTCPPort)
+	}
+}
+
+func TestRequireConfigGuidanceNamesClusterJoin(t *testing.T) {
+	err := requireConfig(t.TempDir())
+	if err == nil {
+		t.Fatal("missing config unexpectedly accepted")
+	}
+	if !strings.Contains(err.Error(), "proxyma cluster join") {
+		t.Fatalf("guidance = %q, want real cluster join command", err)
+	}
+	if strings.Contains(err.Error(), "'proxyma join'") {
+		t.Fatalf("guidance names nonexistent command: %q", err)
+	}
+}
+
+func TestClonePipelineRegistersEffectiveIDAndReturnsSchemaJSON(t *testing.T) {
+	originalClone := clonePipelineSchemaJSON
+	originalAdd := addPipelineRaw
+	t.Cleanup(func() {
+		clonePipelineSchemaJSON = originalClone
+		addPipelineRaw = originalAdd
+	})
+
+	cloned := protocol.PipelineSchema{
+		ID:      "source-custom",
+		Version: 1,
+		Steps:   []protocol.PipelineStep{{ID: "step", Service: "echo"}},
+	}
+	clonedJSONBytes, err := json.Marshal(cloned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clonedJSON := string(clonedJSONBytes)
+	clonePipelineSchemaJSON = func(id, newID, targetNode string) string {
+		if id != "source" || newID != "" || targetNode != "$local" {
+			t.Fatalf("clone args = %q %q %q", id, newID, targetNode)
+		}
+		return clonedJSON
+	}
+
+	var registeredID, registeredSchema string
+	addPipelineRaw = func(id, schemaJSON string) string {
+		registeredID = id
+		registeredSchema = schemaJSON
+		return proxyma_bind.BindMessageJSON("added")
+	}
+
+	got := cliEscapes["service.clone_pipeline"](map[string]string{
+		"id":          "source",
+		"target_node": "$local",
+	})
+	if got != clonedJSON {
+		t.Fatalf("clone result = %s, want schema JSON %s", got, clonedJSON)
+	}
+	if registeredID != cloned.ID {
+		t.Fatalf("registered ID = %q, want cloned effective ID %q", registeredID, cloned.ID)
+	}
+	if registeredSchema != clonedJSON {
+		t.Fatalf("registered schema = %q, want clone result", registeredSchema)
+	}
 }

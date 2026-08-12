@@ -618,7 +618,7 @@ func TestDownloadWorkerProcessesDeletion(t *testing.T) {
 	tombstone := protocol.IndexEntry{
 		Name: fileName, Hash: expectedHash, Version: 2, Deleted: true,
 	}
-	srv.Storage.ProcessRemoteDeletion(tombstone)
+	require.NoError(t, srv.Storage.ProcessRemoteDeletion(tombstone))
 
 	meta, exists := srv.Storage.GetFileMeta(fileName)
 	require.True(t, exists, "Metadata entry should still exist after deletion")
@@ -1419,7 +1419,7 @@ func TestTelemetryEndpointReportsBandwidthAndResourceUsage(t *testing.T) {
 	sponsor.Bandwidth.RecordBytesReceived(2048, protocol.PathUpload)
 
 	// Verify categories are populated
-	categorySent := sponsor.Bandwidth.CategorizePath(protocol.PathDownloadPrefix+"somehash")
+	categorySent := sponsor.Bandwidth.CategorizePath(protocol.PathDownloadPrefix + "somehash")
 	require.Equal(t, "vfs:somehash", categorySent)
 
 	upSpeed, downSpeed := sponsor.GetCurrentBandwidth()

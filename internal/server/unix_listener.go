@@ -1,36 +1,17 @@
 package server
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"os"
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
 
-func (s *Server) listenUnixSocket() {
-	sockPath := protocol.UnixSockPath(s.Config.StoragePath)
-	_ = os.Remove(sockPath) // clean up old socket if it exists
-	l, err := net.Listen("unix", sockPath)
-	if err != nil {
-		s.Config.Logger.Error("Failed to listen on unix socket", "error", err)
-		return
-	}
-	s.unixListener = l
-	s.Config.Logger.Info("Listening for local commands on unix socket", "path", sockPath)
-
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		go s.handleUnixConnection(conn)
-	}
-}
+const maxUnixRequestBytes = 64 << 10
 
 func writeUnixResponse(c net.Conn, respData any, actionErr error) {
 	var unixResp protocol.UnixResponse
@@ -47,25 +28,19 @@ func writeUnixResponse(c net.Conn, respData any, actionErr error) {
 	_, _ = c.Write(respBytes)
 }
 
-func writeUnixNDJSON(c net.Conn, resp protocol.UnixResponse) {
-	_ = utils.WriteNDJSON(c, resp)
+func writeUnixNDJSON(c net.Conn, resp protocol.UnixResponse) error {
+	return utils.WriteNDJSON(c, resp)
 }
 
 func (s *Server) handleUnixConnection(c net.Conn) {
 	defer func() { _ = c.Close() }()
-	buf := make([]byte, 1)
-	_, err := c.Read(buf)
-	if err != nil {
-		return
-	}
-
-	if buf[0] != '{' {
-		return
-	}
-
-	reader := io.MultiReader(bytes.NewReader(buf), c)
+	reader := &io.LimitedReader{R: c, N: maxUnixRequestBytes + 1}
 	var req protocol.UnixRequest
 	if err := json.NewDecoder(reader).Decode(&req); err != nil {
+		if reader.N == 0 {
+			writeUnixResponse(c, nil, fmt.Errorf("invalid JSON request: exceeds %d bytes", maxUnixRequestBytes))
+			return
+		}
 		writeUnixResponse(c, nil, fmt.Errorf("invalid JSON request: %w", err))
 		return
 	}
@@ -75,8 +50,28 @@ func (s *Server) handleUnixConnection(c net.Conn) {
 		writeUnixResponse(c, nil, fmt.Errorf("unknown action: %s", req.Action))
 		return
 	}
+	validatedArgs, err := validateUnixArgs(req.Action, req.Args)
+	if err != nil {
+		writeUnixResponse(c, nil, err)
+		return
+	}
+	req.Args = validatedArgs
 	if h.Stream != nil {
-		h.Stream(s, req.Args, c)
+		streamVersion := 0
+		for _, advertised := range req.StreamVersions {
+			if advertised == protocol.ServiceStreamVersion {
+				streamVersion = protocol.ServiceStreamVersion
+				break
+			}
+		}
+		streamCtx, cancel := s.contextWithServerLifetime(context.Background())
+		defer cancel()
+		go func() {
+			var probe [1]byte
+			_, _ = c.Read(probe[:])
+			cancel()
+		}()
+		h.Stream(streamCtx, s, req.Args, streamVersion, c)
 		return
 	}
 	if h.Unary == nil {

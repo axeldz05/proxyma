@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -18,8 +19,10 @@ import (
 var (
 	cliStorage string
 	rootCmd    = &cobra.Command{
-		Use:   "proxyma",
-		Short: "Proxyma is a distributed P2P compute and storage engine",
+		Use:           "proxyma",
+		Short:         "Proxyma is a distributed P2P compute and storage engine",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		Long: `A secure and distributed P2P cluster.
 Allows synchronizing files and running compute tasks between nodes encrypted with mutual TLS.`,
 	}
@@ -76,8 +79,10 @@ func init() {
 			}
 
 			actionCmd.RunE = func(cmd *cobra.Command, args []string) error {
-				if err := requireConfig(cliStorage); err != nil {
-					return err
+				if actionCopy.Key() != "cluster.join" {
+					if err := requireConfig(cliStorage); err != nil {
+						return err
+					}
 				}
 				proxyma_bind.SetStoragePath(cliStorage)
 
@@ -196,8 +201,15 @@ func init() {
 	}
 }
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if code := executeRoot(os.Stderr); code != 0 {
+		os.Exit(code)
 	}
+}
+
+func executeRoot(stderr io.Writer) int {
+	if err := rootCmd.Execute(); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }

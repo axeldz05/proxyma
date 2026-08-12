@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"proxyma/internal/p2p"
 	"proxyma/internal/utils"
+	"sync"
 	"time"
 )
 
@@ -69,7 +71,12 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		if in != nil && out != nil {
 			defer close(out)
-			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", executablePath)
+			streamCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			inputCtx, cancelInput := context.WithCancel(streamCtx)
+			defer cancelInput()
+
+			cmd := exec.CommandContext(streamCtx, "/bin/sh", "-c", executablePath)
 			stdinPipe, err := cmd.StdinPipe()
 			if err != nil {
 				return nil, fmt.Errorf("failed to open stdin pipe: %w", err)
@@ -81,17 +88,62 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 			}
 
 			if err := cmd.Start(); err != nil {
+				_ = stdinPipe.Close()
 				return nil, fmt.Errorf("failed to start script: %w", err)
 			}
-			defer func() { _ = cmd.Wait() }()
+			var stdinCloseOnce sync.Once
+			closeStdin := func() {
+				stdinCloseOnce.Do(func() { _ = stdinPipe.Close() })
+			}
+			defer closeStdin()
 
+			encodeErrCh := make(chan error, 1)
 			go func() {
-				defer func() { _ = stdinPipe.Close() }()
-				_ = utils.PumpJSONEncode(ctx, stdinPipe, in)
+				defer closeStdin()
+				encodeErrCh <- utils.PumpJSONEncode(inputCtx, stdinPipe, in)
 			}()
 
-			_ = utils.PumpJSONDecode(ctx, stdoutPipe, out)
-			return nil, nil
+			decodeErrCh := make(chan error, 1)
+			go func() {
+				decodeErrCh <- utils.PumpJSONDecode(streamCtx, stdoutPipe, out)
+			}()
+
+			var encodeErr, decodeErr error
+			for encodeErrCh != nil || decodeErrCh != nil {
+				select {
+				case err := <-encodeErrCh:
+					encodeErr = err
+					encodeErrCh = nil
+					var unsupportedType *json.UnsupportedTypeError
+					if err != nil &&
+						(errors.As(err, &unsupportedType) || ctx.Err() != nil) {
+						cancel()
+					}
+				case err := <-decodeErrCh:
+					decodeErr = err
+					decodeErrCh = nil
+					closeStdin()
+					cancelInput()
+					if err != nil {
+						cancel()
+					}
+				}
+			}
+			waitErr := cmd.Wait()
+
+			var streamErrs []error
+			var unsupportedType *json.UnsupportedTypeError
+			if encodeErr != nil &&
+				(waitErr != nil || decodeErr != nil || errors.As(encodeErr, &unsupportedType) || ctx.Err() != nil) {
+				streamErrs = append(streamErrs, fmt.Errorf("script stream input failed: %w", encodeErr))
+			}
+			if decodeErr != nil {
+				streamErrs = append(streamErrs, fmt.Errorf("script stream output failed: %w", decodeErr))
+			}
+			if waitErr != nil {
+				streamErrs = append(streamErrs, fmt.Errorf("script stream process failed: %w", waitErr))
+			}
+			return nil, errors.Join(streamErrs...)
 		}
 
 		payloadBytes, err := json.Marshal(payload)

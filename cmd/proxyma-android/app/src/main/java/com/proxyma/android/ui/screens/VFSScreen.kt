@@ -28,7 +28,6 @@ import com.proxyma.android.ui.components.ProxymaCard
 import com.proxyma.android.ui.components.ScreenTitle
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import kotlin.concurrent.thread
 
 @Composable
 fun VFSScreen(storageDomain: Map<String, Any>?) {
@@ -37,19 +36,21 @@ fun VFSScreen(storageDomain: Map<String, Any>?) {
     }
     var isSyncing by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             uploadUriToVfs(
+                scope = scope,
                 context = context,
                 uri = uri,
                 onStart = { isSyncing = true },
                 onComplete = { result ->
                     isSyncing = false
-                    result.onSuccess { msg ->
-                        context.toast(msg)
+                    result.onSuccess { upload ->
+                        context.toast(upload.message)
                     }
                     result.onFailure { err ->
                         context.toast("Upload failed: ${err.message}", long = true)
@@ -75,6 +76,7 @@ fun VFSScreen(storageDomain: Map<String, Any>?) {
                 IconButton(
                     onClick = {
                         executeGoCall(
+                            scope = scope,
                             context = context,
                             onStart = { isSyncing = true },
                             onComplete = { isSyncing = false },
@@ -121,6 +123,7 @@ fun VFSScreen(storageDomain: Map<String, Any>?) {
 @Composable
 fun VFSFileCard(file: VfsFile) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var isActionRunning by remember { mutableStateOf(false) }
 
     ProxymaCard {
@@ -175,6 +178,7 @@ fun VFSFileCard(file: VfsFile) {
                 Button(
                     onClick = {
                         executeGoCall(
+                            scope = scope,
                             context = context,
                             onStart = { isActionRunning = true },
                             onComplete = { isActionRunning = false },
@@ -193,25 +197,31 @@ fun VFSFileCard(file: VfsFile) {
                 Button(
                     onClick = {
                         executeGoCall(
+                            scope = scope,
                             context = context,
                             onStart = { isActionRunning = true },
                             onComplete = { isActionRunning = false },
                             action = {
                                 if (!file.hasLocal) {
-                                    val err = proxyma_bind.Proxyma_bind.fetchFileOnDemand(file.name)
-                                    if (err.isNotEmpty()) {
-                                        throw java.lang.Exception(err)
-                                    }
+                                    val fetchResponse = proxyma_bind.Proxyma_bind.fetchFileOnDemand(file.name)
+                                    bindResult(
+                                        fetchResponse,
+                                        BindMethod.LEGACY_ERROR_PREFIX
+                                    ).getOrThrow()
                                 }
-                                ""
+
+                                val localPath = proxyma_bind.Proxyma_bind.getLocalBlobPath(file.hash)
+                                bindResult(
+                                    localPath,
+                                    BindMethod.LEGACY_ERROR_PREFIX
+                                ).getOrThrow()
+                                if (localPath.isBlank()) {
+                                    throw IllegalStateException("Local file not found")
+                                }
+                                localPath
                             }
-                        ) {
-                            val localPath = proxyma_bind.Proxyma_bind.getLocalBlobPath(file.hash)
-                            if (localPath.isEmpty()) {
-                                context.toast("Local file not found.")
-                            } else {
-                                openFileNatively(context, localPath, file.name)
-                            }
+                        ) { localPath ->
+                            openFileNatively(scope, context, localPath, file.name)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
@@ -229,6 +239,7 @@ fun VFSFileCard(file: VfsFile) {
                     IconButton(
                         onClick = {
                             executeGoCall(
+                                scope = scope,
                                 context = context,
                                 onStart = { isActionRunning = true },
                                 onComplete = { isActionRunning = false },

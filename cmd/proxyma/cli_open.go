@@ -75,30 +75,6 @@ func resolveExistingJSONPath(candidate string) string {
 	return ""
 }
 
-type cliStreamListener struct {
-	onChunkFunc func(chunk string)
-	onDoneFunc  func()
-}
-
-func (l *cliStreamListener) OnChunk(chunkJSON string) {
-	if l.onChunkFunc != nil {
-		l.onChunkFunc(chunkJSON)
-	}
-}
-
-func (l *cliStreamListener) OnError(errMsg string) {
-	fmt.Fprintf(os.Stderr, "Stream Error: %s\n", errMsg)
-	if l.onDoneFunc != nil {
-		l.onDoneFunc()
-	}
-}
-
-func (l *cliStreamListener) OnComplete() {
-	if l.onDoneFunc != nil {
-		l.onDoneFunc()
-	}
-}
-
 func openFileWithSystemDefault(storageDir string, name string, localBlobPath string) (string, error) {
 	if _, err := os.Stat(localBlobPath); err != nil {
 		return "", fmt.Errorf("local cache file not found: %w", err)

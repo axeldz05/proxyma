@@ -23,6 +23,25 @@ type tlsServerMaterial struct {
 	cfg *tls.Config
 }
 
+var serverALPNAllowlist = []string{"h2", "http/1.1", "proxyma-p2p"}
+
+func allowedServerALPN(offered []string) []string {
+	if len(offered) == 0 {
+		return nil
+	}
+	offeredSet := make(map[string]struct{}, len(offered))
+	for _, protocol := range offered {
+		offeredSet[protocol] = struct{}{}
+	}
+	allowed := make([]string, 0, len(serverALPNAllowlist))
+	for _, protocol := range serverALPNAllowlist {
+		if _, ok := offeredSet[protocol]; ok {
+			allowed = append(allowed, protocol)
+		}
+	}
+	return allowed
+}
+
 func (s *Server) SetTLSConfigs(serverTLS, clientTLS *tls.Config) {
 	s.tlsMutex.Lock()
 	defer s.tlsMutex.Unlock()
@@ -33,8 +52,9 @@ func (s *Server) SetTLSConfigs(serverTLS, clientTLS *tls.Config) {
 	s.armHotReloadClientTLSLocked(clientTLS)
 }
 
-// armHotReloadServerTLS installs GetConfigForClient so ServeTLS's cloned config
-// still picks up rotated certs/CA from an atomic snapshot (L2).
+// armHotReloadServerTLS installs GetConfigForClient so HTTP listener snapshots
+// pick up rotated certs/CA per handshake. QUICManager owns an equivalent
+// generation-checked callback for its live listener (L2).
 func (s *Server) armHotReloadServerTLS(cfg *tls.Config) {
 	s.tlsMutex.Lock()
 	defer s.tlsMutex.Unlock()
@@ -52,9 +72,9 @@ func (s *Server) armHotReloadServerTLSLocked(cfg *tls.Config) {
 			return nil, fmt.Errorf("no server TLS material")
 		}
 		stls := m.cfg.Clone()
-		// Honor ALPN the client offered (HTTP/2 or QUIC proxyma-p2p).
-		if hello != nil && len(hello.SupportedProtos) > 0 {
-			stls.NextProtos = append([]string(nil), hello.SupportedProtos...)
+		stls.NextProtos = nil
+		if hello != nil {
+			stls.NextProtos = allowedServerALPN(hello.SupportedProtos)
 		}
 		return stls, nil
 	}
@@ -124,8 +144,8 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 		s.clientMaterial.Store(m)
 	}
 
-	if s.quicMgr != nil {
-		s.quicMgr.ReloadTLS(newClientTLS, newServerTLS)
+	if qm := s.CurrentNATState().QUICManager; qm != nil {
+		qm.ReloadTLS(newClientTLS, newServerTLS)
 	}
 
 	return nil

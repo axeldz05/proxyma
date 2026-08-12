@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"net/http"
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
@@ -43,25 +44,45 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if notification.File.Deleted {
-		se.ProcessRemoteDeletion(notification.File)
+		if err := se.ProcessRemoteDeletion(notification.File); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "Failed to persist deletion metadata")
+			return
+		}
 		utils.RespondMessage(w, http.StatusOK, "Metadata updated")
 		return
 	}
-	updated, err := se.upsertIndex(notification.File)
+	_, err := se.upsertIndex(notification.File)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to update metadata")
 		return
 	}
-	if updated && se.IsSubscribed(notification.File.Name) {
-		hasBlob, blobErr := se.HasPhysicalBlob(notification.File.Hash)
+	current, exists, err := se.GetFileMetaE(notification.File.Name)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to read current metadata")
+		return
+	}
+	subscribed := false
+	if exists && current == notification.File && !current.Deleted {
+		subscribed, err = se.IsSubscribedE(current.Name)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "Failed to read subscription")
+			return
+		}
+	}
+	if exists && current == notification.File && !current.Deleted && subscribed {
+		hasBlob, blobErr := se.HasPhysicalBlob(current.Hash)
 		if blobErr != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "Failed to check local blob")
 			return
 		}
 
 		if !hasBlob {
-			err := se.onDownloadNeeded(notification.File, notification.Source)
+			err := se.requestRemoteDownload(current, notification.Source)
 			if err != nil {
+				if errors.Is(err, ErrBlobDiscarded) {
+					utils.RespondMessage(w, http.StatusOK, "Notification superseded")
+					return
+				}
 				if strings.Contains(err.Error(), "queue full") {
 					utils.RespondError(w, http.StatusServiceUnavailable, "Download queue full")
 					return

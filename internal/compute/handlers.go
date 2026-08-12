@@ -1,7 +1,9 @@
 package compute
 
 import (
+	"errors"
 	"net/http"
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
@@ -44,6 +46,31 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	submitterNodeID, authenticated := p2p.PeerCNFromTLS(r.TLS)
+	if !authenticated {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return
+	}
+	if taskReq.PipelineState == nil {
+		if taskReq.RequesterNodeID != "" && taskReq.RequesterNodeID != submitterNodeID {
+			utils.RespondError(w, http.StatusForbidden, "requester node ID must match authenticated peer")
+			return
+		}
+		taskReq.RequesterNodeID = submitterNodeID
+	} else {
+		expectedSubmitter := taskReq.PipelineState.OutputProducers["$initial"]
+		if taskReq.PipelineState.CurrentStep > 0 {
+			if schema, exists := s.GetPipeline(taskReq.Service); exists &&
+				taskReq.PipelineState.CurrentStep <= len(schema.Steps) {
+				previousStepID := schema.Steps[taskReq.PipelineState.CurrentStep-1].ID
+				expectedSubmitter = taskReq.PipelineState.OutputProducers[previousStepID]
+			}
+		}
+		if expectedSubmitter == "" || expectedSubmitter != submitterNodeID {
+			utils.RespondError(w, http.StatusForbidden, "pipeline provenance does not match authenticated submitter")
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -69,7 +96,28 @@ func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	s.setTaskStatus(webhookPayload)
+	producerNodeID, authenticated := p2p.PeerCNFromTLS(r.TLS)
+	if !authenticated {
+		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		return
+	}
+	if webhookPayload.ProducerNodeID != "" && webhookPayload.ProducerNodeID != producerNodeID {
+		utils.RespondError(w, http.StatusForbidden, "producer node ID must match authenticated peer")
+		return
+	}
+	if err := s.AcceptTaskCallback(producerNodeID, webhookPayload); err != nil {
+		switch {
+		case errors.Is(err, ErrTaskProducer):
+			utils.RespondError(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrTaskNotFound):
+			utils.RespondError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTaskTerminal):
+			utils.RespondError(w, http.StatusConflict, err.Error())
+		default:
+			utils.RespondError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
 	s.logger.Debug("Webhook received. Task updated", "job_id", webhookPayload.TaskID, "status", webhookPayload.Status)
 	utils.RespondJSON(w, http.StatusOK, protocol.APITaskAck{
 		Status:  "ok",

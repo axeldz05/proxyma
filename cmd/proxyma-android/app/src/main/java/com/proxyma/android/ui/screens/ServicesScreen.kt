@@ -1,6 +1,7 @@
 package com.proxyma.android.ui.screens
 
 import android.util.Log
+import androidx.annotation.MainThread
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -29,12 +30,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FileTask
 import com.proxyma.android.models.FormParameter
 import com.proxyma.android.models.PipelineSchema
+import com.proxyma.android.models.RunDialogTarget
 import com.proxyma.android.models.ServiceDetail
+import com.proxyma.android.models.TaskLedger
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
@@ -45,12 +50,169 @@ import com.proxyma.android.ui.components.ServiceCardItem
 import com.proxyma.android.ui.components.TaskLogCardItem
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
-import kotlin.concurrent.thread
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-private val fileTasks = mutableStateListOf<FileTask>()
+class ServicesViewModel : ViewModel() {
+    val fileTasks = mutableStateListOf<FileTask>()
+    private val taskLedger = TaskLedger(fileTasks)
+    private val streamJobs = ConcurrentHashMap<String, Job>()
+    private val taskSequence = AtomicLong(0)
+
+    @MainThread
+    fun enqueueTask(
+        name: String,
+        payloadJson: String,
+        streaming: Boolean,
+        unaryAction: (() -> String)? = null
+    ): String {
+        val taskId = "task_${taskSequence.incrementAndGet()}"
+        taskLedger.addFirst(
+            FileTask(
+                taskId = taskId,
+                service = name,
+                input = payloadJson,
+                output = if (streaming) "stream" else "result",
+                status = if (streaming) "streaming" else "running",
+                isStreaming = streaming
+            )
+        )
+        if (streaming) {
+            startStreamTask(taskId, name, payloadJson)
+        } else {
+            startUnaryTask(
+                taskId,
+                unaryAction ?: { """{"error":"missing unary action"}""" }
+            )
+        }
+        return taskId
+    }
+
+    @MainThread
+    fun removeTask(task: FileTask) {
+        streamJobs.remove(task.taskId)?.cancel()
+        taskLedger.remove(task)
+    }
+
+    private fun startUnaryTask(taskId: String, action: () -> String) {
+        viewModelScope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    val response = bindResult(
+                        action(),
+                        BindMethod.LEGACY_ERROR_PREFIX
+                    ).getOrThrow()
+                    val reference = parseTaskResultReference(response)
+                    val resultPath = reference.localPath ?: reference.blobHash?.let { hash ->
+                        bindResult(
+                            proxyma_bind.Proxyma_bind.getLocalBlobPath(hash),
+                            BindMethod.LEGACY_ERROR_PREFIX
+                        )
+                            .getOrThrow()
+                            .ifBlank { null }
+                    }
+                    response to resultPath
+                }.let { Result.success(it) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Result.failure(error)
+            }
+
+            result.fold(
+                onSuccess = { (_, resultPath) ->
+                    updateTask(taskId) {
+                        it.copy(status = "completed", resultPath = resultPath)
+                    }
+                },
+                onFailure = { error ->
+                    updateTask(taskId) {
+                        it.copy(status = "failed", error = error.message ?: "failed")
+                    }
+                }
+            )
+        }
+    }
+
+    private fun startStreamTask(
+        taskId: String,
+        serviceName: String,
+        payloadJson: String
+    ) {
+        val job = launchManagedBindStream(
+            scope = viewModelScope,
+            serviceName = serviceName,
+            payloadJson = payloadJson,
+            listenerFactory = { stop ->
+                object : proxyma_bind.StreamEventListener {
+                    override fun onChunk(chunkJSON: String) {
+                        viewModelScope.launch {
+                            updateTask(taskId) { current ->
+                                val output = current.streamOutput
+                                    ?.takeIf { it.isNotEmpty() }
+                                    ?.plus("\n$chunkJSON")
+                                    ?: chunkJSON
+                                current.copy(streamOutput = output)
+                            }
+                        }
+                    }
+
+                    override fun onError(errMsg: String) {
+                        val message = bindErrorMessage(errMsg)
+                        viewModelScope.launch {
+                            updateTask(taskId) {
+                                it.copy(status = "failed", error = message)
+                            }
+                            stop()
+                        }
+                    }
+
+                    override fun onComplete() {
+                        viewModelScope.launch {
+                            updateTask(taskId) { it.copy(status = "completed") }
+                            stop()
+                        }
+                    }
+                }
+            },
+            onStarted = { streamID ->
+                updateTask(taskId) { it.copy(streamId = streamID) }
+            },
+            onStartFailure = { error ->
+                updateTask(taskId) {
+                    it.copy(status = "failed", error = error.message ?: "stream failed")
+                }
+            }
+        )
+        streamJobs[taskId] = job
+        job.invokeOnCompletion {
+            streamJobs.remove(taskId, job)
+        }
+    }
+
+    @MainThread
+    private fun updateTask(taskId: String, transform: (FileTask) -> FileTask) {
+        taskLedger.update(taskId, transform)
+    }
+
+    override fun onCleared() {
+        streamJobs.values.forEach(Job::cancel)
+        streamJobs.clear()
+        super.onCleared()
+    }
+}
 
 @Composable
-fun ServicesScreen(serviceDomain: Map<String, Any>?) {
+fun ServicesScreen(
+    serviceDomain: Map<String, Any>?,
+    taskViewModel: ServicesViewModel
+) {
+    val fileTasks = taskViewModel.fileTasks
     val serviceNames by rememberPolledParsedState(4000, emptyList<String>()) {
         proxyma_bind.Proxyma_bind.discoverServices()
     }
@@ -68,15 +230,13 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
     var manualServicesList by remember { mutableStateOf<List<String>?>(null) }
     val displayedServices = manualServicesList ?: serviceNames
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var runTargetName by remember { mutableStateOf<String?>(null) }
-    var runTargetIsPipeline by remember { mutableStateOf(false) }
-    var runTargetIsStreaming by remember { mutableStateOf(false) }
-    var runTargetSpecs by remember { mutableStateOf<List<FormParameter>?>(null) }
+    var runTarget by remember { mutableStateOf(RunDialogTarget()) }
 
     fun triggerManualDiscovery() {
         isManualDiscovering = true
-        runBindOnBg({
+        runBindOnBg(scope, {
             Log.i("ProxymaService", "[Android UI] User triggered manual service discovery...")
             proxyma_bind.Proxyma_bind.discoverServices()
         }) { result ->
@@ -133,7 +293,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                             TaskLogCardItem(
                                 task = task,
                                 onClick = { activeDetailTask = task },
-                                onOpenResult = { path, name -> openFileNatively(context, path, name) }
+                                onOpenResult = { path, name -> openFileNatively(scope, context, path, name) }
                             )
                         }
                     }
@@ -175,11 +335,13 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         onRun = {
                             val initialConns = pipeline.connections.filter { it.from_step == "\$initial" }
                             if (initialConns.isEmpty()) {
-                                runTargetName = pipeline.id
-                                runTargetIsPipeline = true
-                                runTargetSpecs = DEFAULT_RUN_PARAMS
+                                runTarget = RunDialogTarget(
+                                    name = pipeline.id,
+                                    isPipeline = true,
+                                    specs = DEFAULT_RUN_PARAMS
+                                )
                             } else {
-                                thread {
+                                runOnBg(scope, action = {
                                     val specs = initialConns.map { conn ->
                                         val fromPortName = conn.from_port
                                         val tgtStep = pipeline.steps.find { it.id == conn.to_step }
@@ -192,11 +354,13 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                                             name = fromPortName
                                         )
                                     }.distinctBy { it.name }
-                                    isRunningOnMainThread {
-                                        runTargetName = pipeline.id
-                                        runTargetIsPipeline = true
-                                        runTargetSpecs = specs.ifEmpty { DEFAULT_RUN_PARAMS }
-                                    }
+                                    specs.ifEmpty { DEFAULT_RUN_PARAMS }
+                                }) { result ->
+                                    runTarget = RunDialogTarget(
+                                        name = pipeline.id,
+                                        isPipeline = true,
+                                        specs = result.getOrDefault(DEFAULT_RUN_PARAMS)
+                                    )
                                 }
                             }
                         },
@@ -205,7 +369,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                             showEditor = true
                         },
                         onClone = {
-                            runBindOnBg({
+                            runBindOnBg(scope, {
                                 proxyma_bind.Proxyma_bind.clonePipelineSchemaJson(pipeline.id, "${pipeline.id}-local", "\$local")
                             }) { result ->
                                 result.fold(
@@ -224,6 +388,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         },
                         onDelete = {
                             executeGoCall(
+                                scope = scope,
                                 context = context,
                                 onStart = {},
                                 onComplete = {},
@@ -283,17 +448,18 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
                         onClick = {
                             selectedService = svcName
                             isLoading = true
-                            loadServiceDetail(svcName) { detail ->
+                            loadServiceDetail(scope, svcName) { detail ->
                                 isLoading = false
                                 serviceDetailJson = detail?.let { Gson().toJson(it) } ?: ""
                             }
                         },
                         onRun = {
-                            loadRunSpecs(svcName) { specs, isStream ->
-                                runTargetName = svcName
-                                runTargetIsPipeline = false
-                                runTargetIsStreaming = isStream
-                                runTargetSpecs = specs
+                            loadRunSpecs(scope, svcName) { specs, isStream ->
+                                runTarget = RunDialogTarget(
+                                    name = svcName,
+                                    isStreaming = isStream,
+                                    specs = specs
+                                )
                             }
                         }
                     )
@@ -308,7 +474,10 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
         } else {
             val details: ServiceDetail = remember(serviceDetailJson) {
                 parseServiceDetail(serviceDetailJson)
-                    ?: ServiceDetail("", "Failed to parse info", false, "", emptyList(), emptyList(), null, null, "parse error")
+                    ?: ServiceDetail(
+                        description = "Failed to parse info",
+                        error = "parse error"
+                    )
             }
 
             if (details.ui != null && details.ui.type == "web_app") {
@@ -323,7 +492,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             } else {
                 ServiceDetailLayout(
                     details = details,
-                    fileTasks = fileTasks,
+                    taskViewModel = taskViewModel,
                     onBack = {
                         selectedService = null
                         serviceDetailJson = ""
@@ -376,7 +545,7 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        fileTasks.remove(task)
+                        taskViewModel.removeTask(task)
                         activeDetailTask = null
                     }
                 ) {
@@ -401,31 +570,27 @@ fun ServicesScreen(serviceDomain: Map<String, Any>?) {
         )
     }
 
-    if (runTargetName != null && runTargetSpecs != null) {
+    if (runTarget.isVisible) {
+        val target = runTarget
         RunTaskDialog(
-            targetName = runTargetName!!,
-            isPipeline = runTargetIsPipeline,
-            parameterSpecs = runTargetSpecs!!,
+            targetName = target.name.orEmpty(),
+            isPipeline = target.isPipeline,
+            parameterSpecs = target.specs.orEmpty(),
             onDismiss = {
-                runTargetName = null
-                runTargetSpecs = null
+                runTarget = target.reset()
             },
             onExecute = { payloadMap ->
                 val payloadJson = Gson().toJson(payloadMap)
-                val targetId = runTargetName!!
-                val isPipe = runTargetIsPipeline
-                val isStream = runTargetIsStreaming
-                runTargetName = null
-                runTargetSpecs = null
-                runTargetIsStreaming = false
+                val targetId = target.name.orEmpty()
+                val isPipe = target.isPipeline
+                val isStream = target.isStreaming
+                runTarget = target.reset()
 
                 context.toast(if (isStream) "🌊 Streaming $targetId..." else "🚀 Running $targetId...")
-                enqueueFileTask(
-                    fileTasks = fileTasks,
+                taskViewModel.enqueueTask(
                     name = targetId,
                     payloadJson = payloadJson,
                     streaming = isStream,
-                    context = context,
                     unaryAction = {
                         if (isPipe) proxyma_bind.Proxyma_bind.runPipeline(targetId, payloadJson)
                         else proxyma_bind.Proxyma_bind.runService(targetId, payloadJson)

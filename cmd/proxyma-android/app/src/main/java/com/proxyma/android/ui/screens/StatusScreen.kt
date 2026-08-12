@@ -26,39 +26,44 @@ import com.proxyma.android.ui.components.StatusIndicator
 import com.proxyma.android.ui.theme.*
 import com.proxyma.android.utils.*
 
+private data class NodeStatusSnapshot(
+    val isRunning: Boolean = false,
+    val nodeId: String = "-",
+    val address: String = "-",
+    val upSpeed: Long = 0,
+    val downSpeed: Long = 0,
+    val totalSent: Long = 0,
+    val totalReceived: Long = 0
+)
+
 @Suppress("UNCHECKED_CAST")
 @Composable
 fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, Any>?) {
-    var isRunning by remember { mutableStateOf(false) }
-    var nodeId by remember { mutableStateOf("-") }
-    var address by remember { mutableStateOf("-") }
-    var upSpeed by remember { mutableLongStateOf(0L) }
-    var downSpeed by remember { mutableLongStateOf(0L) }
-    var totalSent by remember { mutableLongStateOf(0L) }
-    var totalRecv by remember { mutableLongStateOf(0L) }
+    var nodeStatus by remember { mutableStateOf(NodeStatusSnapshot()) }
     
     val peerList by rememberPolledParsedState(2000, emptyList<Peer>()) {
         proxyma_bind.Proxyma_bind.getPeersJson()
     }
 
-    PollState(period = 2000) {
-        isRunning = proxyma_bind.Proxyma_bind.isNodeRunning()
-        if (isRunning) {
-            nodeId = proxyma_bind.Proxyma_bind.getNodeID()
-            address = proxyma_bind.Proxyma_bind.getNodeAddress()
-            upSpeed = proxyma_bind.Proxyma_bind.getUploadSpeed()
-            downSpeed = proxyma_bind.Proxyma_bind.getDownloadSpeed()
-            totalSent = proxyma_bind.Proxyma_bind.getTotalSent()
-            totalRecv = proxyma_bind.Proxyma_bind.getTotalReceived()
-        } else {
-            nodeId = "-"
-            address = "-"
-            upSpeed = 0
-            downSpeed = 0
-            totalSent = 0
-            totalRecv = 0
-        }
-    }
+    PollState(
+        period = 2000,
+        fetchData = {
+            if (proxyma_bind.Proxyma_bind.isNodeRunning()) {
+                NodeStatusSnapshot(
+                    isRunning = true,
+                    nodeId = proxyma_bind.Proxyma_bind.getNodeID(),
+                    address = proxyma_bind.Proxyma_bind.getNodeAddress(),
+                    upSpeed = proxyma_bind.Proxyma_bind.getUploadSpeed(),
+                    downSpeed = proxyma_bind.Proxyma_bind.getDownloadSpeed(),
+                    totalSent = proxyma_bind.Proxyma_bind.getTotalSent(),
+                    totalReceived = proxyma_bind.Proxyma_bind.getTotalReceived()
+                )
+            } else {
+                NodeStatusSnapshot()
+            }
+        },
+        onResult = { nodeStatus = it }
+    )
 
     LazyColumn(
         modifier = Modifier
@@ -80,7 +85,7 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                     ) {
                         Text("Daemon Status", fontWeight = FontWeight.Bold, color = Color.Gray)
                         StatusIndicator(
-                            active = isRunning,
+                            active = nodeStatus.isRunning,
                             activeLabel = "ONLINE",
                             inactiveLabel = "OFFLINE",
                             activeColor = MintGreen,
@@ -90,9 +95,9 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                         )
                     }
                     Spacer(Modifier.height(12.dp))
-                    Text("Node ID: $nodeId", color = Color.White, fontSize = 15.sp)
+                    Text("Node ID: ${nodeStatus.nodeId}", color = Color.White, fontSize = 15.sp)
                     Spacer(Modifier.height(4.dp))
-                    Text("Address: $address", color = Color.White, fontSize = 15.sp)
+                    Text("Address: ${nodeStatus.address}", color = Color.White, fontSize = 15.sp)
                 }
             }
         }
@@ -105,8 +110,8 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         TrafficStatColumn(
                             title = "Upload Speed",
-                            speed = upSpeed,
-                            total = totalSent,
+                            speed = nodeStatus.upSpeed,
+                            total = nodeStatus.totalSent,
                             totalPrefix = "Total sent: ",
                             icon = Icons.Default.ArrowUpward,
                             iconColor = VioletPrimary,
@@ -114,8 +119,8 @@ fun StatusScreen(telemetryDomain: Map<String, Any>?, peersDomain: Map<String, An
                         )
                         TrafficStatColumn(
                             title = "Download Speed",
-                            speed = downSpeed,
-                            total = totalRecv,
+                            speed = nodeStatus.downSpeed,
+                            total = nodeStatus.totalReceived,
                             totalPrefix = "Total received: ",
                             icon = Icons.Default.ArrowDownward,
                             iconColor = MintGreen,

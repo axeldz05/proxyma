@@ -62,6 +62,16 @@ func prepareBody(body any) (io.Reader, string, error) {
 }
 
 func (c *HTTPPeerClient) sendRequest(ctx context.Context, method, target, path string, body io.Reader, contentType string) (*http.Response, error) {
+	return c.sendRequestWithHeaders(ctx, method, target, path, body, contentType, nil)
+}
+
+func (c *HTTPPeerClient) sendRequestWithHeaders(
+	ctx context.Context,
+	method, target, path string,
+	body io.Reader,
+	contentType string,
+	headers http.Header,
+) (*http.Response, error) {
 	safeURL, err := validateAndBuildURL(target, path)
 	if err != nil {
 		return nil, err
@@ -72,6 +82,11 @@ func (c *HTTPPeerClient) sendRequest(ctx context.Context, method, target, path s
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	return c.client.Do(req)
 }
