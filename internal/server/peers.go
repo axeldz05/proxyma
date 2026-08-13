@@ -181,8 +181,8 @@ func (s *Server) CheckNAT() {
 	s.runNATCheck()
 }
 
-func (s *Server) AddPendingInvite(secret string, expiration time.Time) {
-	s.Invites.Add(secret, expiration)
+func (s *Server) AddPendingInvite(secret string, expiration time.Time) error {
+	return s.Invites.Add(secret, expiration)
 }
 
 func (s *Server) DiscoverServices(ctx context.Context, peerID string) ([]string, error) {

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -207,15 +206,6 @@ func JoinCluster(storagePath string, token string, nodeID string, port string) (
 		if retryErr := installation.cleanupCommitted(); retryErr != nil {
 			logger.Warn("Joined transaction cleanup retry failed", "error", retryErr)
 		}
-	}
-
-	srvMutex.RLock()
-	startedServer := srv
-	srvMutex.RUnlock()
-	if startedServer != nil {
-		startNodeBackgroundWork(startedServer, func(ctx context.Context) {
-			runDelayedJoinSync(ctx, startedServer)
-		})
 	}
 
 	joined = true
@@ -615,24 +605,4 @@ func restorePreviousNode(previous nodeGlobalsSnapshot, wasStopped bool) error {
 		return fmt.Errorf("failed to restart previous node after join rollback: %s", ParseBindError(result))
 	}
 	return nil
-}
-
-func runDelayedJoinSync(ctx context.Context, startedServer interface {
-	ExecuteSync() error
-	LocalServiceDiscover() ([]string, error)
-}) {
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return
-	case <-timer.C:
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	_ = startedServer.ExecuteSync()
-	if ctx.Err() == nil {
-		_, _ = startedServer.LocalServiceDiscover()
-	}
 }

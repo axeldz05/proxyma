@@ -128,7 +128,6 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	s.natCheck = s.determineSponsorAndNATStatus
 
 	s.Peers = NewPeerRegistry(cfg.Logger, cfg.ID)
-	s.Invites = NewInviteManager(cfg.Logger)
 	s.Bandwidth = NewBandwidthTracker()
 	s.Relays = NewRelayManager(s)
 
@@ -139,7 +138,12 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 		s.peerClient.SetOwnAddress(cfg.Address)
 	}
 
-	s.Compute = compute.NewComputeEngine(lifetimeCtx, cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	var err error
+	s.Compute, err = compute.NewComputeEngine(lifetimeCtx, cfg.Logger, s.peerClient, cfg.Workers, cfg.ID)
+	if err != nil {
+		s.cancelLife()
+		return nil, err
+	}
 	s.Compute.SetAddress(cfg.Address)
 	engine, err := storage.NewStorageEngine(cfg.Logger, cfg.StoragePath, nil, func(file protocol.IndexEntry, rawSource string) error {
 		if _, ok := s.GetPeersRecordCopy()[rawSource]; ok {
@@ -159,6 +163,13 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	}
 	s.Storage = engine
 	s.Storage.SetMutationNotificationHook(s.prepareVFSNotification)
+	s.Invites, err = NewInviteManager(cfg.Logger, s.Storage)
+	if err != nil {
+		_ = s.Storage.Close()
+		s.Compute.Close()
+		s.cancelLife()
+		return nil, fmt.Errorf("initialize invite manager: %w", err)
+	}
 
 	// Load persisted peers from DB and populate registry
 	if peers, err := s.Storage.LoadPeers(); err == nil {
@@ -226,7 +237,9 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 			case <-s.done:
 				return
 			case <-ticker.C:
-				s.Invites.Sweep()
+				if err := s.Invites.Sweep(); err != nil {
+					s.Config.Logger.Error("Failed to sweep expired invites", "error", err)
+				}
 				s.Storage.CleanupTempFiles()
 			}
 		}
@@ -385,8 +398,8 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 	s.readyOnce.Do(func() { close(s.ready) })
 	s.Config.Logger.Info("Starting secure P2P node", "address", addr)
 
-	// Run NAT auto-detection asynchronously after a brief delay.
-	s.scheduleNATCheck(100 * time.Millisecond)
+	// Listeners are ready; NAT auto-detection can start immediately in background.
+	s.scheduleNATCheck(0)
 	s.lifecycleMu.Unlock()
 
 	return hs.ServeTLS(httpListener, "", "")

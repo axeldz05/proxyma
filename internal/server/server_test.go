@@ -504,7 +504,7 @@ func TestInviteAndJoinLifecycle(t *testing.T) {
 	})
 
 	t.Run("Accepts a valid token and deletes it after one use", func(t *testing.T) {
-		// Invalid CSR must not burn the invite (A4: Consume only after SignCSR succeeds).
+		// Validation happens before the atomic consume, so an invalid CSR must not burn the invite.
 		badCSRReq := protocol.JoinRequest{Secret: secret, CSR: "dummy-csr", ID: "joiner", Address: validAddress}
 		badCSRBody, _ := json.Marshal(badCSRReq)
 
@@ -651,7 +651,7 @@ func TestExpiredInviteIsRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Force the invite to expire
-	sv.ExpireInvite(secret)
+	require.NoError(t, sv.ExpireInvite(secret))
 
 	// Attempt to join with the expired token
 	dummyNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -1274,7 +1274,8 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the invite is active initially
-	_, validBeforeExpire := sponsor.Invites.CheckAndConsume(secretHex1)
+	_, validBeforeExpire, err := sponsor.Invites.CheckAndConsume(secretHex1)
+	require.NoError(t, err)
 	require.True(t, validBeforeExpire, "Invite token should be valid before expiration")
 
 	// 2. Generate another invite and force it to be expired
@@ -1294,13 +1295,14 @@ func TestInviteSweeperRemovesExpiredTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	// Expire the second invite using the TestServer helper
-	sponsor.ExpireInvite(secretHex2)
+	require.NoError(t, sponsor.ExpireInvite(secretHex2))
 
 	// 3. Run Sweep manually to cleanup expired invites
-	sponsor.Invites.Sweep()
+	require.NoError(t, sponsor.Invites.Sweep())
 
 	// Verify the expired invite is gone/invalid
-	_, validAfterExpire := sponsor.Invites.CheckAndConsume(secretHex2)
+	_, validAfterExpire, err := sponsor.Invites.CheckAndConsume(secretHex2)
+	require.NoError(t, err)
 	require.False(t, validAfterExpire, "Expired invite token should have been removed by Sweep")
 }
 

@@ -33,26 +33,20 @@ var (
 	appFinalizer *nodeFinalizer
 
 	unixResponseIdleTimeout = protocol.RPCTimeoutTaskWait
-	startupBootstrapWait    = waitForStartupBootstrap
+	startupBootstrapRun     = runStartupBootstrap
 	nodeShutdownTimeout     = 3 * time.Second
 )
 
-type bootstrapWaitFunc func(context.Context) bool
+type bootstrapServer interface {
+	AcquireWorkLease(context.Context) (context.Context, func(), error)
+	AnnouncePresence(string) error
+	LocalServiceDiscoverContext(context.Context) ([]string, error)
+	StartRelayPolling(context.Context, string)
+}
 
 type nodeFinalizer struct {
 	done chan struct{}
 	err  error
-}
-
-func waitForStartupBootstrap(ctx context.Context) bool {
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }
 
 func getSrv() *server.Server {
@@ -466,7 +460,7 @@ func startNode(storagePath string, debug bool) string {
 	appStopping = false
 	appFinalizer = nil
 	backgroundWork := &sync.WaitGroup{}
-	bootstrapWait := startupBootstrapWait
+	bootstrapRun := startupBootstrapRun
 	if cfg.BootstrapNode != "" {
 		backgroundWork.Add(1)
 	}
@@ -477,7 +471,7 @@ func startNode(storagePath string, debug bool) string {
 	if cfg.BootstrapNode != "" {
 		go func() {
 			defer backgroundWork.Done()
-			runDelayedBootstrap(ctx, startedServer, cfg.BootstrapNode, logger, bootstrapWait)
+			bootstrapRun(ctx, startedServer, cfg.BootstrapNode, logger)
 		}()
 	}
 
@@ -545,16 +539,12 @@ func ensureNodeFinalizer(
 	return finalizer
 }
 
-func runDelayedBootstrap(
+func runStartupBootstrap(
 	ctx context.Context,
-	startedServer *server.Server,
+	startedServer bootstrapServer,
 	bootstrapNode string,
 	logger *slog.Logger,
-	wait bootstrapWaitFunc,
 ) {
-	if !wait(ctx) {
-		return
-	}
 	leaseCtx, release, err := startedServer.AcquireWorkLease(ctx)
 	if err != nil {
 		return
@@ -569,9 +559,16 @@ func runDelayedBootstrap(
 		}
 		return
 	}
-	if leaseCtx.Err() == nil {
-		startedServer.StartRelayPolling(leaseCtx, bootstrapNode)
+	if leaseCtx.Err() != nil {
+		return
 	}
+	if _, err := startedServer.LocalServiceDiscoverContext(leaseCtx); err != nil && leaseCtx.Err() == nil {
+		logger.Warn("Initial service discovery failed", "error", err)
+	}
+	if leaseCtx.Err() != nil {
+		return
+	}
+	startedServer.StartRelayPolling(leaseCtx, bootstrapNode)
 }
 
 func startNodeBackgroundWork(

@@ -26,8 +26,8 @@ func (ts *TestServer) Client() *http.Client {
 	return ts.httpTestSrv.Client()
 }
 
-func (ts *TestServer) ExpireInvite(secret string) {
-	ts.SetPendingInviteExpiration(secret, time.Now().Add(-1*time.Minute))
+func (ts *TestServer) ExpireInvite(secret string) error {
+	return ts.SetPendingInviteExpiration(secret, time.Now().Add(-1*time.Minute))
 }
 
 func copyFile(t *testing.T, src, dst string) {

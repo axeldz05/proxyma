@@ -924,6 +924,18 @@ func (se *StorageEngine) LoadPeers() (map[string]protocol.AddressRecord, error) 
 	return boltLoadMapJSON[protocol.AddressRecord](se.subscriptions, bucketPeers)
 }
 
+func (se *StorageEngine) SaveInvite(secret string, expiration time.Time) error {
+	return se.boltPutKeyed(bucketPendingInvites, secret, expiration.UTC())
+}
+
+func (se *StorageEngine) DeleteInvite(secret string) error {
+	return se.boltDeleteKeyed(bucketPendingInvites, secret)
+}
+
+func (se *StorageEngine) LoadInvites() (map[string]time.Time, error) {
+	return boltLoadMapJSON[time.Time](se.subscriptions, bucketPendingInvites)
+}
+
 func (se *StorageEngine) Close() error {
 	if se.subscriptions != nil {
 		return se.subscriptions.Close()

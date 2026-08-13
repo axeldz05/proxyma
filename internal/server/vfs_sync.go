@@ -13,12 +13,16 @@ import (
 )
 
 func (s *Server) ExecuteSync() error {
+	return s.ExecuteSyncContext(s.lifetimeCtx)
+}
+
+func (s *Server) ExecuteSyncContext(ctx context.Context) error {
 	var (
 		mu      sync.Mutex
 		lastErr error
 		anyOK   bool
 	)
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync}, func(ctx context.Context, peerID string) error {
+	s.forEachPeer(forEachPeerOpts{Context: ctx, Timeout: PeerRPCSync}, func(ctx context.Context, peerID string) error {
 		s.ensureQUICSession(peerID)
 		ctx = context.WithValue(ctx, p2p.BypassHolePunchKey{}, true)
 		manifest, err := s.peerClient.FetchManifest(ctx, peerID)

@@ -2,6 +2,7 @@ package compute_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewComputeEngineRejectsNilParentWithoutPanic(t *testing.T) {
+	t.Parallel()
+	logger := protocol.NewLogger(io.Discard, false)
+
+	engine, err := compute.NewComputeEngine(nil, logger, nil, 1, "nil-parent") //nolint:staticcheck // verifies nil rejection
+
+	require.Error(t, err)
+	require.Nil(t, engine)
+}
 
 func TestCannotRegisterDuplicateServices(t *testing.T) {
 	registry := compute.NewServiceRegistry()
@@ -31,7 +42,8 @@ func TestCannotRegisterDuplicateServices(t *testing.T) {
 func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
-	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
+	engine, err := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
+	require.NoError(t, err)
 	defer engine.Close()
 
 	schema := protocol.ServiceSchema{
@@ -44,7 +56,7 @@ func TestWorkerExecutesTaskAndStoresResult(t *testing.T) {
 
 	mockBinPath := setupMockExecutable(t)
 	handler := compute.BuildScriptHandler(mockBinPath)
-	err := engine.RegisterNewService(schema, handler)
+	err = engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 
 	t.Run("Successful Execution", func(t *testing.T) {
@@ -139,7 +151,8 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
 
-	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node-grpc")
+	engine, err := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node-grpc")
+	require.NoError(t, err)
 	defer engine.Close()
 
 	mockServer := setupMockGRPCWebhookServer(t)
@@ -154,7 +167,7 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 	}
 
 	handler := compute.BuildHTTPHandler(mockServer.URL, 2*time.Second)
-	err := engine.RegisterNewService(schema, handler)
+	err = engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 
 	t.Run("Successful Webhook Execution", func(t *testing.T) {
@@ -261,7 +274,8 @@ func TestWorkerExecutesTaskViaGRPCHandler(t *testing.T) {
 func TestPipelineStepInputValidation(t *testing.T) {
 	logger := protocol.NewLogger(os.Stdout, false)
 	mockPeerClient := &testutil.MockPeerClient{}
-	engine := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
+	engine, err := compute.NewComputeEngine(context.Background(), logger, mockPeerClient, 1, "test-node")
+	require.NoError(t, err)
 	defer engine.Close()
 
 	// Register a service with required parameters
@@ -276,7 +290,7 @@ func TestPipelineStepInputValidation(t *testing.T) {
 	handler := compute.ServiceHandler(func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "ok"}, nil
 	})
-	err := engine.RegisterNewService(schema, handler)
+	err = engine.RegisterNewService(schema, handler)
 	require.NoError(t, err)
 
 	t.Run("Fails validation when parameter is missing", func(t *testing.T) {

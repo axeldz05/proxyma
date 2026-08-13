@@ -737,3 +737,20 @@ func TestNewStorageEngineReportsOpenFailure(t *testing.T) {
 	require.Nil(t, engine)
 	require.Contains(t, err.Error(), "metadata.db")
 }
+
+func TestInvitePersistenceRoundTrip(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "invite-persistence")
+	engine := testutil.NewStorageEngine(t, cfg)
+	expiration := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+
+	require.NoError(t, engine.SaveInvite("secret", expiration))
+	invites, err := engine.LoadInvites()
+	require.NoError(t, err)
+	require.Equal(t, expiration, invites["secret"])
+
+	require.NoError(t, engine.DeleteInvite("secret"))
+	invites, err = engine.LoadInvites()
+	require.NoError(t, err)
+	require.NotContains(t, invites, "secret")
+}

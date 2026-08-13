@@ -42,11 +42,15 @@ func (s *Server) LoadLocalServices() {
 }
 
 func (s *Server) LocalServiceDiscover() ([]string, error) {
+	return s.LocalServiceDiscoverContext(s.lifetimeCtx)
+}
+
+func (s *Server) LocalServiceDiscoverContext(ctx context.Context) ([]string, error) {
 	names := make(map[string]bool)
 	for _, name := range s.Compute.ListServices() {
 		names[name] = true
 	}
-	peerLists := mapEachPeer(s, forEachPeerOpts{Timeout: PeerRPCDiscover, Parallel: true}, func(ctx context.Context, peerID string) ([]string, error) {
+	peerLists := mapEachPeer(s, forEachPeerOpts{Context: ctx, Timeout: PeerRPCDiscover, Parallel: true}, func(ctx context.Context, peerID string) ([]string, error) {
 		peerSvc, err := s.DiscoverServices(ctx, peerID)
 		if err != nil {
 			s.Config.Logger.Warn("Service discovery from cluster peer failed", "peerID", peerID, "error", err)

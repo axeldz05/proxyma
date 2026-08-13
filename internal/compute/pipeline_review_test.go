@@ -23,7 +23,10 @@ import (
 
 func newReviewCompute(t *testing.T, workers int) *ComputeEngine {
 	t.Helper()
-	engine := NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, workers, "requester")
+	engine, err := NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, workers, "requester")
+	if err != nil {
+		t.Fatalf("new compute engine: %v", err)
+	}
 	t.Cleanup(engine.Close)
 	return engine
 }

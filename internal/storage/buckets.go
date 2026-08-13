@@ -10,6 +10,7 @@ const (
 	bucketNotifyOutboxV2Reservations = "notify_outbox_v2_reservations"
 	bucketDownloadIntents            = "download_intents"
 	bucketPeers                      = "peers"
+	bucketPendingInvites             = "pending_invites"
 	bucketPipelineSchemas            = "pipeline_schemas"
 	bucketPendingBlobGC              = "pending_blob_gc"
 	vfsIndexBucket                   = "vfs_index"
@@ -24,6 +25,7 @@ var allBuckets = []string{
 	bucketNotifyOutboxV2Reservations,
 	bucketDownloadIntents,
 	bucketPeers,
+	bucketPendingInvites,
 	bucketPipelineSchemas,
 	bucketPendingBlobGC,
 	vfsIndexBucket,

@@ -35,7 +35,7 @@ func (s *Server) mTLSGuard(next http.Handler) http.Handler {
 		}
 		if mode != authMTLSUnregistered {
 			_, registered := s.Peers.GetPeerRecord(peerID)
-			if !registered && peerID != s.Config.ID && peerID != "sponsor" && peerID != "bootstrap" {
+			if !registered && peerID != s.Config.ID {
 				s.Config.Logger.Warn("Reject mTLS: peer not in registry", "peerID", peerID, "ip", r.RemoteAddr)
 				utils.RespondError(w, http.StatusForbidden, "peer not registered in cluster")
 				return

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -58,7 +59,12 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Consume atomically before signing so concurrent joins cannot reuse one invite.
-	expiration, consumed := s.Invites.CheckAndConsume(req.Secret)
+	expiration, consumed, err := s.Invites.CheckAndConsume(req.Secret)
+	if err != nil {
+		s.Config.Logger.Error("Failed to consume invite", "error", err)
+		utils.RespondError(w, http.StatusInternalServerError, "Failed to consume invite")
+		return
+	}
 	if !consumed {
 		utils.RespondError(w, http.StatusUnauthorized, "Invalid or expired token")
 		return
@@ -68,7 +74,9 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 
 	newCertPEM, err := p2p.SignCSR([]byte(req.CSR), s.Config.CAPath, caKeyPath)
 	if err != nil {
-		s.Invites.Add(req.Secret, expiration)
+		if restoreErr := s.Invites.Add(req.Secret, expiration); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore invite: %w", restoreErr))
+		}
 		s.Config.Logger.Error("Error signing CSR", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to generate certificate")
 		return
@@ -76,7 +84,10 @@ func (s *Server) HandleClusterJoin(w http.ResponseWriter, r *http.Request) {
 
 	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
 	if err != nil {
-		s.Invites.Add(req.Secret, expiration)
+		if restoreErr := s.Invites.Add(req.Secret, expiration); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore invite: %w", restoreErr))
+		}
+		s.Config.Logger.Error("Error reading CA after signing CSR", "error", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Internal error reading CA")
 		return
 	}

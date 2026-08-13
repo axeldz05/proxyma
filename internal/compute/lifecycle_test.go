@@ -27,14 +27,18 @@ type blockedComputeTask struct {
 func newBlockedComputeTask(t *testing.T) *blockedComputeTask {
 	t.Helper()
 
+	engine, err := NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, 1, "lifecycle-test")
+	if err != nil {
+		t.Fatalf("new compute engine: %v", err)
+	}
 	task := &blockedComputeTask{
-		engine:   NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, 1, "lifecycle-test"),
+		engine:   engine,
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 		release:  make(chan struct{}),
 		abort:    make(chan struct{}),
 	}
-	err := task.engine.RegisterNewService(protocol.ServiceSchema{
+	err = task.engine.RegisterNewService(protocol.ServiceSchema{
 		Name:       "blocking",
 		Parameters: map[string]protocol.ServiceParameter{},
 	}, func(ctx context.Context, _ <-chan map[string]any, _ chan<- map[string]any, _ map[string]any) (map[string]any, error) {
@@ -108,7 +112,10 @@ func TestComputeParentCancellationClosesEngine(t *testing.T) {
 	t.Parallel()
 
 	parent, cancelParent := context.WithCancel(context.Background())
-	engine := NewComputeEngine(parent, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, 1, "parent-lifecycle-test")
+	engine, err := NewComputeEngine(parent, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, 1, "parent-lifecycle-test")
+	if err != nil {
+		t.Fatalf("new compute engine: %v", err)
+	}
 	t.Cleanup(engine.Close)
 
 	started := make(chan struct{})

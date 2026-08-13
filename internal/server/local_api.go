@@ -23,7 +23,9 @@ func (s *Server) LocalInviteGenerate(validForMinutes int) (token string, expires
 		return "", time.Time{}, err
 	}
 	expiration := time.Now().Add(time.Duration(validForMinutes) * time.Minute)
-	s.AddPendingInvite(secretHex, expiration)
+	if err := s.AddPendingInvite(secretHex, expiration); err != nil {
+		return "", time.Time{}, err
+	}
 	return smartToken, expiration, nil
 }
 

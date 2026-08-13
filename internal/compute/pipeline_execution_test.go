@@ -23,7 +23,8 @@ func newPipelineTestEngine(t *testing.T, callback chan<- protocol.ServiceTaskRes
 			return nil
 		},
 	}
-	engine := compute.NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), client, 1, "compute-node")
+	engine, err := compute.NewComputeEngine(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), client, 1, "compute-node")
+	require.NoError(t, err)
 	t.Cleanup(engine.Close)
 	return engine
 }

@@ -51,6 +51,7 @@ func (s *Server) callPeer(ctx context.Context, peerID string, fn func(ctx contex
 }
 
 type forEachPeerOpts struct {
+	Context  context.Context
 	Timeout  time.Duration
 	Parallel bool
 	SkipSelf bool
@@ -69,6 +70,10 @@ func mapEachPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Con
 	if opts.Timeout <= 0 {
 		opts.Timeout = PeerRPCDefault
 	}
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
 	peers := s.GetPeersCopy()
 	var (
 		mu      sync.Mutex
@@ -79,7 +84,7 @@ func mapEachPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Con
 		if opts.SkipSelf && peerID == s.Config.ID {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ctx, cancel := context.WithTimeout(parent, opts.Timeout)
 		defer cancel()
 		var val T
 		err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
@@ -117,12 +122,16 @@ func firstPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Conte
 	if opts.Timeout <= 0 {
 		opts.Timeout = PeerRPCDefault
 	}
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
 	var zero T
 	for peerID := range s.GetPeersCopy() {
 		if opts.SkipSelf && peerID == s.Config.ID {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ctx, cancel := context.WithTimeout(parent, opts.Timeout)
 		var val T
 		err := s.callPeer(ctx, peerID, func(ctx context.Context, peerID string) error {
 			var callErr error

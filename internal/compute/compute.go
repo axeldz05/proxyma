@@ -107,9 +107,9 @@ func (h ServiceHandler) ExecuteStream(ctx context.Context, in <-chan map[string]
 	return err
 }
 
-func NewComputeEngine(parent context.Context, logger *slog.Logger, pc p2p.PeerClient, workerCount int, id string) *ComputeEngine {
+func NewComputeEngine(parent context.Context, logger *slog.Logger, pc p2p.PeerClient, workerCount int, id string) (*ComputeEngine, error) {
 	if parent == nil {
-		panic("compute.NewComputeEngine: nil parent context")
+		return nil, errors.New("compute.NewComputeEngine: nil parent context")
 	}
 	lifetimeCtx, cancelLifetime := context.WithCancel(parent)
 	engine := &ComputeEngine{
@@ -138,7 +138,7 @@ func NewComputeEngine(parent context.Context, logger *slog.Logger, pc p2p.PeerCl
 		engine.Close()
 	}()
 
-	return engine
+	return engine, nil
 }
 
 func (c *ComputeEngine) SetAddress(addr string) {

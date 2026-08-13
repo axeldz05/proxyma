@@ -3,6 +3,7 @@ package proxyma_bind
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -92,24 +93,59 @@ func TestStartNodeReturnsWithUnixListenerReady(t *testing.T) {
 	}
 }
 
-func TestStopBeforeDelayedBootstrapIsSafe(t *testing.T) {
+func TestStartupBootstrapRunsAnnounceDiscoveryAndRelayInOrder(t *testing.T) {
+	t.Parallel()
+	stub := &recordingBootstrapServer{}
+
+	runStartupBootstrap(context.Background(), stub, "https://bootstrap.invalid", slog.Default())
+
+	got := strings.Join(stub.events, ",")
+	want := "lease,announce,discover,relay,release"
+	if got != want {
+		t.Fatalf("startup bootstrap order = %q, want %q", got, want)
+	}
+}
+
+type recordingBootstrapServer struct {
+	events []string
+}
+
+func (s *recordingBootstrapServer) AcquireWorkLease(ctx context.Context) (context.Context, func(), error) {
+	s.events = append(s.events, "lease")
+	return ctx, func() { s.events = append(s.events, "release") }, nil
+}
+
+func (s *recordingBootstrapServer) AnnouncePresence(string) error {
+	s.events = append(s.events, "announce")
+	return nil
+}
+
+func (s *recordingBootstrapServer) LocalServiceDiscoverContext(context.Context) ([]string, error) {
+	s.events = append(s.events, "discover")
+	return nil, nil
+}
+
+func (s *recordingBootstrapServer) StartRelayPolling(context.Context, string) {
+	s.events = append(s.events, "relay")
+}
+
+func TestStopDuringStartupBootstrapIsSafe(t *testing.T) {
 	StopNode()
 	t.Cleanup(StopNode)
 
 	entered := make(chan struct{})
 	exited := make(chan struct{})
 	srvMutex.Lock()
-	originalWait := startupBootstrapWait
-	startupBootstrapWait = func(ctx context.Context) bool {
+	originalRun := startupBootstrapRun
+	startupBootstrapRun = func(ctx context.Context, _ bootstrapServer, _ string, _ *slog.Logger) {
 		close(entered)
 		defer close(exited)
 		<-ctx.Done()
-		return false
 	}
 	srvMutex.Unlock()
 	t.Cleanup(func() {
 		srvMutex.Lock()
-		startupBootstrapWait = originalWait
+		startupBootstrapRun = originalRun
 		srvMutex.Unlock()
 	})
 
@@ -136,14 +172,14 @@ func TestStopBeforeDelayedBootstrapIsSafe(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("delayed bootstrap goroutine did not start")
+		t.Fatal("startup bootstrap goroutine did not start")
 	}
 	StopNode()
 
 	select {
 	case <-exited:
 	default:
-		t.Fatal("StopNode returned before joining delayed bootstrap")
+		t.Fatal("StopNode returned before joining startup bootstrap")
 	}
 	if IsNodeRunning() {
 		t.Fatal("node became running again after delayed bootstrap")
@@ -201,22 +237,21 @@ func TestUnexpectedListenerExitClosesBackgroundWorkAdmissionBeforeWait(t *testin
 	StopNode()
 	t.Cleanup(StopNode)
 
-	waitEntered := make(chan struct{})
+	runEntered := make(chan struct{})
 	cancelObserved := make(chan struct{})
-	releaseWait := make(chan struct{})
+	releaseRun := make(chan struct{})
 	srvMutex.Lock()
-	originalWait := startupBootstrapWait
-	startupBootstrapWait = func(ctx context.Context) bool {
-		close(waitEntered)
+	originalRun := startupBootstrapRun
+	startupBootstrapRun = func(ctx context.Context, _ bootstrapServer, _ string, _ *slog.Logger) {
+		close(runEntered)
 		<-ctx.Done()
 		close(cancelObserved)
-		<-releaseWait
-		return false
+		<-releaseRun
 	}
 	srvMutex.Unlock()
 	t.Cleanup(func() {
 		srvMutex.Lock()
-		startupBootstrapWait = originalWait
+		startupBootstrapRun = originalRun
 		srvMutex.Unlock()
 	})
 
@@ -240,9 +275,9 @@ func TestUnexpectedListenerExitClosesBackgroundWorkAdmissionBeforeWait(t *testin
 		t.Fatalf("StartNode: %s", result)
 	}
 	select {
-	case <-waitEntered:
+	case <-runEntered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("delayed work did not start")
+		t.Fatal("startup bootstrap work did not start")
 	}
 
 	startedServer := getSrv()
@@ -257,7 +292,7 @@ func TestUnexpectedListenerExitClosesBackgroundWorkAdmissionBeforeWait(t *testin
 	}
 
 	accepted := startNodeBackgroundWork(startedServer, func(context.Context) {})
-	close(releaseWait)
+	close(releaseRun)
 	if accepted {
 		t.Fatal("background work was admitted after unexpected exit began waiting")
 	}
