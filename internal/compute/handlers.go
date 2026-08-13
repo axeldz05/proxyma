@@ -46,9 +46,8 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	submitterNodeID, authenticated := p2p.PeerCNFromTLS(r.TLS)
+	submitterNodeID, authenticated := p2p.RequirePeerCN(w, r)
 	if !authenticated {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 		return
 	}
 	if taskReq.PipelineState == nil {
@@ -96,9 +95,8 @@ func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	producerNodeID, authenticated := p2p.PeerCNFromTLS(r.TLS)
+	producerNodeID, authenticated := p2p.RequirePeerCN(w, r)
 	if !authenticated {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
 		return
 	}
 	if webhookPayload.ProducerNodeID != "" && webhookPayload.ProducerNodeID != producerNodeID {

@@ -11,12 +11,14 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.FormParameter
+import com.proxyma.android.models.ProjectedTable
+import com.proxyma.android.models.UIAction
+import com.proxyma.android.models.UIDomain
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.lang.reflect.InvocationTargetException
-import java.text.DecimalFormat
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import androidx.compose.runtime.Composable
@@ -37,13 +39,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1000.0)).toInt()
-    return DecimalFormat("#,##0.1").format(bytes / Math.pow(1000.0, digitGroups.toDouble())) + " " + units[digitGroups]
-}
 
 fun openFileNatively(
     scope: CoroutineScope,
@@ -221,6 +216,47 @@ fun bindErrorMessage(
     method: BindMethod = BindMethod.LEGACY_ERROR_PREFIX
 ): String = bindResult(response, method).exceptionOrNull()?.message
     ?: response.trim().ifEmpty { "bind call failed" }
+
+fun parseUISchema(response: String): List<UIDomain> {
+    val normalized = bindResult(response, BindMethod.LEGACY_ERROR_PREFIX).getOrThrow()
+    return Gson().fromJson<List<UIDomain>>(
+        normalized,
+        object : TypeToken<List<UIDomain>>() {}.type
+    ).orEmpty()
+}
+
+fun invokeUIAction(action: UIAction, inputs: Map<String, Any> = emptyMap()): String {
+    val args = inputs.mapValues { (_, value) -> value.toString() }
+    val response = proxyma_bind.Proxyma_bind.invokeDomainActionJSON(
+        action.domain,
+        action.name,
+        Gson().toJson(args)
+    )
+    return bindResult(response).getOrThrow()
+}
+
+fun projectUIActionRows(action: UIAction, rowsJSON: String): ProjectedTable {
+    val response = proxyma_bind.Proxyma_bind.projectActionRowsJSON(
+        action.domain,
+        action.name,
+        rowsJSON
+    )
+    val normalized = bindResult(response).getOrThrow()
+    return Gson().fromJson(normalized, ProjectedTable::class.java) ?: ProjectedTable()
+}
+
+fun submitUIAction(
+    scope: CoroutineScope,
+    action: UIAction,
+    inputs: Map<String, Any>,
+    onComplete: (Result<String>) -> Unit
+) {
+    runOnBg(scope, action = { invokeUIAction(action, inputs) }) { result ->
+        onComplete(result.map { response ->
+            getActionMessage(response).ifBlank { response }
+        })
+    }
+}
 
 data class VfsUploadResult(
     val logicalName: String,
@@ -618,6 +654,30 @@ inline fun <reified T> rememberPolledParsedState(
         onResult = { parsed ->
             if (parsed != null) {
                 state.value = parsed
+            }
+        }
+    )
+    return state
+}
+
+@Composable
+fun rememberPolledActionTable(
+    action: UIAction?,
+    period: Long = 2000
+): State<ProjectedTable> {
+    val state = remember(action?.key) { mutableStateOf(ProjectedTable()) }
+    PollState(
+        period = period,
+        fetchData = {
+            if (action == null || !proxyma_bind.Proxyma_bind.isNodeRunning()) {
+                null
+            } else {
+                projectUIActionRows(action, invokeUIAction(action))
+            }
+        },
+        onResult = { projected ->
+            if (projected != null) {
+                state.value = projected
             }
         }
     )

@@ -18,28 +18,11 @@ class ObservableBindingState<T> {
     }
 }
 
+// Lightweight compute-target DTO; admin peer tables render through UISchema projection.
 data class Peer(
     val id: String = "",
     val address: String = "",
     val online: Boolean = false
-)
-
-data class VfsFile(
-    val name: String = "",
-    val version: Int = 0,
-    val size: Long = 0,
-    val hash: String = "",
-    val subscribed: Boolean = false,
-    val hasLocal: Boolean = false,
-    val deleted: Boolean = false,
-    val upSpeed: Double = 0.0,
-    val downSpeed: Double = 0.0
-)
-
-data class LogRecord(
-    val timestamp: String = "",
-    val level: String = "",
-    val message: String = ""
 )
 
 data class FormParameter(
@@ -56,6 +39,40 @@ data class FormParameter(
 
     fun isImagePicker(): Boolean = uiHint == "image_picker"
 }
+
+data class UITableColumn(
+    val header: String = "",
+    val fieldSelector: String = "",
+    val format: String = "string"
+)
+
+data class UIAction(
+    val domain: String = "",
+    val name: String = "",
+    val title: String = "",
+    val description: String = "",
+    val parameters: List<FormParameter> = emptyList(),
+    val outputType: String = "text",
+    val columns: List<UITableColumn> = emptyList(),
+    val unixAction: String? = null,
+    val successMessage: String? = null
+) {
+    val key: String
+        get() = "$domain.$name"
+}
+
+data class UIDomain(
+    val name: String = "",
+    val title: String = "",
+    val actions: List<UIAction> = emptyList()
+) {
+    fun action(name: String): UIAction? = actions.firstOrNull { it.name == name }
+}
+
+data class ProjectedTable(
+    val headers: List<String> = emptyList(),
+    val rows: List<List<String>> = emptyList()
+)
 
 data class ServiceUIConfig(
     val type: String? = null,

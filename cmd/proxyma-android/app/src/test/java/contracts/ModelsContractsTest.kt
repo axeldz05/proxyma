@@ -8,6 +8,7 @@ import com.proxyma.android.models.ObservableBindingState
 import com.proxyma.android.models.RunDialogTarget
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.models.TaskLedger
+import com.proxyma.android.models.UIDomain
 import com.proxyma.android.utils.DaemonState
 import com.proxyma.android.utils.DaemonStateMachine
 import com.proxyma.android.utils.StopRequest
@@ -50,6 +51,30 @@ class ModelsContractsTest {
         )
 
         assertTrue(parameter.options.isEmpty())
+    }
+
+    @Test
+    fun uiSchemaParsesTypedActionsAndColumns() {
+        val domain = gson.fromJson(
+            """
+            {
+              "name":"storage",
+              "title":"Storage",
+              "actions":[{
+                "domain":"storage",
+                "name":"list",
+                "title":"List",
+                "outputType":"table",
+                "parameters":[],
+                "columns":[{"header":"SIZE","fieldSelector":"size","format":"bytes"}]
+              }]
+            }
+            """.trimIndent(),
+            UIDomain::class.java
+        )
+
+        assertEquals("storage.list", domain.action("list")?.key)
+        assertEquals("bytes", domain.action("list")?.columns?.single()?.format)
     }
 
     @Test

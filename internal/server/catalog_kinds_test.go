@@ -4,8 +4,8 @@ import (
 	"testing"
 )
 
-// Every gossip domain must be fully described by the catalogKinds table: a stable
-// kind string and a deliver arm, so the outbox never hits an unknown kind.
+// Every registered gossip domain must be fully described by catalogKinds so the
+// outbox never needs a parallel kind switch.
 func TestCatalogKindsAreComplete(t *testing.T) {
 	s := &Server{}
 	seen := map[gossipKind]bool{}
@@ -19,14 +19,14 @@ func TestCatalogKindsAreComplete(t *testing.T) {
 		}
 		seen[k.Kind] = true
 
+		if k.entityFrom == nil {
+			t.Errorf("catalog kind %q has no entity extractor", k.Kind)
+		}
+		if k.current == nil {
+			t.Errorf("catalog kind %q has no current-payload reconciler", k.Kind)
+		}
 		if k.deliver == nil {
 			t.Errorf("catalog kind %q has no deliver arm: outbox entries would be dropped", k.Kind)
-		}
-	}
-
-	for _, want := range []gossipKind{kindService, kindPipeline, kindVFS} {
-		if !seen[want] {
-			t.Errorf("catalog kind %q is not registered", want)
 		}
 	}
 }

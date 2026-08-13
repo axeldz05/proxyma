@@ -14,19 +14,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.proxyma.android.ProxymaService
-import com.proxyma.android.models.FormParameter
+import com.proxyma.android.models.UIDomain
 import com.proxyma.android.ui.components.*
 import com.proxyma.android.utils.*
 
-@Suppress("UNCHECKED_CAST")
 @Composable
-fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
+fun PairingScreen(service: ProxymaService?, clusterDomain: UIDomain?) {
     var generatedToken by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val title = (clusterDomain?.get("title") as? String) ?: "Pairing Controller"
-    val actions = clusterDomain?.get("actions") as? List<Map<String, Any>>
+    val title = clusterDomain?.title ?: "Pairing Controller"
+    val actions = clusterDomain?.actions
 
     LazyColumn(
         modifier = Modifier
@@ -39,10 +38,9 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
         }
 
         actions?.forEach { action ->
-            val actionName = action["name"] as? String
-            val actionTitle = (action["title"] as? String) ?: ""
-            val actionDescription = action["description"] as? String
-            val parameters = action["parameters"] as? List<Map<String, Any>>
+            val actionName = action.name
+            val actionTitle = action.title
+            val actionDescription = action.description
 
             item {
                 if (actionName == "invite") {
@@ -56,8 +54,10 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                             executeGoSubmit(
                                 scope = scope,
                                 onComplete = onComplete,
-                                action = { proxyma_bind.Proxyma_bind.generateInviteToken() },
-                                onSuccess = { token -> generatedToken = token }
+                                action = { invokeUIAction(action) },
+                                onSuccess = { response ->
+                                    generatedToken = getActionMessage(response).ifBlank { response.trim('"') }
+                                }
                             )
                         }
                     )
@@ -83,9 +83,7 @@ fun PairingScreen(service: ProxymaService?, clusterDomain: Map<String, Any>?) {
                         )
                     }
                 } else if (actionName == "join") {
-                    val formParams = (parameters ?: emptyList()).map { param ->
-                        formParameterFrom(param)
-                    }
+                    val formParams = action.parameters
                     DynamicActionCard(
                         actionName = actionName,
                         title = actionTitle,

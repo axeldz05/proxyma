@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"proxyma/internal/compute"
 	"proxyma/internal/protocol"
 )
 
@@ -17,14 +18,16 @@ const (
 	kindVFS      gossipKind = "vfs"
 )
 
-// catalogKind is the SSOT for one gossip domain: how it is pushed to a peer that
-// just joined and how a queued outbox payload is redelivered. Registering a new
-// domain means adding one entry here — no switch elsewhere.
+// catalogKind is the SSOT for one gossip domain: how its entity is identified,
+// reconciled against current state, pushed to a newly joined peer, and delivered.
+// Registering a new domain means adding one entry here — no switch elsewhere.
 //
 // syncOnJoin may be nil for domains that reconcile through another channel
 // (VFS uses manifest sync in ExecuteSync, not catalog push).
 type catalogKind struct {
 	Kind       gossipKind
+	entityFrom func(raw json.RawMessage) (string, bool)
+	current    func(s *Server, entity string) (payload any, keep bool, err error)
 	syncOnJoin func(s *Server, peerID string)
 	deliver    func(s *Server, ctx context.Context, peerID string, raw json.RawMessage) error
 }
@@ -33,6 +36,30 @@ func (s *Server) catalogKinds() []catalogKind {
 	return []catalogKind{
 		{
 			Kind: kindPipeline,
+			entityFrom: func(raw json.RawMessage) (string, bool) {
+				return notificationEntity(raw, func(n protocol.PipelineNotification) string {
+					return n.Schema.ID
+				})
+			},
+			current: func(s *Server, entity string) (any, bool, error) {
+				pipelines, err := s.Storage.LoadPipelineSchemas()
+				if err != nil {
+					return nil, false, err
+				}
+				schema, ok := pipelines[entity]
+				if !ok || schema.Version <= 0 {
+					return nil, false, nil
+				}
+				action := protocol.ActionAdd
+				if schema.Deleted {
+					action = protocol.ActionRemove
+				}
+				return protocol.PipelineNotification{
+					Action: action,
+					NodeID: s.Config.ID,
+					Schema: schema,
+				}, true, nil
+			},
 			syncOnJoin: func(s *Server, peerID string) {
 				for _, schema := range s.Compute.ListPipelines() {
 					s.NotifySchemaToPeer(peerID, schema, protocol.ActionAdd)
@@ -46,6 +73,29 @@ func (s *Server) catalogKinds() []catalogKind {
 		},
 		{
 			Kind: kindService,
+			entityFrom: func(raw json.RawMessage) (string, bool) {
+				return notificationEntity(raw, func(n protocol.ServiceNotification) string {
+					return n.Schema.Name
+				})
+			},
+			current: func(s *Server, entity string) (any, bool, error) {
+				services, err := compute.LoadServicesMap(s.Config.StoragePath)
+				if err != nil {
+					return nil, false, err
+				}
+				if service, ok := services[entity]; ok {
+					return protocol.ServiceNotification{
+						Action: protocol.ActionAdd,
+						NodeID: s.Config.ID,
+						Schema: protocol.NormalizeServiceSchema(entity, service.Schema, service.Type),
+					}, true, nil
+				}
+				return protocol.ServiceNotification{
+					Action: protocol.ActionRemove,
+					NodeID: s.Config.ID,
+					Schema: protocol.ServiceSchema{Name: entity},
+				}, true, nil
+			},
 			syncOnJoin: func(s *Server, peerID string) {
 				for _, name := range s.Compute.ListServices() {
 					if schema, ok := s.Compute.GetService(name); ok {
@@ -61,6 +111,24 @@ func (s *Server) catalogKinds() []catalogKind {
 		},
 		{
 			Kind: kindVFS,
+			entityFrom: func(raw json.RawMessage) (string, bool) {
+				return notificationEntity(raw, func(n protocol.PeerNotification) string {
+					return n.File.Name
+				})
+			},
+			current: func(s *Server, entity string) (any, bool, error) {
+				file, exists, err := s.Storage.GetFileMetaE(entity)
+				if err != nil {
+					return nil, false, err
+				}
+				if !exists {
+					return nil, false, nil
+				}
+				return protocol.PeerNotification{
+					File:   file,
+					Source: s.Config.Address,
+				}, true, nil
+			},
 			deliver: func(s *Server, ctx context.Context, peerID string, raw json.RawMessage) error {
 				return deliverNotification(ctx, raw, func(ctx context.Context, n protocol.PeerNotification) error {
 					return s.peerClient.Notify(ctx, peerID, n)
@@ -68,6 +136,15 @@ func (s *Server) catalogKinds() []catalogKind {
 			},
 		},
 	}
+}
+
+func notificationEntity[T any](raw json.RawMessage, entity func(T) string) (string, bool) {
+	var notification T
+	if err := json.Unmarshal(raw, &notification); err != nil {
+		return "", false
+	}
+	value := entity(notification)
+	return value, value != ""
 }
 
 // deliverNotification decodes a queued outbox payload and hands it to send (L1).

@@ -44,29 +44,51 @@ func TestVisibleRegistryHidesInternal(t *testing.T) {
 			if a.Hidden {
 				t.Errorf("visible registry leaked hidden action %s", a.Key())
 			}
-			if a.Name == "detail" || a.Name == "stream" || a.Name == "validate_pipeline" ||
-				a.Name == "join" || a.Name == "edit_pipeline" {
-				t.Errorf("internal/escape-only action %s should not be visible", a.Key())
+			if a.Name == "detail" || a.Name == "stream" || a.Name == "validate_pipeline" {
+				t.Errorf("internal action %s should not be visible", a.Key())
 			}
 		}
 	}
 }
 
-func TestHiddenEscapeActionsStillFindable(t *testing.T) {
-	for _, key := range []struct{ domain, name string }{
-		{"cluster", "join"},
-		{"service", "edit_pipeline"},
+func TestLocalEscapeActionsDeclareTheirSurfaces(t *testing.T) {
+	for _, key := range []struct {
+		domain, name string
+		surfaces     []string
+	}{
+		{"cluster", "join", []string{"cli", "android"}},
+		{"service", "edit_pipeline", []string{"cli"}},
 	} {
 		a, ok := FindAction(key.domain, key.name)
 		if !ok {
 			t.Fatalf("expected %s.%s", key.domain, key.name)
 		}
-		if !a.Hidden {
-			t.Errorf("%s.%s should be Hidden", key.domain, key.name)
+		if a.Hidden {
+			t.Errorf("%s.%s should be visible on its declared surfaces", key.domain, key.name)
 		}
 		if a.UnixAction != "" {
 			t.Errorf("%s.%s should have empty UnixAction", key.domain, key.name)
 		}
+		for _, surface := range key.surfaces {
+			if !a.VisibleOn(surface) {
+				t.Errorf("%s.%s should be visible on %s", key.domain, key.name, surface)
+			}
+		}
+	}
+
+	foundJoin := false
+	for _, d := range VisibleRegistry("android") {
+		for _, a := range d.Actions {
+			if a.Key() == "service.edit_pipeline" {
+				t.Fatal("service.edit_pipeline should not be visible on android")
+			}
+			if a.Key() == "cluster.join" {
+				foundJoin = true
+			}
+		}
+	}
+	if !foundJoin {
+		t.Fatal("cluster.join should be visible on android")
 	}
 }
 

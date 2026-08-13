@@ -51,6 +51,9 @@ func ProjectRows(columns []TableColumn, rows []map[string]any) [][]string {
 
 func projectCell(col TableColumn, item map[string]any) string {
 	if col.FieldSelector == "." {
+		if value, ok := item["."]; ok {
+			return fmt.Sprintf("%v", value)
+		}
 		return fmt.Sprintf("%v", item)
 	}
 	val := item[col.FieldSelector]

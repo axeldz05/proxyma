@@ -12,16 +12,12 @@ func peerCNFromRequest(r *http.Request) (string, bool) {
 }
 
 func forbidMissingMTLS(w http.ResponseWriter) {
-	utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+	p2p.ForbidMissingMTLS(w)
 }
 
 // requirePeerCN extracts the peer CN or writes the standard missing-mTLS 403.
 func requirePeerCN(w http.ResponseWriter, r *http.Request) (cn string, ok bool) {
-	cn, ok = peerCNFromRequest(r)
-	if !ok {
-		forbidMissingMTLS(w)
-	}
-	return
+	return p2p.RequirePeerCN(w, r)
 }
 
 func (s *Server) mTLSGuard(next http.Handler) http.Handler {

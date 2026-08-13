@@ -116,6 +116,19 @@ val verifyProxymaAar = tasks.register("verifyProxymaAar") {
                 requireStaticString("runService", String::class.java, String::class.java)
                 requireStaticString("resolveTaskResultPath", String::class.java)
                 requireStaticString("cancelStream", String::class.java)
+                requireStaticString("getUISchemaJSONForSurface", String::class.java)
+                requireStaticString(
+                    "invokeDomainActionJSON",
+                    String::class.java,
+                    String::class.java,
+                    String::class.java
+                )
+                requireStaticString(
+                    "projectActionRowsJSON",
+                    String::class.java,
+                    String::class.java,
+                    String::class.java
+                )
             }
         } catch (error: ReflectiveOperationException) {
             throw GradleException(

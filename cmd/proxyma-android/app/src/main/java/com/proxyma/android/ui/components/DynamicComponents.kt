@@ -5,7 +5,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -25,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.proxyma.android.ui.theme.CardGray
 import com.proxyma.android.ui.theme.VioletPrimary
 import com.proxyma.android.models.FormParameter
+import com.proxyma.android.models.UIAction
 import com.proxyma.android.utils.*
 import java.io.File
 
@@ -414,7 +417,8 @@ fun DynamicActionCard(
     description: String?,
     parameters: List<FormParameter>,
     submitButtonText: String,
-    onSubmit: (inputs: Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit
+    onSubmit: (inputs: Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit,
+    localFilePath: Boolean = false
 ) {
     ProxymaCard {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -428,7 +432,76 @@ fun DynamicActionCard(
             DynamicActionForm(
                 parameters = parameters,
                 submitButtonText = submitButtonText,
-                onSubmit = onSubmit
+                onSubmit = onSubmit,
+                localFilePath = localFilePath
+            )
+        }
+    }
+}
+
+@Composable
+fun AdminActionCard(
+    action: UIAction,
+    localFilePath: Boolean = false,
+    onSubmit: (UIAction, Map<String, Any>, onComplete: (Result<String>) -> Unit) -> Unit
+) {
+    if (action.outputType == "table") {
+        ProjectedActionTable(action)
+        return
+    }
+    DynamicActionCard(
+        actionName = action.name,
+        title = action.title,
+        description = action.description,
+        parameters = action.parameters,
+        submitButtonText = action.title,
+        onSubmit = { inputs, onComplete -> onSubmit(action, inputs, onComplete) },
+        localFilePath = localFilePath
+    )
+}
+
+@Composable
+fun ProjectedActionTable(action: UIAction, period: Long = 2000) {
+    val table by rememberPolledActionTable(action, period)
+    ProxymaCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(action.title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+            if (action.description.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(action.description, color = Color.Gray, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(12.dp))
+            if (table.rows.isEmpty()) {
+                Text("No records found.", color = Color.Gray)
+                return@Column
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                TableRow(table.headers, header = true)
+                table.rows.forEach { row -> TableRow(row) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableRow(cells: List<String>, header: Boolean = false) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        cells.forEach { cell ->
+            Text(
+                text = cell,
+                color = if (header) VioletPrimary else Color.White,
+                fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
+                fontSize = 12.sp,
+                modifier = Modifier.widthIn(min = 100.dp, max = 220.dp)
             )
         }
     }

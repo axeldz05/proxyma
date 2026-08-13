@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"proxyma/internal/protocol"
+	"proxyma/internal/unixclient"
+	"proxyma/shared/uischema"
 )
 
 var (
@@ -303,7 +304,7 @@ func main() {
 			schemaBytes, _ := json.Marshal(schema)
 
 			fmt.Println("🔍 Validating pipeline schema...")
-			err = sendUnixSocketCommand(storagePath, "pipeline_validate", map[string]string{
+			err = sendUnixSocketCommand(storagePath, uischema.MustUnixAction("service", "validate_pipeline"), map[string]string{
 				"schema": string(schemaBytes),
 			})
 			if err != nil {
@@ -332,7 +333,8 @@ func main() {
 			schemaBytes, _ := json.Marshal(schema)
 
 			fmt.Println("Registering pipeline in daemon...")
-			err = sendUnixSocketCommand(storagePath, "pipeline_add", map[string]string{
+			err = sendUnixSocketCommand(storagePath, uischema.MustUnixAction("service", "add_pipeline"), map[string]string{
+				"id":     builder.ID,
 				"schema": string(schemaBytes),
 			})
 			if err != nil {
@@ -455,11 +457,7 @@ func fileExists(path string) bool {
 }
 
 func isConnectionRefused(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such file or directory")
+	return unixclient.IsUnavailable(err)
 }
 
 func printDashboard(b *Builder) {
@@ -490,42 +488,9 @@ func printDashboard(b *Builder) {
 	fmt.Println("----------------------------------------------------")
 }
 
-// dialUnary is the editor-local L2 over protocol unix types (SSOT framing/sock in protocol).
+// dialUnary keeps the editor's typed RawMessage boundary over the shared Unix client.
 func dialUnary(storage, action string, args map[string]string) (json.RawMessage, error) {
-	conn, err := net.Dial("unix", protocol.UnixSockPath(storage))
-	if err != nil {
-		return nil, fmt.Errorf("daemon is unreachable: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	reqBytes, err := json.Marshal(protocol.UnixRequest{Action: action, Args: args})
-	if err != nil {
-		return nil, err
-	}
-	if _, err := conn.Write(reqBytes); err != nil {
-		return nil, err
-	}
-
-	var respBytes []byte
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := conn.Read(buf)
-		if n > 0 {
-			respBytes = append(respBytes, buf[:n]...)
-		}
-		if readErr != nil {
-			break
-		}
-	}
-
-	var resp protocol.UnixResponse
-	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse daemon response: %w", err)
-	}
-	if !resp.Success {
-		return nil, fmt.Errorf("daemon error: %s", resp.Error)
-	}
-	return resp.Data, nil
+	return unixclient.CallUnary(storage, action, args)
 }
 
 func sendUnixSocketCommand(storage string, action string, args map[string]string) error {
@@ -534,7 +499,7 @@ func sendUnixSocketCommand(storage string, action string, args map[string]string
 }
 
 func fetchServices(storage string) (map[string]protocol.ServiceSchema, error) {
-	data, err := dialUnary(storage, "service_discover", nil)
+	data, err := dialUnary(storage, uischema.MustUnixAction("service", "discover"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +518,7 @@ func fetchServices(storage string) (map[string]protocol.ServiceSchema, error) {
 }
 
 func fetchServiceDetail(storage string, name string) (protocol.ServiceSchema, error) {
-	data, err := dialUnary(storage, "service_detail", map[string]string{"name": name})
+	data, err := dialUnary(storage, uischema.MustUnixAction("service", "detail"), map[string]string{"name": name})
 	if err != nil {
 		return protocol.ServiceSchema{}, err
 	}
@@ -565,7 +530,7 @@ func fetchServiceDetail(storage string, name string) (protocol.ServiceSchema, er
 }
 
 func fetchPipelines(storage string) ([]protocol.PipelineSchema, error) {
-	data, err := dialUnary(storage, "pipeline_list", nil)
+	data, err := dialUnary(storage, uischema.MustUnixAction("service", "list_pipelines"), nil)
 	if err != nil {
 		return nil, err
 	}

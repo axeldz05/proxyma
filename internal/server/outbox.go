@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"proxyma/internal/compute"
-	"proxyma/internal/protocol"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,29 +101,12 @@ func (s *Server) lockOutboxDelivery(id string) func() {
 	}
 }
 
-func notificationEntityFromPayload(kind gossipKind, raw json.RawMessage) (string, bool) {
-	switch kind {
-	case kindService:
-		var notification protocol.ServiceNotification
-		if err := json.Unmarshal(raw, &notification); err != nil || notification.Schema.Name == "" {
-			return "", false
-		}
-		return notification.Schema.Name, true
-	case kindPipeline:
-		var notification protocol.PipelineNotification
-		if err := json.Unmarshal(raw, &notification); err != nil || notification.Schema.ID == "" {
-			return "", false
-		}
-		return notification.Schema.ID, true
-	case kindVFS:
-		var notification protocol.PeerNotification
-		if err := json.Unmarshal(raw, &notification); err != nil || notification.File.Name == "" {
-			return "", false
-		}
-		return notification.File.Name, true
-	default:
+func (s *Server) notificationEntityFromPayload(kind gossipKind, raw json.RawMessage) (string, bool) {
+	spec, ok := s.catalogKindFor(kind)
+	if !ok || spec.entityFrom == nil {
 		return "", false
 	}
+	return spec.entityFrom(raw)
 }
 
 func (s *Server) matchingLegacyOutboxEntries(peerID string, kind gossipKind, entity string) (map[string][]byte, error) {
@@ -142,7 +123,7 @@ func (s *Server) matchingLegacyOutboxEntries(peerID string, kind gossipKind, ent
 		legacyEntity := entry.Entity
 		ok := legacyEntity != ""
 		if !ok {
-			legacyEntity, ok = notificationEntityFromPayload(kind, entry.Payload)
+			legacyEntity, ok = s.notificationEntityFromPayload(kind, entry.Payload)
 		}
 		if ok && legacyEntity == entity {
 			matches[id] = raw
@@ -159,7 +140,6 @@ func (s *Server) notifyWithOutbox(
 	kind gossipKind,
 	dedupe string,
 	payload any,
-	send func(ctx context.Context) error,
 ) error {
 	attempt, current, err := s.stageOutbox(peerID, kind, dedupe, payload)
 	if err != nil {
@@ -169,7 +149,9 @@ func (s *Server) notifyWithOutbox(
 	if !current {
 		return nil
 	}
-	err = s.deliverOutboxAttempt(ctx, attempt, send)
+	err = s.deliverOutboxAttempt(ctx, attempt, func(ctx context.Context) error {
+		return s.deliverOutboxEntry(ctx, peerID, attempt.Entry)
+	})
 	if err != nil {
 		s.Config.Logger.Debug("Peer notify failed, queued in outbox", "peerID", peerID, "kind", string(kind), "dedupe", dedupe, "error", err)
 	}
@@ -282,7 +264,7 @@ func (s *Server) stageOutbox(
 		if err != nil {
 			return outboxAttempt{}, false, err
 		}
-		if canonical, ok := notificationEntityFromPayload(kind, raw); ok {
+		if canonical, ok := s.notificationEntityFromPayload(kind, raw); ok {
 			entity = canonical
 		}
 		id := s.outboxKey(peerID, kind, entity)
@@ -298,7 +280,7 @@ func (s *Server) stageOutbox(
 	if err != nil {
 		return outboxAttempt{}, false, err
 	}
-	if canonical, ok := notificationEntityFromPayload(kind, raw); ok {
+	if canonical, ok := s.notificationEntityFromPayload(kind, raw); ok {
 		entity = canonical
 	}
 	id := s.outboxKey(peerID, kind, entity)
@@ -408,7 +390,7 @@ func (s *Server) reconcileLegacyOutbox(rawEntries map[string][]byte) error {
 		entity := entry.Entity
 		ok := entity != ""
 		if !ok {
-			entity, ok = notificationEntityFromPayload(entry.Kind, entry.Payload)
+			entity, ok = s.notificationEntityFromPayload(entry.Kind, entry.Payload)
 		}
 		if !ok {
 			continue
@@ -473,59 +455,11 @@ func (s *Server) reconcileLegacyOutbox(rawEntries map[string][]byte) error {
 }
 
 func (s *Server) currentNotificationPayload(kind gossipKind, entity string) (any, bool, error) {
-	switch kind {
-	case kindService:
-		services, err := compute.LoadServicesMap(s.Config.StoragePath)
-		if err != nil {
-			return nil, false, err
-		}
-		if service, ok := services[entity]; ok {
-			return protocol.ServiceNotification{
-				Action: protocol.ActionAdd,
-				NodeID: s.Config.ID,
-				Schema: protocol.NormalizeServiceSchema(entity, service.Schema, service.Type),
-			}, true, nil
-		}
-		return protocol.ServiceNotification{
-			Action: protocol.ActionRemove,
-			NodeID: s.Config.ID,
-			Schema: protocol.ServiceSchema{Name: entity},
-		}, true, nil
-	case kindPipeline:
-		pipelines, err := s.Storage.LoadPipelineSchemas()
-		if err != nil {
-			return nil, false, err
-		}
-		if schema, ok := pipelines[entity]; ok {
-			if schema.Version <= 0 {
-				return nil, false, nil
-			}
-			action := protocol.ActionAdd
-			if schema.Deleted {
-				action = protocol.ActionRemove
-			}
-			return protocol.PipelineNotification{
-				Action: action,
-				NodeID: s.Config.ID,
-				Schema: schema,
-			}, true, nil
-		}
-		return nil, false, nil
-	case kindVFS:
-		file, exists, err := s.Storage.GetFileMetaE(entity)
-		if err != nil {
-			return nil, false, err
-		}
-		if !exists {
-			return nil, false, nil
-		}
-		return protocol.PeerNotification{
-			File:   file,
-			Source: s.Config.Address,
-		}, true, nil
-	default:
+	spec, ok := s.catalogKindFor(kind)
+	if !ok || spec.current == nil {
 		return nil, false, fmt.Errorf("unsupported legacy outbox kind %q", kind)
 	}
+	return spec.current(s, entity)
 }
 
 func (s *Server) reconcileActiveOutbox(rawEntries map[string][]byte) error {
@@ -537,7 +471,7 @@ func (s *Server) reconcileActiveOutbox(rawEntries map[string][]byte) error {
 		entity := entry.Entity
 		if entity == "" {
 			var ok bool
-			entity, ok = notificationEntityFromPayload(entry.Kind, entry.Payload)
+			entity, ok = s.notificationEntityFromPayload(entry.Kind, entry.Payload)
 			if !ok {
 				continue
 			}

@@ -40,6 +40,7 @@ import com.proxyma.android.models.PipelineSchema
 import com.proxyma.android.models.RunDialogTarget
 import com.proxyma.android.models.ServiceDetail
 import com.proxyma.android.models.TaskLedger
+import com.proxyma.android.models.UIDomain
 import com.proxyma.android.ui.components.Icon
 import com.proxyma.android.ui.components.PipelineEditorDialog
 import com.proxyma.android.ui.components.ProxymaCard
@@ -209,7 +210,7 @@ class ServicesViewModel : ViewModel() {
 
 @Composable
 fun ServicesScreen(
-    serviceDomain: Map<String, Any>?,
+    serviceDomain: UIDomain?,
     taskViewModel: ServicesViewModel
 ) {
     val fileTasks = taskViewModel.fileTasks
@@ -272,7 +273,7 @@ fun ServicesScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                ScreenTitle((serviceDomain?.get("title") as? String) ?: "Cluster Services")
+                ScreenTitle(serviceDomain?.title ?: "Cluster Services")
             }
 
             // 1. Horizontal list of file task executions

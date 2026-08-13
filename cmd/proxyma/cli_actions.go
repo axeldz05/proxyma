@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 
 	proxyma_bind "proxyma/cmd/proxyma-bind"
@@ -187,45 +186,10 @@ func CLIEscapeKeys() map[string]struct{} {
 	return out
 }
 
-// cliRegistry is VisibleRegistry("cli") plus Hidden CLI-escape actions (no UnixAction)
-// such as cluster.join / service.edit_pipeline, so Cobra still registers them.
+// cliRegistry is the CLI projection of the shared action registry. Local
+// actions remain declared there with Surfaces=["cli"] and no UnixAction.
 func cliRegistry() []uischema.DomainDetail {
-	out := uischema.VisibleRegistry("cli")
-	present := make(map[string]bool)
-	domainIdx := make(map[string]int, len(out))
-	for i, d := range out {
-		domainIdx[d.Name] = i
-		for _, a := range d.Actions {
-			present[a.Key()] = true
-		}
-	}
-	for key := range cliEscapes {
-		if present[key] {
-			continue
-		}
-		domain, action, ok := strings.Cut(key, ".")
-		if !ok {
-			continue
-		}
-		a, found := uischema.FindAction(domain, action)
-		if !found {
-			continue
-		}
-		if idx, ok := domainIdx[domain]; ok {
-			out[idx].Actions = append(out[idx].Actions, a)
-			continue
-		}
-		title := domain
-		for _, d := range uischema.Registry {
-			if d.Name == domain {
-				title = d.Title
-				break
-			}
-		}
-		domainIdx[domain] = len(out)
-		out = append(out, uischema.DomainDetail{Name: domain, Title: title, Actions: []uischema.ActionDetail{a}})
-	}
-	return out
+	return uischema.VisibleRegistry("cli")
 }
 
 func executeActionLocal(domain string, action string, args map[string]string) string {

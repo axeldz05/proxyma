@@ -155,9 +155,7 @@ func (s *Server) notifyService(ctx context.Context, peerID string, schema protoc
 		NodeID: s.Config.ID,
 		Schema: schema,
 	}
-	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name, payload, func(ctx context.Context) error {
-		return s.peerClient.NotifyServiceUpdate(ctx, peerID, payload)
-	})
+	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name, payload)
 }
 
 func (s *Server) NotifyServiceToPeer(peerID string, schema protocol.ServiceSchema, action string) {

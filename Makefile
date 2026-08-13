@@ -81,7 +81,13 @@ test-android-bind test-android:
 		NR == bandwidth_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { bandwidth_json=1 } \
 		$$0 == "  public static native java.lang.String getLogsJson();" { logs_decl=NR; next } \
 		NR == logs_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { logs_json=1 } \
-		END { if (!run_service || !resolve_path || !cancel_stream || !service_details || !peers_json || !bandwidth_json || !logs_json) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
+		$$0 == "  public static native java.lang.String getUISchemaJSONForSurface(java.lang.String);" { schema_decl=NR; next } \
+		NR == schema_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { ui_schema=1 } \
+		$$0 == "  public static native java.lang.String invokeDomainActionJSON(java.lang.String, java.lang.String, java.lang.String);" { invoke_decl=NR; next } \
+		NR == invoke_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" { invoke_action=1 } \
+		$$0 == "  public static native java.lang.String projectActionRowsJSON(java.lang.String, java.lang.String, java.lang.String);" { project_decl=NR; next } \
+		NR == project_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" { project_rows=1 } \
+		END { if (!run_service || !resolve_path || !cancel_stream || !service_details || !peers_json || !bandwidth_json || !logs_json || !ui_schema || !invoke_action || !project_rows) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
 	if [ "$@" = "test-android" ]; then \
 		java_version="$$($(JAVA) -XshowSettings:properties -version 2>&1 | { \
 			while IFS= read -r line; do \

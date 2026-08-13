@@ -36,14 +36,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.proxyma.android.models.*
 import com.proxyma.android.ui.screens.*
 import com.proxyma.android.ui.theme.DeepGray
 import com.proxyma.android.ui.theme.ProxymaAppTheme
-import com.proxyma.android.utils.BindMethod
-import com.proxyma.android.utils.bindResult
+import com.proxyma.android.utils.parseUISchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -102,17 +99,10 @@ fun MainLayout(service: ProxymaService?) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val servicesViewModel: ServicesViewModel = viewModel()
 
-    val uiDomains by produceState<List<Map<String, Any>>>(initialValue = emptyList()) {
+    val uiDomains by produceState<List<UIDomain>>(initialValue = emptyList()) {
         value = withContext(Dispatchers.IO) {
             try {
-                val json = bindResult(
-                    proxyma_bind.Proxyma_bind.getUISchemaJSON(),
-                    BindMethod.LEGACY_ERROR_PREFIX
-                ).getOrThrow()
-                Gson().fromJson<List<Map<String, Any>>>(
-                    json,
-                    object : TypeToken<List<Map<String, Any>>>() {}.type
-                ) ?: emptyList()
+                parseUISchema(proxyma_bind.Proxyma_bind.getUISchemaJSONForSurface("android"))
             } catch (error: Exception) {
                 error.printStackTrace()
                 emptyList()
@@ -120,11 +110,11 @@ fun MainLayout(service: ProxymaService?) {
         }
     }
 
-    val telemetryDomain = uiDomains.find { domain -> domain["name"] == "telemetry" }
-    val clusterDomain = uiDomains.find { domain -> domain["name"] == "cluster" }
-    val storageDomain = uiDomains.find { domain -> domain["name"] == "storage" }
-    val serviceDomain = uiDomains.find { domain -> domain["name"] == "service" }
-    val peersDomain = uiDomains.find { domain -> domain["name"] == "peers" }
+    val telemetryDomain = uiDomains.find { domain -> domain.name == "telemetry" }
+    val clusterDomain = uiDomains.find { domain -> domain.name == "cluster" }
+    val storageDomain = uiDomains.find { domain -> domain.name == "storage" }
+    val serviceDomain = uiDomains.find { domain -> domain.name == "service" }
+    val peersDomain = uiDomains.find { domain -> domain.name == "peers" }
 
     val tabs = remember {
         listOf(

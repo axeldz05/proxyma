@@ -89,6 +89,48 @@ func TestNormalizeActionArgsAddPipelineRequiresSchema(t *testing.T) {
 	}
 }
 
+func TestDecodeActionArgsJSONPreservesPrimitiveAndStructuredValues(t *testing.T) {
+	args, err := decodeActionArgsJSON(`{"name":"demo","enabled":true,"count":2,"payload":{"x":1}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args["name"] != "demo" || args["enabled"] != "true" || args["count"] != "2" || args["payload"] != `{"x":1}` {
+		t.Fatalf("decoded args = %#v", args)
+	}
+}
+
+func TestProjectActionRowsJSONUsesUISchemaFormatting(t *testing.T) {
+	raw := ProjectActionRowsJSON(
+		"storage",
+		"list",
+		`[{"name":"blob.bin","version":1,"size":2048,"subscribed":true,"hasLocal":false,"deleted":false,"hash":"abc"}]`,
+	)
+	if IsBindError(raw) {
+		t.Fatalf("ProjectActionRowsJSON returned error: %s", raw)
+	}
+	var table projectedActionTable
+	if err := json.Unmarshal([]byte(raw), &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Rows) != 1 || len(table.Rows[0]) < 3 || table.Rows[0][2] != "2.00 KB" {
+		t.Fatalf("projected table = %#v", table)
+	}
+}
+
+func TestProjectActionRowsJSONSupportsScalarLists(t *testing.T) {
+	raw := ProjectActionRowsJSON("service", "discover", `["echo","resize"]`)
+	if IsBindError(raw) {
+		t.Fatalf("ProjectActionRowsJSON returned error: %s", raw)
+	}
+	var table projectedActionTable
+	if err := json.Unmarshal([]byte(raw), &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Rows) != 2 || table.Rows[0][0] != "echo" || table.Rows[1][0] != "resize" {
+		t.Fatalf("projected table = %#v", table)
+	}
+}
+
 func TestUnaryUnixActionsHaveHandlers(t *testing.T) {
 	streamUA := uischema.MustUnixAction("service", "stream")
 	for ua, key := range uischema.AllUnixActions() {

@@ -126,9 +126,7 @@ func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string
 func (s *Server) notifyPipeline(ctx context.Context, peerID string, schema protocol.PipelineSchema, action string) error {
 	schema = protocol.NormalizePipelineSchemaVersion(schema)
 	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: action}
-	return s.notifyWithOutbox(ctx, peerID, kindPipeline, schema.ID, payload, func(ctx context.Context) error {
-		return s.peerClient.NotifyPipelineSchema(ctx, peerID, payload)
-	})
+	return s.notifyWithOutbox(ctx, peerID, kindPipeline, schema.ID, payload)
 }
 
 func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {

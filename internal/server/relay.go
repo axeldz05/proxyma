@@ -330,7 +330,7 @@ func (s *Server) HandleRelayReply(w http.ResponseWriter, r *http.Request) {
 
 	cn, ok := peerCNFromRequest(r)
 	if !ok {
-		utils.RespondError(w, http.StatusForbidden, "mTLS certificate required")
+		forbidMissingMTLS(w)
 		return
 	}
 

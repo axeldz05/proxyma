@@ -27,13 +27,13 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 ## Design Rules (Always On)
 
 * **Golden rule (duplication)**: If changing one behavior requires touching **>2 code zones**, compress into a shared helper. Do **not** copy service CRUD, peer fan-out, relay forward, blob fetch/stage, or unix dial stacks.
-* **Continuous granularity (3 tiers)**: Unix: `DialUnix` → Write/Read/Scan → `sendUnixSocketCommand` / `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal`. Same shape for gossip (`enqueueOutbox` → `notifyWithOutbox` → `notifyService`) and tests (`InitClusterCA` → `IssueNode` → `NewNodeTLS`).
+* **Continuous granularity (3 tiers)**: Unix: `internal/unixclient` Dial/Write/Read/Scan → `CallUnary` → bind dispatch/editor `dialUnary`. Same shape for gossip (`enqueueOutbox` → `notifyWithOutbox` → `notifyService`) and tests (`InitClusterCA` → `IssueNode` → `NewNodeTLS`).
 * **Tables over switches**: gossip kind → `catalogKinds`; endpoint auth → `httpRoutes` / `routeAuth`; service type → `protocol.serviceTypeSpecs` + `compute.serviceTypeBuilders`. Never add a parallel `switch`.
 * **Node addresses**: `protocol.SchemeAddr` (L1) / `HTTPSAddr` / `HTTPSAddrPort` (IPv6-safe); never concatenate `scheme://host:port`. Peer virtual hosts: `PeerLocalHost` / `ParsePeerLocalHost` / `PeerHTTPURL` / `PeerHTTPSURL`.
 * **Service query / HTTP acks**: `QueryService` + `WithServiceQuery`; `APIMessage` / `APIStatus` / `APITaskAck` + `utils.RespondMessage` / `RespondStatus`.
 * **Leave/Offline**: `protocol.PeerIDRequest` on `PeerClient` (same as HTTP handlers).
 * **AddPeer RPC**: `protocol.AddPeerRequest` on `PeerClient.AddPeer` (same as Announce/HTTP).
-* **Missing mTLS**: `forbidMissingMTLS` / `requirePeerCN` in `mtls.go`.
+* **Missing mTLS**: `p2p.ForbidMissingMTLS` / `RequirePeerCN`; server wrappers only add package-local ergonomics.
 * **Error wording**: validation text lives in `protocol/errors.go`; validators may stay per-layer, the message must not be retyped.
 * **No parallel maps on one key**: per-entity state goes in one struct under one lock (`peerState`), not N maps with N mutexes.
 * **No `panic` / `os.Exit` outside `main`/`Execute`**: CLI uses `RunE`; libraries return errors (`storage.NewStorageEngine` and `server.New` return `(T, error)`); Bolt failures propagate instead of collapsing into a bool.
@@ -59,7 +59,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Pipelines / tasks**: `PipelineSchema.Version`, `Deleted`, `PipelineSchemaHash`, `ValidatePipelineRevision`, and `ApplyPipelineRevision` define revision/tombstone integrity. `PipelineExecutionState` is engine-owned and binds ID/version/hash/current step/outputs/producers plus pinned `selected_targets`; continuations require `CapabilityPipelineState` **v2**. Authenticated producer/delegate checks guard callbacks. Task status transitions are `pending` → `ingesting` when output import is required → `completed`, or `failed`; terminal states do not regress and retention is bounded.
 * **Streams**: HTTP peers and Unix clients explicitly negotiate legacy or v1 framing. Legacy carries raw object chunks and ends successfully at EOF; v1 uses `ServiceStreamFrame` / versioned `UnixResponse` chunk/error/complete frames and requires a terminal frame. Never guess control records or accept mixed legacy/v1 framing. Cancellation propagates from bind `CancelStream` through contexts, and every NDJSON path uses `utils.MaxNDJSONFrameBytes`.
 * **Bind runtime**: the singleton node runtime is guarded by `srvMutex`; `StartNode` publishes it only after `Server.Ready`, `IsNodeRunning` requires readiness, and `StopNodeWithError` waits for finalization while leaving timed-out state marked stopping. Join installation is a journaled stage/backup/swap transaction recovered before start. Capture one `canonicalStoragePath` per operation, and normalize Unix unavailability separately from daemon/application errors so offline fallback cannot mask a live daemon failure.
-* **gomobile / Android**: keep exported gomobile signatures stable. `make test-android-contract` uses the host-only `androidcontract` tag to select Android WebRTC stubs: registration fails immediately and signaling returns the exact JSON HTTP 501 unsupported contract. Hermetic `make test-android` depends on it, builds one temporary fresh AAR, verifies Java descriptors for run/result/cancel/service-detail/peers/bandwidth/log APIs, isolates Android user state, and passes that exact AAR to Kotlin unit tests, lint, and assemble; the dedicated CI Android job provisions pinned Go/Java/SDK/NDK/Gradle inputs and runs this target. Pion helpers exist only on `!android && !androidcontract`. Compose work belongs to `ViewModel`/`viewModelScope`, cancellable streams own a `StreamLease`, `ProxymaService` owns daemon start/stop, and UI binding state must unbind on Activity destruction.
+* **gomobile / Android**: keep exported gomobile signatures stable. `make test-android-contract` uses the host-only `androidcontract` tag to select Android WebRTC stubs: registration fails immediately and signaling returns the exact JSON HTTP 501 unsupported contract. Hermetic `make test-android` depends on it, builds one temporary fresh AAR, verifies Java descriptors including the UISchema JSON bridge, isolates Android user state, and passes that exact AAR to Kotlin unit tests, lint, and assemble; the dedicated CI Android job provisions pinned Go/Java/SDK/NDK/Gradle inputs and runs this target. Pion helpers exist only on `!android && !androidcontract`. Compose work belongs to `ViewModel`/`viewModelScope`, cancellable streams own a `StreamLease`, `ProxymaService` owns daemon start/stop, and UI binding state must unbind on Activity destruction.
 * **Accepted trust/network limits**: enrolled mTLS peers and explicitly selected pipeline delegates are trusted; capability/provenance fields are authorization metadata, not cryptographic proofs. Mixed-version distributed pipeline continuations are rejected unless the peer supports pipeline-state v2. There is no TURN fallback, and UPnP/NAT-PMP mapping is IPv4-only.
 * **Race gate**: H1 (live TLS mutation) and H2 (NAT-after-shutdown) are closed. A full `go test -race ./...` / `make test-race` is required; do not preserve a “known race failure” exemption.
 
@@ -88,7 +88,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`. **`routeIndex`** memoizes policy with `sync.Once` (policy only, never handlers); subtree paths keep the default.
 * `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not. **`AddPeer` → `(updated, evicted)`**; equal-seq merge keeps `Addresses[0]`.
 * `invite.go` — **`Check`** / **`Consume`** / **`CheckAndConsume`**; join consumes only after successful `SignCSR`.
-* `catalog_kinds.go` — `catalogKinds` (`Kind` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; `outbox.go` → **`notifyWithOutbox`**.
+* `catalog_kinds.go` — `catalogKinds` (`Kind` + `entityFrom` + `current` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; eager and retry outbox paths both deliver through the table.
 * `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
@@ -101,7 +101,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap; relay reply CN must match target.
 
 ### P2P — `internal/p2p/`
-* `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`.
+* `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`, **`ForbidMissingMTLS` / `RequirePeerCN`**, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`.
 * `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash` / `WriteNodePEMs`.
 * `NATMapper.SetOnMapped`; `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`; `routeOverQUICSession`.
 * **`RequireHTTPStatus`** / **`OpenHTTPBody`** for non-`doJSON` paths; `QUICManager` takes a typed `Logger` and accepts on its shutdown ctx; `RoundTrip` = `tryDirectAddresses` → `tryRelay`.
@@ -119,13 +119,13 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 ### Bindings / Android
 * `LookupServiceSchema`→`resolveServiceSchema`, `ResolveLocalBlob`, `ResolveTaskResultPath`; CLI uses PersistentFlag `cliStorage` only.
-* Android registry interpreter: `VisibleRegistry` + **`InvokeDomainAction`** + `ProjectRows`; typed JNI wrappers optional; no hardcoded admin `domain.action` screens. Trust bind `uiHint`.
+* Android registry interpreter: `GetUISchemaJSONForSurface("android")` + **`InvokeDomainActionJSON`** + **`ProjectActionRowsJSON`**; typed JNI wrappers remain ABI-compatible facades. Admin forms/tables use typed UISchema metadata; compute `ServiceDetail` stays separate.
 
 ### Examples — `services-examples/`
 * Lab services: `sensor.telemetry` (server_stream), `music.resolve`/`convert`/`stream`, `remote.screen`/`input`, `media.resize`/`watermark`, `clipboard.sync`, `shell.attach`.
 * Pipelines: `music_prepare_pipeline.json`, `media/thumbnail_pipeline.json`, `ocr_obsidian_pipeline.json`.
 * `*_service.json` uses `__SERVICES_DIR__`; `scripts/bootstrap_dev.sh` globs + rewrites + registers all services/pipelines.
-* Editor: module `proxyma` package `./services-examples/editor` (`protocol` types + `dialUnary`).
+* Editor: module `proxyma` package `./services-examples/editor`; `uischema.MustUnixAction` supplies action names and `internal/unixclient` supplies the dial/write/read stack.
 * `start_upstreams.sh` for HTTP NDJSON upstreams (ports 19101/19102); registered by `scripts/bootstrap_dev.sh`.
 * Music unit tests: `music/test_music.py`. See `services-examples/README.md`.
 
@@ -158,7 +158,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | HTTP ack message/status | `protocol.APIMessage` / `APIStatus` / `APITaskAck`; `utils.RespondMessage` / `RespondStatus` |
 | Leave/Offline RPC body | `protocol.PeerIDRequest` |
 | Add-peer RPC body | `protocol.AddPeerRequest` on `PeerClient.AddPeer` |
-| Missing-mTLS forbid | `server.forbidMissingMTLS` / `requirePeerCN` |
+| Missing-mTLS forbid | `p2p.ForbidMissingMTLS` / `RequirePeerCN` (server wrappers are thin) |
 | Unexpected HTTP status | `utils.HTTPStatusError` / `HTTPErrorFromResponse` / `p2p.RequireHTTPStatus` / `OpenHTTPBody` |
 | Required unix args / relay cap | `requireUnixArgs` / `rejectOversizedRelay` |
 | TLS rotation payload | `protocol.RotateTLSPayload` |
@@ -213,7 +213,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 
 * `make test` owns unit/package execution, including the real CLI/daemon golden path. `make test-integration` owns live bind Unix-IPC and real mTLS restart contracts. The bind suite includes service/storage actions; Android-facing metadata; bandwidth/log telemetry; enrolled-peer DTOs; stream/cancel; task polling; complete pipeline add/run/list/get/clone/remove lifecycle; and recovery of service, pipeline, VFS, and local blob state across daemon restart.
 * `make test-cover` runs an uncached `go test ./...` coverage pass and checks [`scripts/coverage_baseline.json`](../scripts/coverage_baseline.json) through [`cmd/coverage-ratchet`](../cmd/coverage-ratchet). `make test-e2e-harness` checks profile-validator fixtures, repository profile invariants, and diagnostic redaction; `make test-sanitizer` is its compatibility alias. `make test-ci` combines `test-cover`, the harness, and the complete `make test-race` pass; it does not run Docker E2E.
-* `make test-android-contract` uses the `androidcontract` host tag: WebRTC registration must fail immediately and signaling must return exact JSON HTTP 501. `make test-android` also builds one fresh AAR and verifies `javap` descriptors for run/result/cancel/service-detail/peers/bandwidth/log APIs before Kotlin tests, lint, and assemble.
+* `make test-android-contract` uses the `androidcontract` host tag: WebRTC registration must fail immediately and signaling must return exact JSON HTTP 501. `make test-android` also builds one fresh AAR and verifies `javap` descriptors for run/result/cancel plus `GetUISchemaJSONForSurface` / `InvokeDomainActionJSON` / `ProjectActionRowsJSON` before Kotlin tests, lint, and assemble.
 * `make coverage` runs stable E2E `full` and prints separate unit, E2E, and union reports. E2E coverage is generated by the instrumented `./cmd/proxyma` Docker binary and does not cover bind-only/unlinked paths. Missing E2E `covmeta.*` or `covcounters.*` fails by default; `COVERAGE_ALLOW_MISSING_E2E=true` is only an explicit local unit-only escape.
 * [`internal/covermerge`](../internal/covermerge) is the coverage merge SSOT. It validates modes and statement metadata, emits one block per source range, ORs duplicate `set` coverage, and sums `count`/`atomic`; [`scripts/merge_profiles.go`](../scripts/merge_profiles.go) uses strict inputs. The union is not an average of percentages.
 * Ratchet `check` fails regressions/missing tracked packages and warns on untracked packages. `update` preserves exclusions and writes one-decimal floors; epsilon is `0.1`. New bind/CLI/Android contracts change measured coverage, so the parent coverage work must regenerate `coverage-unit.out` and run `update` before any new floor or total is documented. Freeze no percentages until then.
