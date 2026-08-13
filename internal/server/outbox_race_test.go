@@ -544,7 +544,8 @@ func TestFailedPipelineMutationCompensatesWriteAheadIntent(t *testing.T) {
 		defer cancel()
 		require.NoError(t, s.Shutdown(ctx))
 	})
-	s.AddPeer("peer-b", protocol.AddressRecord{Addresses: []string{"https://peer-b"}})
+	_, evicted := s.Peers.AddPeer("peer-b", protocol.AddressRecord{Addresses: []string{"https://peer-b"}})
+	require.Empty(t, evicted)
 	require.NoError(t, s.Compute.RegisterNewService(
 		protocol.ServiceSchema{Name: "service", Parameters: map[string]protocol.ServiceParameter{}},
 		compute.BuildUnaryHandler(func(context.Context, map[string]any) (map[string]any, error) {
