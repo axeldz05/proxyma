@@ -86,9 +86,16 @@ chmod +x ship_to_attached_phone.sh
 
 ### Comandos Individuales de Debugging:
 
+`go.mod` fija tanto `gomobile` como `gobind`. Como `gomobile bind` busca
+`gobind` por `PATH`, resuelve el ejecutable fijado con `go tool -n`; no uses
+`gomobile init` ni instalaciones `@latest`, porque desacoplan ambas versiones.
+
 1. **Recompilar solo la AAR**:
    ```bash
-   gomobile bind -o cmd/proxyma-android/app/libs/proxyma.aar -target=android -androidapi=21 ./cmd/proxyma-bind
+   gobind_dir="$(dirname "$(go tool -n gobind)")"
+   PATH="$gobind_dir:$PATH" go tool gomobile bind \
+     -o cmd/proxyma-android/app/libs/proxyma.aar \
+     -target=android -androidapi=21 ./cmd/proxyma-bind
    ```
 2. **Limpiar y Filtrar Logs del Celular en Tiempo Real**:
    ```bash

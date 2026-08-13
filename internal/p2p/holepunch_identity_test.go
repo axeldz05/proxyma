@@ -49,10 +49,8 @@ func TestHolePunchRejectsResponseFromUnexpectedSender(t *testing.T) {
 func TestHolePunchRejectsRemoteAddressFromDifferentSocketFamily(t *testing.T) {
 	t.Parallel()
 
-	udp, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified})
-	if err != nil {
-		t.Skipf("IPv6 unavailable: %v", err)
-	}
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = udp.Close() })
 	qm := NewQUICManager("local", udp, nil, nil, nil, nil)
 	t.Cleanup(qm.Close)
@@ -62,11 +60,11 @@ func TestHolePunchRejectsRemoteAddressFromDifferentSocketFamily(t *testing.T) {
 	_, err = qm.performHolePunch(
 		ctx,
 		"expected-peer",
-		[]string{FormatQUICAddr("127.0.0.1:9")},
+		[]string{FormatQUICAddr("[::1]:9")},
 		func(targetPeer, path string, body []byte) ([]byte, error) {
 			return json.Marshal(HolePunchMessage{
 				SenderID:  "expected-peer",
-				PublicUDP: "127.0.0.1:9",
+				PublicUDP: "[::1]:9",
 			})
 		},
 	)
