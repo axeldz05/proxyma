@@ -131,6 +131,18 @@ func TestProjectActionRowsJSONSupportsScalarLists(t *testing.T) {
 	}
 }
 
+func TestUISchemaJSONExports(t *testing.T) {
+	for name, raw := range map[string]string{
+		"registry": GetUISchemaJSON(),
+		"cli":      GetUISchemaJSONForSurface("cli"),
+		"storage":  GetDomainSchemaJson("storage"),
+	} {
+		if !json.Valid([]byte(raw)) {
+			t.Errorf("%s schema is not valid JSON: %q", name, raw)
+		}
+	}
+}
+
 func TestUnaryUnixActionsHaveHandlers(t *testing.T) {
 	streamUA := uischema.MustUnixAction("service", "stream")
 	for ua, key := range uischema.AllUnixActions() {

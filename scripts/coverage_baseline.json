@@ -11,6 +11,7 @@
     "proxyma/internal/storage": 65.0,
     "proxyma/internal/storage/physical": 71.1,
     "proxyma/internal/telemetry": 93.1,
+    "proxyma/internal/unixclient": 24.7,
     "proxyma/internal/utils": 74.2,
     "proxyma/shared/uischema": 53.8
   },

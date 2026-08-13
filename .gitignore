@@ -21,4 +21,4 @@ cmd/proxyma-android/data/
 services-examples/uv.lock
 services-examples/.run/
 services-examples/**/__pycache__/
-proxyma
+/proxyma
