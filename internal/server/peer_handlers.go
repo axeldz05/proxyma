@@ -169,7 +169,7 @@ func (s *Server) HandleLeavePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.RemovePeer(req.ID)
-	go s.RotateCAAndResignPeers()
+	s.goOwned(s.RotateCAAndResignPeers)
 	s.Config.Logger.Info("Peer left cluster", "peer_id", req.ID)
 	utils.RespondMessage(w, http.StatusOK, "Peer successfully removed")
 }
