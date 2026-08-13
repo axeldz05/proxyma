@@ -7,3 +7,4 @@
 10_service_bid_failover
 11_ca_rotation_live
 25_peer_offline_visibility
+29_sponsor_outage_peer_mesh

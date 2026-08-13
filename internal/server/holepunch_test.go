@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
+func TestHolePunchCarriesPeerHTTPContract(t *testing.T) {
 	// apple < zebra lexicographically → apple must dial when zebra initiates.
 	appleCfg := testutil.DefaultConfig(t, "apple")
 	zebraCfg := testutil.DefaultConfig(t, "zebra")
@@ -59,6 +59,12 @@ func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
 	t.Cleanup(zebraQM.Close)
 	zebraSrv.AttachQUICManager(zebraQM)
 
+	const (
+		fileName    = "quic-contract.txt"
+		fileContent = "manifest and blob served over punched QUIC"
+	)
+	expectedHash := UploadFileSimulated(t, appleSrv, fileName, fileContent)
+
 	sendRelayReq := func(targetPeer, action string, payload []byte) ([]byte, error) {
 		require.Equal(t, "apple", targetPeer)
 		require.Equal(t, protocol.PathHolePunchInit, action)
@@ -89,12 +95,29 @@ func TestHolePunch_HigherIDInitiatorEstablishesSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	sess, err := zebraQM.InitiateHolePunch(ctx, "apple", []string{p2p.FormatQUICAddr(appleQM.PublicUDPAddress())}, sendRelayReq)
+	appleQUICAddr := p2p.FormatQUICAddr(appleQM.PublicUDPAddress())
+	sess, err := zebraQM.InitiateHolePunch(ctx, "apple", []string{appleQUICAddr}, sendRelayReq)
 	require.NoError(t, err, "higher-ID initiator must establish session (apple dials)")
 	require.NotNil(t, sess)
 
-	require.Eventually(t, func() bool {
-		_, ok := appleQM.GetSession("zebra")
-		return ok
-	}, 3*time.Second, 50*time.Millisecond, "apple should also hold the QUIC session")
+	// Leave no HTTPS or relay fallback. The observable manifest/blob result is
+	// therefore the contract that the punched connection carries peer HTTP.
+	zebraSrv.AddPeer("apple", protocol.AddressRecord{
+		Addresses: []string{appleQUICAddr},
+		Sequence:  1,
+	})
+
+	rpcCtx, cancelRPC := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRPC()
+	manifest, err := zebraSrv.PeerClient().FetchManifest(rpcCtx, "apple")
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, manifest[fileName].Hash)
+
+	body, err := zebraSrv.PeerClient().DownloadBlob(rpcCtx, "apple", expectedHash)
+	require.NoError(t, err)
+	downloaded, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	require.NoError(t, readErr)
+	require.NoError(t, closeErr)
+	require.Equal(t, fileContent, string(downloaded))
 }

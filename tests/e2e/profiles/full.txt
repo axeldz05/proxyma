@@ -27,3 +27,4 @@
 26_vfs_peer_restart
 27_vfs_unsubscribe_purge
 28_service_remove_restart
+29_sponsor_outage_peer_mesh

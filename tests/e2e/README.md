@@ -62,7 +62,7 @@ E2E_PROFILE=quarantine ./tests/e2e/run.sh
 
 # One case, several comma-separated cases, or selection preview.
 E2E_CASE=17 ./tests/e2e/run.sh
-E2E_CASE=25,26,27,28 E2E_PARALLEL=1 ./tests/e2e/run.sh
+E2E_CASE=25,26,27,28,29 E2E_PARALLEL=1 ./tests/e2e/run.sh
 E2E_PROFILE=full E2E_LIST=true ./tests/e2e/run.sh
 ```
 
@@ -83,15 +83,15 @@ Profiles are explicit selectors under [`profiles/`](profiles/):
 
 - `functional`: deterministic public-contract cases 08, 15–19, 21, 22, 24, and 26–28.
 - `pr`: currently the same deterministic set required on pull requests.
-- `network`: 02, 03, 04, 07, 09–11, and 25.
+- `network`: 02, 03, 04, 07, 09–11, 25, and 29.
 - `infrastructure`: case 05 only.
 - `smoke`: case 14 only.
 - `quarantine`: case 13 only.
-- `full`: all 26 stable executable cases; excludes quarantined 13 and the intentionally absent 23.
+- `full`: all 27 stable executable cases; excludes quarantined 13 and the intentionally absent 23.
 
 ## Current case matrix
 
-There are 27 executable cases: 26 stable cases in `full` and sampler-sensitive case 13 in `quarantine`. Number 23 is intentionally absent.
+There are 28 executable cases: 27 stable cases in `full` and sampler-sensitive case 13 in `quarantine`. Number 23 is intentionally absent.
 
 | ID | Public contract | Profiles / decision |
 |---|---|---|
@@ -123,6 +123,7 @@ There are 27 executable cases: 26 stable cases in `full` and sampler-sensitive c
 | 26 | A peer preserves its VFS manifest and blob across restart, then serves exact content to another subscriber | `functional`, `pr`, `full` |
 | 27 | Unsubscribe plus purge preserves remote metadata, removes cached content, and resubscribe plus public open restores the exact blob | `functional`, `pr`, `full` |
 | 28 | Service removal remains absent from provider and requester discovery/run after provider restart | `functional`, `pr`, `full` |
+| 29 | After the sponsor stops, two already-enrolled peers still converge VFS metadata and exchange the exact blob by public API | `network`, `full`; proves sponsor-independent mesh operation, not a private transport choice |
 
 ### Why case 23 is absent
 

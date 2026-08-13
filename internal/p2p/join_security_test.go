@@ -141,6 +141,50 @@ func TestJoinNeverSendsInviteSecretOverPlainHTTP(t *testing.T) {
 	}
 }
 
+func TestJoinRejectsSponsorWhoseCADoesNotMatchToken(t *testing.T) {
+	t.Parallel()
+
+	serverTLS, _ := joinTestTLS(t)
+	handlerCalled := make(chan struct{}, 1)
+	sponsor := startJoinTLSServer(t, serverTLS, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		handlerCalled <- struct{}{}
+	}))
+
+	otherCADir := t.TempDir()
+	require.NoError(t, p2p.InitCluster(otherCADir))
+	otherCAPath, _ := p2p.CACertPaths(otherCADir)
+	otherCAPEM, err := p2p.ReadCAPEM(otherCAPath)
+	require.NoError(t, err)
+	otherCAHash, err := p2p.CAHashFromPEM(otherCAPEM)
+	require.NoError(t, err)
+
+	token := legacyJoinToken(t, p2p.InvitePayload{
+		Address: sponsor.URL,
+		CAHash:  otherCAHash,
+	}, strings.Repeat("b", 64))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	caCert, cert, key, bootstrap, err := p2p.JoinCluster(
+		ctx,
+		token,
+		"joining-node",
+		"https://joining-node:8443",
+		nil,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "pinned CA")
+	require.Empty(t, caCert)
+	require.Empty(t, cert)
+	require.Empty(t, key)
+	require.Empty(t, bootstrap)
+	select {
+	case <-handlerCalled:
+		t.Fatal("join request reached a sponsor whose CA did not match the token pin")
+	default:
+	}
+}
+
 func TestJoinRejectsRedirectBeforeInviteSecretReplay(t *testing.T) {
 	t.Parallel()
 
