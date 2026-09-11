@@ -42,8 +42,8 @@ Proxyma includes two interfaces for creating and editing distributed pipeline sc
    selection. Dynamic service forms use schema metadata for options and native file/camera pickers.
 
 The Go validation engine remains authoritative when a pipeline is saved. Android is covered by
-JVM contract tests, lint, assembly, and Go-mobile ABI checks; the repository does not currently
-run instrumented device UI tests.
+JVM/Robolectric delegated-Web-bridge and picker-intent contracts, lint, assembly, and Go-mobile
+ABI checks; the repository does not currently run instrumented device UI/JNI tests.
 
 ---
 
@@ -82,8 +82,9 @@ The main local gates are:
 
 ```bash
 make test-cover          # Go tests plus per-package coverage ratchet
+make test-integration    # live bind/server contracts plus isolated developer-bootstrap smoke
 make test-race           # complete Go race-detector pass
-make test-android        # Android build-tag contracts, fresh AAR, JVM tests, lint, assemble
+make test-android        # fresh AAR, ABI, JVM/Robolectric contracts, lint, assemble
 make test-e2e-pr         # deterministic public contracts
 make test-e2e-network    # topology and fault-injection contracts
 make test-e2e-full       # all stable Docker E2E contracts

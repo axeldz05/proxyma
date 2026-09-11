@@ -2,13 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -112,11 +117,7 @@ func TestCLIContractLiveDaemon(t *testing.T) {
 		t.Fatalf("set up node: %v", err)
 	}
 
-	binaryPath := filepath.Join(t.TempDir(), "proxyma")
-	build := exec.Command("go", "build", "-o", binaryPath, ".")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build CLI: %v\n%s", err, output)
-	}
+	binaryPath := buildLiveCLIContractBinary(t)
 	daemon := startLiveCLIContractDaemon(t, storagePath)
 
 	help := mustRunLiveCLIContractCommand(t, binaryPath, "storage", "upload", "--help")
@@ -180,9 +181,163 @@ func TestCLIContractLiveDaemon(t *testing.T) {
 	)
 	assertLiveCLIContractOutput(t, stats, "METRIC", "VALUE", "Download Speed", "Total Sent")
 
+	openMarker := filepath.Join(t.TempDir(), "opened-paths.txt")
+	openScript := filepath.Join(t.TempDir(), "system-open")
+	if err := os.WriteFile(
+		openScript,
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$PROXYMA_OPEN_MARKER\"\n"),
+		0o700,
+	); err != nil {
+		t.Fatalf("write fake system opener: %v", err)
+	}
+	t.Setenv("PROXYMA_SYSTEM_OPEN", openScript)
+	t.Setenv("PROXYMA_OPEN_MARKER", openMarker)
+
+	openOutput := mustRunLiveCLIContractCommand(
+		t,
+		binaryPath,
+		"storage", "open",
+		"--name", "default-contract.txt",
+		"--storage", storagePath,
+	)
+	assertLiveCLIContractOutput(t, openOutput, "opened with system app", "default-contract.txt")
+
+	webUIPath := filepath.Join(t.TempDir(), "delegated.html")
+	if err := os.WriteFile(webUIPath, []byte("<html>delegated CLI UI</html>"), 0o600); err != nil {
+		t.Fatalf("write delegated UI: %v", err)
+	}
+	streamUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(w)
+		for sequence := 1; sequence <= 3; sequence++ {
+			if err := encoder.Encode(map[string]any{"sequence": sequence}); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(streamUpstream.Close)
+	streamSchema := protocol.ServiceSchema{
+		Name: "cli.stream",
+		Type: protocol.ServiceTypeServerStream,
+		Outputs: map[string]protocol.ServiceParameter{
+			"sequence": {Type: protocol.ParamTypeInt},
+		},
+		UI: &protocol.ServiceUIConfig{
+			Type:      "web_app",
+			LocalPath: webUIPath,
+		},
+	}
+	streamSchemaJSON, err := json.Marshal(streamSchema)
+	if err != nil {
+		t.Fatalf("marshal stream schema: %v", err)
+	}
+	streamSchemaPath := filepath.Join(t.TempDir(), "stream-schema.json")
+	if err := os.WriteFile(streamSchemaPath, streamSchemaJSON, 0o600); err != nil {
+		t.Fatalf("write stream schema: %v", err)
+	}
+	mustRunLiveCLIContractCommand(
+		t,
+		binaryPath,
+		"service", "add",
+		"--name", streamSchema.Name,
+		"--type", string(protocol.ServiceTypeServerStream),
+		"--exec", streamUpstream.URL,
+		"--schema-file", streamSchemaPath,
+		"--storage", storagePath,
+	)
+	streamOutput := mustRunLiveCLIContractCommand(
+		t,
+		binaryPath,
+		"service", "run",
+		"--name", streamSchema.Name,
+		"--payload", "{}",
+		"--storage", storagePath,
+	)
+	assertLiveCLIContractOutput(
+		t,
+		streamOutput,
+		`"sequence":1`,
+		`"sequence":2`,
+		`"sequence":3`,
+		"Streaming completed.",
+		"Delegated Web UI opened",
+	)
+
+	require.Eventually(t, func() bool {
+		opened, readErr := os.ReadFile(openMarker)
+		if readErr != nil {
+			return false
+		}
+		text := string(opened)
+		return strings.Contains(text, "default-contract.txt") &&
+			strings.Contains(text, "cli.stream_web_ui.html")
+	}, 2*time.Second, 25*time.Millisecond)
+
+	logs := mustRunLiveCLIContractCommand(
+		t,
+		binaryPath,
+		"telemetry", "logs",
+		"--storage", storagePath,
+	)
+	assertLiveCLIContractOutput(t, logs, "TIME", "LEVEL", "MESSAGE", "cli.stream")
+
 	if err := daemon.stop(); err != nil {
 		t.Fatalf("stop daemon: %v\n%s", err, daemon.output.String())
 	}
+}
+
+func TestCLIContractRunSignalShutdown(t *testing.T) {
+	t.Parallel()
+
+	storagePath := t.TempDir()
+	if err := p2p.SetupNewNode(
+		storagePath,
+		"cli-run-contract",
+		protocol.HTTPSAddr("127.0.0.1", "0"),
+	); err != nil {
+		t.Fatalf("set up run node: %v", err)
+	}
+	binaryPath := buildLiveCLIContractBinary(t)
+	cmd := exec.Command(binaryPath, "run", "--storage", storagePath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start CLI run: %v", err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- cmd.Wait() }()
+	finished := false
+	t.Cleanup(func() {
+		if finished {
+			return
+		}
+		_ = cmd.Process.Kill()
+		<-wait
+	})
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(protocol.UnixSockPath(storagePath))
+		return err == nil
+	}, 10*time.Second, 25*time.Millisecond)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal CLI run: %v", err)
+	}
+	select {
+	case err := <-wait:
+		finished = true
+		if err != nil {
+			t.Fatalf("CLI run exited with error: %v\n%s", err, output.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("CLI run did not stop after SIGTERM\n%s", output.String())
+	}
+	assertLiveCLIContractOutput(
+		t,
+		output.String(),
+		"Initiating graceful shutdown...",
+		"Node stopped successfully.",
+	)
 }
 
 func runLiveCLIContractDaemonFixture(t *testing.T) {
@@ -197,6 +352,16 @@ func runLiveCLIContractDaemonFixture(t *testing.T) {
 	if stopResult != "" {
 		t.Fatalf("StopNodeWithError: %s", proxyma_bind.ParseBindError(stopResult))
 	}
+}
+
+func buildLiveCLIContractBinary(t *testing.T) string {
+	t.Helper()
+	binaryPath := filepath.Join(t.TempDir(), "proxyma")
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, output)
+	}
+	return binaryPath
 }
 
 func mustRunLiveCLIContractCommand(t *testing.T, binaryPath string, args ...string) string {

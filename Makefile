@@ -12,7 +12,7 @@ ANDROID_DIR=cmd/proxyma-android
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test test-integration test-cover test-sanitizer test-e2e-harness test-race test-ci test-android-contract test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
+.PHONY: all build test test-integration test-bootstrap-smoke test-cover test-sanitizer test-e2e-harness test-race test-ci test-android-contract test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
 
 all: lint test build ## Run lint, tests, and build
 
@@ -27,6 +27,10 @@ test: ## Run the Go test suite
 test-integration: ## Run live public-contract integration tests
 	@echo "$(BLUE)Running integration contract tests...$(NC)"
 	$(GO) test -v ./cmd/proxyma-bind ./internal/server
+	bash ./tests/dev/bootstrap_dev_smoke_test.sh
+
+test-bootstrap-smoke: ## Smoke-test the isolated developer bootstrap
+	bash ./tests/dev/bootstrap_dev_smoke_test.sh
 
 test-cover: ## Run tests with coverage and enforce the coverage ratchet
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
@@ -76,6 +80,8 @@ test-android-bind test-android:
 		NR == cancel_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { cancel_stream=1 } \
 		$$0 == "  public static native java.lang.String getServiceDetails(java.lang.String);" { details_decl=NR; next } \
 		NR == details_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { service_details=1 } \
+		$$0 == "  public static native java.lang.String getServiceUIContent(java.lang.String);" { ui_content_decl=NR; next } \
+		NR == ui_content_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;)Ljava/lang/String;" { service_ui_content=1 } \
 		$$0 == "  public static native java.lang.String getPeersJson();" { peers_decl=NR; next } \
 		NR == peers_decl+1 && $$0 == "    descriptor: ()Ljava/lang/String;" { peers_json=1 } \
 		$$0 == "  public static native java.lang.String getBandwidthStatsJson();" { bandwidth_decl=NR; next } \
@@ -88,7 +94,7 @@ test-android-bind test-android:
 		NR == invoke_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" { invoke_action=1 } \
 		$$0 == "  public static native java.lang.String projectActionRowsJSON(java.lang.String, java.lang.String, java.lang.String);" { project_decl=NR; next } \
 		NR == project_decl+1 && $$0 == "    descriptor: (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" { project_rows=1 } \
-		END { if (!run_service || !resolve_path || !cancel_stream || !service_details || !peers_json || !bandwidth_json || !logs_json || !ui_schema || !invoke_action || !project_rows) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
+		END { if (!run_service || !resolve_path || !cancel_stream || !service_details || !service_ui_content || !peers_json || !bandwidth_json || !logs_json || !ui_schema || !invoke_action || !project_rows) { print "missing or incompatible required Java binding API"; exit 1 } }' "$$javap_output"; \
 	if [ "$@" = "test-android" ]; then \
 		java_version="$$($(JAVA) -XshowSettings:properties -version 2>&1 | { \
 			while IFS= read -r line; do \

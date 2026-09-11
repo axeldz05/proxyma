@@ -35,7 +35,23 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-class ProxymaJSBridge(private val webView: WebView) {
+internal interface ServiceWebBindGateway {
+    fun runService(name: String, payloadJson: String): String
+    fun getServiceUIContent(name: String): String
+}
+
+internal object NativeServiceWebBindGateway : ServiceWebBindGateway {
+    override fun runService(name: String, payloadJson: String): String =
+        proxyma_bind.Proxyma_bind.runService(name, payloadJson)
+
+    override fun getServiceUIContent(name: String): String =
+        proxyma_bind.Proxyma_bind.getServiceUIContent(name)
+}
+
+class ProxymaJSBridge internal constructor(
+    private val webView: WebView,
+    private val gateway: ServiceWebBindGateway = NativeServiceWebBindGateway
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val streamJobs = ConcurrentHashMap<String, Job>()
 
@@ -43,7 +59,7 @@ class ProxymaJSBridge(private val webView: WebView) {
     fun runService(name: String, payloadJson: String): String {
         return runBlocking(Dispatchers.IO) {
             try {
-                val response = proxyma_bind.Proxyma_bind.runService(name, payloadJson)
+                val response = gateway.runService(name, payloadJson)
                 bindResult(response, BindMethod.LEGACY_ERROR_PREFIX).fold(
                     onSuccess = { it },
                     onFailure = { Gson().toJson(mapOf("error" to (it.message ?: "service failed"))) }
@@ -134,10 +150,26 @@ fun ServiceWebContainerScreen(
     uiConfig: ServiceUIConfig,
     onBack: () -> Unit
 ) {
+    ServiceWebContainerContent(
+        serviceName = serviceName,
+        uiConfig = uiConfig,
+        onBack = onBack,
+        gateway = NativeServiceWebBindGateway
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ServiceWebContainerContent(
+    serviceName: String,
+    uiConfig: ServiceUIConfig,
+    onBack: () -> Unit,
+    gateway: ServiceWebBindGateway
+) {
     val contentResult by produceState<Result<String>?>(initialValue = null, serviceName) {
         value = try {
             withContext(Dispatchers.IO) {
-                bindResult(proxyma_bind.Proxyma_bind.getServiceUIContent(serviceName))
+                bindResult(gateway.getServiceUIContent(serviceName))
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -198,7 +230,7 @@ fun ServiceWebContainerScreen(
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             webViewClient = WebViewClient()
-                            val bridge = ProxymaJSBridge(this)
+                            val bridge = ProxymaJSBridge(this, gateway)
                             tag = bridge
                             addJavascriptInterface(bridge, "ProxymaBridge")
 

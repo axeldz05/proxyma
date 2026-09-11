@@ -94,6 +94,43 @@ func TestServiceSubscriptionPatternMatch(t *testing.T) {
 	require.NotContains(t, sv.GetClusterServices("peer-c"), "audio.transcribe")
 }
 
+func TestServiceUnsubscribeRemovesOnlySelectedPattern(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "svc-unsubscribe")
+	sv, err := server.New(cfg, nil)
+	require.NoError(t, err)
+	require.NoError(t, sv.LocalServiceSubscribe("vision.*", true))
+	require.NoError(t, sv.LocalServiceSubscribe("audio.*", true))
+
+	postNotify := func(name string) {
+		t.Helper()
+		body, marshalErr := json.Marshal(protocol.ServiceNotification{
+			Action: protocol.ActionAdd,
+			NodeID: "peer-unsubscribe",
+			Schema: protocol.ServiceSchema{Name: name},
+		})
+		require.NoError(t, marshalErr)
+		req, requestErr := http.NewRequest(http.MethodPost, protocol.PathServicesNotify, bytes.NewReader(body))
+		require.NoError(t, requestErr)
+		req = withPeerTLS(req, "peer-unsubscribe")
+		rec := httptest.NewRecorder()
+		sv.HandleServiceNotify(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	postNotify("vision.before")
+	postNotify("audio.before")
+	require.NoError(t, sv.LocalServiceSubscribe("vision.*", false))
+	postNotify("vision.after")
+	postNotify("audio.after")
+
+	services := sv.GetClusterServices("peer-unsubscribe")
+	require.Contains(t, services, "vision.before")
+	require.NotContains(t, services, "vision.after")
+	require.Contains(t, services, "audio.before")
+	require.Contains(t, services, "audio.after")
+}
+
 func TestServiceNotifyWithoutSubscriptionAcceptsAll(t *testing.T) {
 	t.Parallel()
 	// Backward compat: empty subscription set still materializes (join sync / legacy).

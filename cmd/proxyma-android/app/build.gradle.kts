@@ -51,6 +51,10 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -77,6 +81,9 @@ dependencies {
     implementation(files(proxymaAar))
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.test:core:1.7.0")
+    // 4.17-beta-2 includes ASM 9.10, required when local builds run on Java 26.
+    testImplementation("org.robolectric:robolectric:4.17-beta-2")
 }
 
 val verifyProxymaAar = tasks.register("verifyProxymaAar") {
@@ -116,6 +123,7 @@ val verifyProxymaAar = tasks.register("verifyProxymaAar") {
                 requireStaticString("runService", String::class.java, String::class.java)
                 requireStaticString("resolveTaskResultPath", String::class.java)
                 requireStaticString("cancelStream", String::class.java)
+                requireStaticString("getServiceUIContent", String::class.java)
                 requireStaticString("getUISchemaJSONForSurface", String::class.java)
                 requireStaticString(
                     "invokeDomainActionJSON",

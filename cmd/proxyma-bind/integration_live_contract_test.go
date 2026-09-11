@@ -283,6 +283,14 @@ func TestLiveDaemonPublicActionContracts(t *testing.T) {
 		t.Fatalf("service run response = %#v, want completed result 8", task)
 	}
 
+	assertLiveBindSuccess(t, SubscribeService("vision.*"))
+	assertLiveBindSuccess(t, SubscribeService("audio.*"))
+	assertLiveBindSuccess(t, InvokeDomainActionJSON(
+		"service",
+		"unsubscribe",
+		`{"name":"vision.*"}`,
+	))
+
 	inputPath := filepath.Join(t.TempDir(), "source.txt")
 	if err := os.WriteFile(inputPath, []byte("live storage contract"), 0o600); err != nil {
 		t.Fatal(err)
@@ -292,17 +300,38 @@ func TestLiveDaemonPublicActionContracts(t *testing.T) {
 		"name": "contract.txt",
 	}))
 
+	jsonInputPath := filepath.Join(t.TempDir(), "json-source.txt")
+	if err := os.WriteFile(jsonInputPath, []byte("gomobile JSON action contract"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertLiveBindSuccess(t, InvokeDomainActionJSON(
+		"storage",
+		"upload",
+		marshalLiveJSON(t, map[string]string{
+			"path": jsonInputPath,
+			"name": "json-contract.txt",
+		}),
+	))
+
 	var files []protocol.VFSFileStatus
 	decodeLiveBindJSON(t, InvokeDomainAction("storage", "list", nil), &files)
 	var uploaded *protocol.VFSFileStatus
+	var jsonUploaded *protocol.VFSFileStatus
 	for i := range files {
 		if files[i].Name == "contract.txt" {
 			uploaded = &files[i]
-			break
+		}
+		if files[i].Name == "json-contract.txt" {
+			jsonUploaded = &files[i]
 		}
 	}
 	if uploaded == nil || !uploaded.HasLocal || uploaded.Size != int64(len("live storage contract")) || uploaded.Hash == "" {
 		t.Fatalf("storage list result = %#v, want local contract.txt metadata", files)
+	}
+	if jsonUploaded == nil || !jsonUploaded.HasLocal ||
+		jsonUploaded.Size != int64(len("gomobile JSON action contract")) ||
+		jsonUploaded.Hash == "" {
+		t.Fatalf("storage list result = %#v, want JSON-dispatched upload metadata", files)
 	}
 
 	if err := daemon.stop(); err != nil {
@@ -317,6 +346,11 @@ func TestLiveDaemonTelemetryAndAndroidMetadataContracts(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	startLiveBindDaemon(t, "live-metadata")
+	uiContent := "<html><body>delegated service UI</body></html>"
+	uiPath := filepath.Join(t.TempDir(), "service-ui.html")
+	if err := os.WriteFile(uiPath, []byte(uiContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	schemaPath := writeLiveServiceSchema(t, protocol.ServiceSchema{
 		Name:        "live.metadata",
 		Type:        protocol.ServiceTypeServerStream,
@@ -338,6 +372,10 @@ func TestLiveDaemonTelemetryAndAndroidMetadataContracts(t *testing.T) {
 				Type:   protocol.ParamTypeFile,
 				UIHint: protocol.UIHintImagePicker,
 			},
+		},
+		UI: &protocol.ServiceUIConfig{
+			Type:      "web_app",
+			LocalPath: uiPath,
 		},
 	})
 	assertLiveBindSuccess(t, AddService(
@@ -384,6 +422,12 @@ func TestLiveDaemonTelemetryAndAndroidMetadataContracts(t *testing.T) {
 	if !containsString(detail.RequiredPermissions, "Camera (to take photo for upload)") ||
 		!containsString(detail.RequiredPermissions, "Gallery / Storage (to select photo)") {
 		t.Fatalf("required permissions = %#v, want camera and gallery metadata", detail.RequiredPermissions)
+	}
+	if got := GetServiceUIContent("live.metadata"); got != uiContent {
+		t.Fatalf("delegated UI content = %q, want %q", got, uiContent)
+	}
+	if got := GetServiceUIContent("missing.service"); got != "" {
+		t.Fatalf("missing delegated UI content = %q, want empty", got)
 	}
 
 	var stats []struct {
@@ -991,6 +1035,12 @@ func TestLiveDaemonPipelineContracts(t *testing.T) {
 			{FromStep: "increment", FromPort: "value", ToStep: "double", ToPort: "value"},
 		},
 	}
+	assertLiveBindSuccess(t, ValidatePipelineRaw(marshalLiveJSON(t, valid)))
+	var afterValidation []protocol.PipelineSchema
+	decodeLiveBindJSON(t, ListPipelines(), &afterValidation)
+	if _, persisted := livePipelineByID(afterValidation, valid.ID); persisted {
+		t.Fatalf("validate-only pipeline unexpectedly persisted: %#v", afterValidation)
+	}
 	assertLiveBindSuccess(t, AddPipelineRaw(valid.ID, marshalLiveJSON(t, valid)))
 
 	var result protocol.ServiceTaskResponse
@@ -1010,6 +1060,7 @@ func TestLiveDaemonPipelineContracts(t *testing.T) {
 			{FromStep: "b", FromPort: "result", ToStep: "a", ToPort: "seed"},
 		},
 	}
+	assertLiveBindErrorContains(t, ValidatePipelineRaw(marshalLiveJSON(t, cyclic)), "cycle")
 	assertLiveBindErrorContains(t, AddPipelineRaw(cyclic.ID, marshalLiveJSON(t, cyclic)), "cycle")
 
 	typeInvalid := protocol.PipelineSchema{

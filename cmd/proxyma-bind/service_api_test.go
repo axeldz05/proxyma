@@ -60,6 +60,27 @@ func TestRunServiceAPISignatures(t *testing.T) {
 	}
 }
 
+func TestGetServiceUIContentAPISignature(t *testing.T) {
+	t.Parallel()
+
+	var target *ast.FuncDecl
+	for _, fn := range bindingFunctions(t) {
+		if fn.Recv == nil && fn.Name.Name == "GetServiceUIContent" {
+			target = fn
+			break
+		}
+	}
+	if target == nil {
+		t.Fatal("missing GetServiceUIContent")
+	}
+	if fieldCount(target.Type.Params) != 1 || !allFieldsAreStrings(target.Type.Params) {
+		t.Fatal("GetServiceUIContent must take exactly one string")
+	}
+	if fieldCount(target.Type.Results) != 1 || !allFieldsAreStrings(target.Type.Results) {
+		t.Fatal("GetServiceUIContent must return exactly one string")
+	}
+}
+
 func TestRunServiceDocumentsStrategyMigration(t *testing.T) {
 	t.Parallel()
 

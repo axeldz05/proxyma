@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 STORAGE_DIR="${PROXYMA_DEV_DIR:-$HOME/.proxyma_dev}"
 mkdir -p "$STORAGE_DIR/scripts"
 
-# Clean up any existing instances
-echo "Stopping any running proxyma instance..."
-pkill -9 -f "proxyma run" || true
-sleep 1
+# Clean up any existing instances unless an isolated harness owns its own PID.
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_KILL:-}" != "1" ]]; then
+    echo "Stopping any running proxyma instance..."
+    pkill -9 -f "proxyma run" || true
+    sleep 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICES_DIR="$REPO_ROOT/services-examples"
@@ -18,23 +20,34 @@ echo "Building proxyma binary..."
 go build -C "$REPO_ROOT" -o "$STORAGE_DIR/proxyma" ./cmd/proxyma
 
 # Sync Python dependencies with uv if available
-if command -v uv >/dev/null 2>&1; then
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_UV:-}" != "1" ]] && command -v uv >/dev/null 2>&1; then
     echo "Syncing Python environment in services-examples using uv..."
     uv sync --project "$SERVICES_DIR" || true
 fi
 
-# Compile editor binary (part of main proxyma module)
-echo "Building editor binary..."
-go build -C "$REPO_ROOT" -o "$SERVICES_DIR/editor/proxyma-editor" ./services-examples/editor
+# Compile optional example binaries outside isolated smoke runs.
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_EXTRA_BUILDS:-}" != "1" ]]; then
+    echo "Building editor binary..."
+    go build -C "$REPO_ROOT" -o "$SERVICES_DIR/editor/proxyma-editor" ./services-examples/editor
 
-# Compile collab_editor binary
-echo "Building collab_editor binary..."
-go -C "$SERVICES_DIR/collab_editor" build -o proxyma-collab .
+    echo "Building collab_editor binary..."
+    go -C "$SERVICES_DIR/collab_editor" build -o proxyma-collab .
+fi
+
+if [[ ! -f "$STORAGE_DIR/config.json" ]]; then
+    INIT_PORT="${PROXYMA_BOOTSTRAP_INIT_PORT:-8080}"
+    echo "Initializing Proxyma node on port $INIT_PORT..."
+    "$STORAGE_DIR/proxyma" init \
+        --id "${PROXYMA_BOOTSTRAP_NODE_ID:-proxyma-dev}" \
+        --port "$INIT_PORT" \
+        --storage "$STORAGE_DIR"
+fi
 
 # Start the daemon
-echo "Starting Proxyma daemon on port 8080..."
+echo "Starting Proxyma daemon..."
 setsid nohup "$STORAGE_DIR/proxyma" run --storage "$STORAGE_DIR" >> "$STORAGE_DIR/proxyma.log" 2>&1 < /dev/null &
 DAEMON_PID=$!
+echo "$DAEMON_PID" > "$STORAGE_DIR/proxyma.pid"
 disown -h $DAEMON_PID 2>/dev/null || true
 
 # Wait for socket (basename must match protocol.SockFileName)
@@ -54,14 +67,16 @@ if [ ! -S "$SOCK_PATH" ]; then
 fi
 
 # Ensure music fixtures exist
-if [[ ! -d "$SERVICES_DIR/music/fixtures/library/demo-hi" ]]; then
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_FIXTURES:-}" != "1" && ! -d "$SERVICES_DIR/music/fixtures/library/demo-hi" ]]; then
     echo "Generating music fixtures..."
     python3 "$SERVICES_DIR/music/fixtures/gen_fixtures.py" || true
 fi
 
 # HTTP upstreams for server_stream examples
-echo "Starting example stream upstreams..."
-bash "$SERVICES_DIR/start_upstreams.sh" || true
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_UPSTREAMS:-}" != "1" ]]; then
+    echo "Starting example stream upstreams..."
+    bash "$SERVICES_DIR/start_upstreams.sh" || true
+fi
 
 rewrite_placeholders() {
     local src="$1"
@@ -69,38 +84,42 @@ rewrite_placeholders() {
     sed "s|__SERVICES_DIR__|${SERVICES_DIR}|g" "$src" > "$dest"
 }
 
-# Register all lab services (glob + placeholder rewrite)
-echo "Registering services..."
-TMP_SVC_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_SVC_DIR"' EXIT
-while IFS= read -r -d '' f; do
-    base="$(basename "$f")"
-    rewritten="$TMP_SVC_DIR/$base"
-    rewrite_placeholders "$f" "$rewritten"
-    echo "  + $base"
-    "$STORAGE_DIR/proxyma" service add --name "$rewritten" --storage "$STORAGE_DIR" || true
-done < <(find "$SERVICES_DIR" -name '*_service.json' -print0 | sort -z)
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_REGISTER:-}" != "1" ]]; then
+    # Register all lab services (glob + placeholder rewrite)
+    echo "Registering services..."
+    TMP_SVC_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_SVC_DIR"' EXIT
+    while IFS= read -r -d '' f; do
+        base="$(basename "$f")"
+        rewritten="$TMP_SVC_DIR/$base"
+        rewrite_placeholders "$f" "$rewritten"
+        echo "  + $base"
+        "$STORAGE_DIR/proxyma" service add --name "$rewritten" --storage "$STORAGE_DIR" || true
+    done < <(find "$SERVICES_DIR" -name '*_service.json' -print0 | sort -z)
 
-# Register all lab pipelines (includes ocr_obsidian_pipeline.json)
-echo "Registering example pipelines..."
-while IFS= read -r -d '' f; do
-    id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('id') or '')" "$f")"
-    if [[ -z "$id" ]]; then
-        id="$(basename "$f" .json)"
-    fi
-    echo "  + $id ($f)"
-    "$STORAGE_DIR/proxyma" service add_pipeline --id "$id" --schema-file "$f" --storage "$STORAGE_DIR" || true
-done < <(find "$SERVICES_DIR" -name '*_pipeline.json' -print0 | sort -z)
+    # Register all lab pipelines (includes ocr_obsidian_pipeline.json)
+    echo "Registering example pipelines..."
+    while IFS= read -r -d '' f; do
+        id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('id') or '')" "$f")"
+        if [[ -z "$id" ]]; then
+            id="$(basename "$f" .json)"
+        fi
+        echo "  + $id ($f)"
+        "$STORAGE_DIR/proxyma" service add_pipeline --id "$id" --schema-file "$f" --storage "$STORAGE_DIR" || true
+    done < <(find "$SERVICES_DIR" -name '*_pipeline.json' -print0 | sort -z)
+fi
 
 # Pre-populate random files
-echo "Pre-populating VFS with sample files..."
-echo "Draft proposal for P2P Compute network design" > "/tmp/sample_proposal.txt"
-"$STORAGE_DIR/proxyma" storage upload --name "proposal.txt" --path "/tmp/sample_proposal.txt" --storage "$STORAGE_DIR"
+if [[ "${PROXYMA_BOOTSTRAP_SKIP_SAMPLES:-}" != "1" ]]; then
+    echo "Pre-populating VFS with sample files..."
+    echo "Draft proposal for P2P Compute network design" > "/tmp/sample_proposal.txt"
+    "$STORAGE_DIR/proxyma" storage upload --name "proposal.txt" --path "/tmp/sample_proposal.txt" --storage "$STORAGE_DIR"
 
-echo "Invoice ID: 948271 - Date: 2026-07-20" > "/tmp/sample_invoice.txt"
-"$STORAGE_DIR/proxyma" storage upload --name "invoice.txt" --path "/tmp/sample_invoice.txt" --storage "$STORAGE_DIR"
+    echo "Invoice ID: 948271 - Date: 2026-07-20" > "/tmp/sample_invoice.txt"
+    "$STORAGE_DIR/proxyma" storage upload --name "invoice.txt" --path "/tmp/sample_invoice.txt" --storage "$STORAGE_DIR"
 
-rm -f "/tmp/sample_proposal.txt" "/tmp/sample_invoice.txt"
+    rm -f "/tmp/sample_proposal.txt" "/tmp/sample_invoice.txt"
+fi
 
 # Create a developer command wrapper 'pm' so the user doesn't have to specify --storage every time
 cat << EOF > "$STORAGE_DIR/pm"

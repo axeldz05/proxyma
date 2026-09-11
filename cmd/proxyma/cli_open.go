@@ -75,6 +75,20 @@ func resolveExistingJSONPath(candidate string) string {
 	return ""
 }
 
+func systemOpenCommand(targetPath string) *exec.Cmd {
+	if configured := os.Getenv("PROXYMA_SYSTEM_OPEN"); configured != "" {
+		return exec.Command(configured, targetPath)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", targetPath)
+	case "windows":
+		return exec.Command("cmd", "/c", "start", "", targetPath)
+	default:
+		return exec.Command("xdg-open", targetPath)
+	}
+}
+
 func openFileWithSystemDefault(storageDir string, name string, localBlobPath string) (string, error) {
 	if _, err := os.Stat(localBlobPath); err != nil {
 		return "", fmt.Errorf("local cache file not found: %w", err)
@@ -99,16 +113,7 @@ func openFileWithSystemDefault(storageDir string, name string, localBlobPath str
 		}
 	}
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", targetPath)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", targetPath)
-	default:
-		cmd = exec.Command("xdg-open", targetPath)
-	}
-
+	cmd := systemOpenCommand(targetPath)
 	if err := cmd.Start(); err != nil {
 		return targetPath, fmt.Errorf("failed to launch system viewer (%s): %w", cmd.Path, err)
 	}
