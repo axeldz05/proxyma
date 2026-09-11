@@ -161,10 +161,10 @@ func TestOfflineHooksLookup(t *testing.T) {
 			t.Errorf("missing offline hook %q", key)
 		}
 	}
-	if offlineHookFor("storage", "list", nil) != nil {
+	if offlineHookForStorage("storage", "list", nil, t.TempDir()) != nil {
 		t.Fatal("storage.list must not have offline arm")
 	}
-	if offlineHookFor("service", "add", map[string]string{}) == nil {
+	if offlineHookForStorage("service", "add", map[string]string{}, t.TempDir()) == nil {
 		t.Fatal("service.add must resolve offline arm")
 	}
 }

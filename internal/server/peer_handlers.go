@@ -24,6 +24,29 @@ func requirePeerCNMatchesBodyID(w http.ResponseWriter, r *http.Request, bodyID s
 	return true
 }
 
+// decodePeerBody decodes an inter-node request and enforces the anti-spoofing
+// gate: the caller certificate CN must match the body identity. The optional
+// validate hook runs between decode and the CN check so a handler can keep its
+// own 400-precedence field checks (see HandleAnnounce).
+func decodePeerBody[T any](
+	w http.ResponseWriter,
+	r *http.Request,
+	bodyID func(T) string,
+	validate func(T) bool,
+) (T, bool) {
+	req, ok := utils.DecodeJSONOrError[T](w, r)
+	if !ok {
+		return req, false
+	}
+	if validate != nil && !validate(req) {
+		return req, false
+	}
+	if !requirePeerCNMatchesBodyID(w, r, bodyID(req)) {
+		return req, false
+	}
+	return req, true
+}
+
 // allowLeaveOrSponsorEvict: self-leave (CN==bodyID) or CA authority evicting another peer.
 func (s *Server) allowLeaveOrSponsorEvict(w http.ResponseWriter, r *http.Request, bodyID string) bool {
 	cn, ok := requirePeerCN(w, r)
@@ -43,15 +66,16 @@ func (s *Server) allowLeaveOrSponsorEvict(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.AddPeerRequest](w, r)
+	req, ok := decodePeerBody(w, r,
+		func(req protocol.AddPeerRequest) string { return req.ID },
+		func(req protocol.AddPeerRequest) bool {
+			if req.ID == "" || len(req.Address.Addresses) == 0 || req.Address.Addresses[0] == "" {
+				utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
+				return false
+			}
+			return true
+		})
 	if !ok {
-		return
-	}
-	if req.ID == "" || len(req.Address.Addresses) == 0 || req.Address.Addresses[0] == "" {
-		utils.RespondError(w, http.StatusBadRequest, "ID and Address cannot be empty")
-		return
-	}
-	if !requirePeerCNMatchesBodyID(w, r, req.ID) {
 		return
 	}
 
@@ -97,19 +121,19 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 		IsSponsor: s.IsSponsorNode(),
 	}
 
-	go func(newID string, newAddress protocol.AddressRecord) {
-		payload := protocol.AddPeerRequest{ID: newID, Address: newAddress}
+	s.goOwned(func() {
+		payload := protocol.AddPeerRequest{ID: req.ID, Address: req.Address}
 		s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
-			if peerID == newID {
+			if peerID == req.ID {
 				return errPeerSkipped
 			}
 			if err := s.peerClient.AddPeer(peerID, payload); err != nil {
-				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerID, "newPeer", newAddress, "error", err)
+				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerID, "newPeer", req.Address, "error", err)
 				return err
 			}
 			return nil
 		})
-	}(req.ID, req.Address)
+	})
 
 	utils.RespondJSON(w, http.StatusOK, peersSnapshot)
 }
@@ -148,11 +172,10 @@ func (s *Server) HandleAddPeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePeerIDAction(w http.ResponseWriter, r *http.Request, logMsg, respMsg string, after func(id string)) {
-	req, ok := utils.DecodeJSONOrError[protocol.PeerIDRequest](w, r)
+	req, ok := decodePeerBody(w, r,
+		func(req protocol.PeerIDRequest) string { return req.ID },
+		nil)
 	if !ok {
-		return
-	}
-	if !requirePeerCNMatchesBodyID(w, r, req.ID) {
 		return
 	}
 	after(req.ID)

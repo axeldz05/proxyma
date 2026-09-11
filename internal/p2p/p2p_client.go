@@ -126,14 +126,36 @@ func (c *HTTPPeerClient) NotifyPipelineSchema(ctx context.Context, peerID string
 	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathSchemasNotify), notification, 0)
 }
 
+// openPeerBody composes prepareBody → sendRequestWithHeaders → OpenHTTPBody
+// (http.StatusOK) for the paths that hand back a raw body. The caller owns and
+// closes the returned ReadCloser; the response is exposed for callers that
+// still need response metadata (e.g. the negotiated stream version header).
+func (c *HTTPPeerClient) openPeerBody(
+	ctx context.Context,
+	method, target, path string,
+	body any,
+	headers http.Header,
+) (io.ReadCloser, *http.Response, error) {
+	bodyReader, contentType, err := prepareBody(body)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := c.sendRequestWithHeaders(ctx, method, target, path, bodyReader, contentType, headers)
+	if err != nil {
+		return nil, nil, err
+	}
+	readCloser, err := OpenHTTPBody(resp, http.StatusOK)
+	if err != nil {
+		return nil, nil, err
+	}
+	return readCloser, resp, nil
+}
+
 // If the returned error is nil, the [ReadCloser] is a non-nil Body which the user is expected to close.
 // The Body should both be read to EOF and closed, otherwise it does not satisfy [Client] protocols
 func (c *HTTPPeerClient) DownloadBlob(ctx context.Context, peerID, hash string) (io.ReadCloser, error) {
-	resp, err := c.sendRequest(ctx, "GET", peerID, protocol.PathRel(protocol.PathDownloadPrefix)+hash, nil, "")
-	if err != nil {
-		return nil, err
-	}
-	return OpenHTTPBody(resp, http.StatusOK)
+	body, _, err := c.openPeerBody(ctx, http.MethodGet, peerID, protocol.PathRel(protocol.PathDownloadPrefix)+hash, nil, nil)
+	return body, err
 }
 
 func (c *HTTPPeerClient) DiscoverServices(ctx context.Context, peerID string) ([]string, error) {
@@ -216,15 +238,15 @@ func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload p
 }
 
 func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
-	bodyReader, contentType, err := prepareBody(payload)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.sendRequest(ctx, "POST", peerID, protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName), bodyReader, contentType)
-	if err != nil {
-		return nil, err
-	}
-	return OpenHTTPBody(resp, http.StatusOK)
+	body, _, err := c.openPeerBody(
+		ctx,
+		http.MethodPost,
+		peerID,
+		protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName),
+		payload,
+		nil,
+	)
+	return body, err
 }
 
 func (c *HTTPPeerClient) StreamServiceNegotiated(
@@ -233,25 +255,16 @@ func (c *HTTPPeerClient) StreamServiceNegotiated(
 	serviceName string,
 	payload map[string]any,
 ) (NegotiatedServiceStream, error) {
-	bodyReader, contentType, err := prepareBody(payload)
-	if err != nil {
-		return NegotiatedServiceStream{}, err
-	}
 	headers := make(http.Header)
 	headers.Set(protocol.HeaderStreamAcceptVersions, fmt.Sprintf("%d", protocol.ServiceStreamVersion))
-	resp, err := c.sendRequestWithHeaders(
+	body, resp, err := c.openPeerBody(
 		ctx,
 		http.MethodPost,
 		peerID,
 		protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName),
-		bodyReader,
-		contentType,
+		payload,
 		headers,
 	)
-	if err != nil {
-		return NegotiatedServiceStream{}, err
-	}
-	body, err := OpenHTTPBody(resp, http.StatusOK)
 	if err != nil {
 		return NegotiatedServiceStream{}, err
 	}

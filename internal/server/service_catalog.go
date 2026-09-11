@@ -111,24 +111,32 @@ func (s *Server) applyServiceAction(name string, localService *protocol.LocalSer
 	}
 }
 
+// commitCatalogMutation stages the gossip payload, applies the local mutation,
+// and reconciles the staged outbox when the mutation fails (SSOT for Local*
+// catalog mutations). Returns the joined mutation/finish error.
+func (s *Server) commitCatalogMutation(kind gossipKind, entity string, payload any, apply func() error) error {
+	staged, err := s.prepareOutboxMutation(kind, entity, payload)
+	if err != nil {
+		return err
+	}
+	mutationErr := apply()
+	return errors.Join(mutationErr, staged.finish(mutationErr == nil))
+}
+
 func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequired, schemaFile string) (any, error) {
 	serviceName, localService, err := compute.BuildLocalServiceFromArgs(name, serviceType, exec, desc, param, noRequired, schemaFile)
 	if err != nil {
 		return nil, err
 	}
-	payload := protocol.ServiceNotification{
-		Action: protocol.ActionAdd,
-		NodeID: s.Config.ID,
-		Schema: protocol.NormalizeServiceSchema(serviceName, localService.Schema, localService.Type),
-	}
-	staged, err := s.prepareOutboxMutation(kindService, serviceName, payload)
-	if err != nil {
+	payload := s.serviceNotification(
+		protocol.ActionAdd,
+		protocol.NormalizeServiceSchema(serviceName, localService.Schema, localService.Type),
+	)
+	if err := s.commitCatalogMutation(kindService, serviceName, payload, func() error {
+		_, err := s.applyServiceAction(serviceName, &localService, protocol.ActionAdd)
+		return err
+	}); err != nil {
 		return nil, err
-	}
-	_, mutationErr := s.applyServiceAction(serviceName, &localService, protocol.ActionAdd)
-	finishErr := staged.finish(mutationErr == nil)
-	if mutationErr != nil || finishErr != nil {
-		return nil, errors.Join(mutationErr, finishErr)
 	}
 	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
 }
@@ -136,40 +144,23 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 func (s *Server) LocalServiceRemove(name string) (any, error) {
 	schema, _ := s.Compute.GetService(name)
 	schema = protocol.NormalizeServiceSchema(name, schema, "")
-	payload := protocol.ServiceNotification{
-		Action: protocol.ActionRemove,
-		NodeID: s.Config.ID,
-		Schema: schema,
-	}
-	staged, err := s.prepareOutboxMutation(kindService, name, payload)
-	if err != nil {
+	payload := s.serviceNotification(protocol.ActionRemove, schema)
+	if err := s.commitCatalogMutation(kindService, name, payload, func() error {
+		_, err := s.applyServiceAction(name, nil, protocol.ActionRemove)
+		return err
+	}); err != nil {
 		return nil, err
-	}
-	_, mutationErr := s.applyServiceAction(name, nil, protocol.ActionRemove)
-	finishErr := staged.finish(mutationErr == nil)
-	if mutationErr != nil || finishErr != nil {
-		return nil, errors.Join(mutationErr, finishErr)
 	}
 	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' removed successfully.", name)}, nil
 }
 
 func (s *Server) notifyService(ctx context.Context, peerID string, schema protocol.ServiceSchema, action string) error {
-	payload := protocol.ServiceNotification{
-		Action: action,
-		NodeID: s.Config.ID,
-		Schema: schema,
-	}
+	payload := s.serviceNotification(action, schema)
 	return s.notifyWithOutbox(ctx, peerID, kindService, schema.Name, payload)
 }
 
 func (s *Server) NotifyServiceToPeer(peerID string, schema protocol.ServiceSchema, action string) {
 	s.gossipToPeer(peerID, func(ctx context.Context, peerID string) error {
-		return s.notifyService(ctx, peerID, schema, action)
-	})
-}
-
-func (s *Server) NotifyService(schema protocol.ServiceSchema, action string) {
-	s.gossipAll(func(ctx context.Context, peerID string) error {
 		return s.notifyService(ctx, peerID, schema, action)
 	})
 }

@@ -29,6 +29,10 @@ func NewBandwidthTracker() *BandwidthTracker {
 	return &BandwidthTracker{}
 }
 
+// bandwidthWindow is the sampling window every bandwidth figure is computed
+// over; thresholds and divisors below must stay derived from it.
+const bandwidthWindow = 5 * time.Second
+
 func (bt *BandwidthTracker) recordTransfer(isSent bool, n int64, path string) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -38,7 +42,7 @@ func (bt *BandwidthTracker) recordTransfer(isSent bool, n int64, path string) {
 		Bytes:     n,
 		Category:  bt.CategorizePath(path),
 	}
-	threshold := rec.Timestamp.Add(-5 * time.Second)
+	threshold := rec.Timestamp.Add(-bandwidthWindow)
 
 	if isSent {
 		bt.totalSent += n
@@ -59,28 +63,28 @@ func (bt *BandwidthTracker) RecordBytesReceived(n int64, path string) {
 	bt.recordTransfer(false, n, path)
 }
 
-// GetCurrentBandwidth calculates the upload and download bandwidth for the last 5 seconds.
+// GetCurrentBandwidth calculates the upload and download bandwidth over the sampling window.
 func (bt *BandwidthTracker) GetCurrentBandwidth() (float64, float64) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 
-	threshold := time.Now().Add(-5 * time.Second)
+	threshold := time.Now().Add(-bandwidthWindow)
 	var sentSum, recvSum int64
 	bt.sentHistory, sentSum = pruneHistory(bt.sentHistory, threshold)
 	bt.receivedHistory, recvSum = pruneHistory(bt.receivedHistory, threshold)
 
-	return float64(sentSum) / 5.0, float64(recvSum) / 5.0
+	return float64(sentSum) / bandwidthWindow.Seconds(), float64(recvSum) / bandwidthWindow.Seconds()
 }
 
-// GetCategoryBandwidth returns the upload/download bandwidth for a specific category in the last 5 seconds.
+// GetCategoryBandwidth returns the upload/download bandwidth for a specific category over the sampling window.
 func (bt *BandwidthTracker) GetCategoryBandwidth(category string) (float64, float64) {
 	bt.mu.RLock()
 	defer bt.mu.RUnlock()
 
-	threshold := time.Now().Add(-5 * time.Second)
+	threshold := time.Now().Add(-bandwidthWindow)
 	sentSum := sumCategory(bt.sentHistory, threshold, category)
 	recvSum := sumCategory(bt.receivedHistory, threshold, category)
-	return float64(sentSum) / 5.0, float64(recvSum) / 5.0
+	return float64(sentSum) / bandwidthWindow.Seconds(), float64(recvSum) / bandwidthWindow.Seconds()
 }
 
 func pruneHistory(history []TransferRecord, threshold time.Time) ([]TransferRecord, int64) {

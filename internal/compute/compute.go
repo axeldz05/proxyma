@@ -165,19 +165,6 @@ func (c *ComputeEngine) RegisterNewService(schema protocol.ServiceSchema, handle
 	return nil
 }
 
-func (c *ComputeEngine) ValidatePipelineRegistration(schema protocol.PipelineSchema) error {
-	schema = protocol.ClonePipelineSchema(schema)
-	if err := protocol.ValidatePipelineSchema(schema, nil); err != nil {
-		return err
-	}
-	c.pipelinesMu.RLock()
-	defer c.pipelinesMu.RUnlock()
-	if current, exists := c.pipelineRevisions[schema.ID]; exists {
-		return protocol.ValidatePipelineRevision(current, schema)
-	}
-	return nil
-}
-
 func (c *ComputeEngine) RegisterPipeline(schema protocol.PipelineSchema) error {
 	return c.ApplyPipelineRevision(schema, nil)
 }
@@ -214,17 +201,6 @@ func (c *ComputeEngine) ApplyPipelineRevision(
 		c.logger.Info("Pipeline schema registered", "pipelineID", schema.ID, "version", schema.Version)
 	}
 	return nil
-}
-
-func (c *ComputeEngine) UnregisterPipeline(id string) {
-	c.pipelinesMu.Lock()
-	defer c.pipelinesMu.Unlock()
-	if current, exists := c.pipelineRevisions[id]; exists {
-		current.Deleted = true
-		c.pipelineRevisions[id] = protocol.ClonePipelineSchema(current)
-	}
-	delete(c.pipelines, id)
-	c.logger.Info("Pipeline schema unregistered", "pipelineID", id)
 }
 
 func (c *ComputeEngine) GetPipeline(id string) (protocol.PipelineSchema, bool) {
@@ -895,13 +871,8 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 	}
 	c.taskStatusesMu.Lock()
 	defer c.taskStatusesMu.Unlock()
-	if value, exists := c.taskStatuses.Load(req.TaskID); exists {
-		if current, ok := value.(protocol.ServiceTaskResponse); ok {
-			if current.Service == req.Service {
-				return
-			}
-			return
-		}
+	if _, exists := c.taskStatuses.Load(req.TaskID); exists {
+		return
 	}
 	c.taskStatuses.Store(req.TaskID, response)
 	now := c.taskStatusNow()
@@ -913,14 +884,22 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 	c.pruneTaskStatusesLocked(now, req.TaskID)
 }
 
+// markTaskFailedShape stamps the terminal failure fields, mirroring the reason
+// into the error output (SSOT failure shape for task statuses).
+func markTaskFailedShape(response *protocol.ServiceTaskResponse, reason string) {
+	response.Status = "failed"
+	response.Error = reason
+	response.Outputs = map[string]any{"error": reason}
+}
+
+func failedTaskResponse(taskID, service, reason string) protocol.ServiceTaskResponse {
+	response := protocol.ServiceTaskResponse{TaskID: taskID, Service: service}
+	markTaskFailedShape(&response, reason)
+	return response
+}
+
 func (c *ComputeEngine) MarkTaskAsFailed(req protocol.TaskRequest, reason string) {
-	c.setTaskStatus(protocol.ServiceTaskResponse{
-		TaskID:  req.TaskID,
-		Service: req.Service,
-		Status:  "failed",
-		Error:   reason,
-		Outputs: map[string]any{"error": reason},
-	})
+	c.setTaskStatus(failedTaskResponse(req.TaskID, req.Service, reason))
 }
 
 // AcceptTaskCallback authenticates and atomically records a callback for a tracked task.
@@ -1018,9 +997,7 @@ func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {
 	closed := c.closed
 	c.lifecycleMu.RUnlock()
 	if closed {
-		response.Status = "failed"
-		response.Error = ErrClosed.Error()
-		response.Outputs = map[string]any{"error": ErrClosed.Error()}
+		markTaskFailedShape(&response, ErrClosed.Error())
 	}
 
 	c.taskStatusesMu.Lock()
@@ -1056,11 +1033,17 @@ func (c *ComputeEngine) storeTaskStatusLocked(response protocol.ServiceTaskRespo
 }
 
 func (c *ComputeEngine) touchTaskStatusLocked(taskID string, now time.Time) {
+	c.touchStatusMeta(c.taskStatusMeta, taskID, now)
+}
+
+// touchStatusMeta bumps the shared eviction sequence for one task's metadata
+// entry in either bookkeeping map (active or retired).
+func (c *ComputeEngine) touchStatusMeta(meta map[string]taskStatusMetadata, taskID string, now time.Time) {
 	c.taskStatusSeq++
-	metadata := c.taskStatusMeta[taskID]
+	metadata := meta[taskID]
 	metadata.touchedAt = now
 	metadata.sequence = c.taskStatusSeq
-	c.taskStatusMeta[taskID] = metadata
+	meta[taskID] = metadata
 }
 
 type taskStatusEvictionCandidate struct {
@@ -1172,23 +1155,15 @@ func (c *ComputeEngine) retireActiveTaskStatusLocked(
 ) {
 	metadata := c.taskStatusMeta[taskID]
 	c.deleteTaskStatusLocked(taskID)
-	response.Status = "failed"
-	response.Error = reason
-	response.Outputs = map[string]any{"error": reason}
+	markTaskFailedShape(&response, reason)
 	c.retiredTaskStatuses[taskID] = protocol.CloneServiceTaskResponse(response)
-	c.taskStatusSeq++
-	metadata.touchedAt = now
-	metadata.sequence = c.taskStatusSeq
 	c.retiredTaskStatusMeta[taskID] = metadata
+	c.touchStatusMeta(c.retiredTaskStatusMeta, taskID, now)
 	c.acceptedTasks.Delete(taskID)
 }
 
 func (c *ComputeEngine) touchRetiredTaskStatusLocked(taskID string, now time.Time) {
-	c.taskStatusSeq++
-	metadata := c.retiredTaskStatusMeta[taskID]
-	metadata.touchedAt = now
-	metadata.sequence = c.taskStatusSeq
-	c.retiredTaskStatusMeta[taskID] = metadata
+	c.touchStatusMeta(c.retiredTaskStatusMeta, taskID, now)
 }
 
 func (c *ComputeEngine) pruneRetiredTaskStatusesLocked(now time.Time, protectedTaskID string) {
@@ -1250,13 +1225,7 @@ func (c *ComputeEngine) failAcceptedTasks() {
 					return true
 				}
 			}
-			c.storeTaskStatusLocked(protocol.ServiceTaskResponse{
-				TaskID:  req.TaskID,
-				Service: req.Service,
-				Status:  "failed",
-				Error:   ErrClosed.Error(),
-				Outputs: map[string]any{"error": ErrClosed.Error()},
-			})
+			c.storeTaskStatusLocked(failedTaskResponse(req.TaskID, req.Service, ErrClosed.Error()))
 			c.acceptedTasks.Delete(key)
 		}
 		return true

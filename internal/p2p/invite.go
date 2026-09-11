@@ -23,6 +23,32 @@ type InvitePayload struct {
 	RelayAddr string   `json:"relay_addr,omitempty"`
 }
 
+// appendL8String writes a 1-byte-length-prefixed string (max 255 bytes).
+func appendL8String(buf *bytes.Buffer, s string) {
+	b := []byte(s)
+	if len(b) > 255 {
+		b = b[:255]
+	}
+	buf.WriteByte(byte(len(b)))
+	buf.Write(b)
+}
+
+// readL8String reads a 1-byte-length-prefixed string; field preserves the
+// wire error wording ("malformed binary token: <field> [len] out of bounds").
+func readL8String(data []byte, idx *int, field string) (string, error) {
+	if *idx >= len(data) {
+		return "", fmt.Errorf("malformed binary token: %s len out of bounds", field)
+	}
+	n := int(data[*idx])
+	*idx++
+	if *idx+n > len(data) {
+		return "", fmt.Errorf("malformed binary token: %s out of bounds", field)
+	}
+	s := string(data[*idx : *idx+n])
+	*idx += n
+	return s, nil
+}
+
 func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string, relayAddr string) (smartToken string, secret string, err error) {
 	caBytes, err := ReadCAPEM(caCertPath)
 	if err != nil {
@@ -120,29 +146,13 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 
 	if isHostname {
 		buf.WriteByte(3) // Hostname type
-		hostBytes := []byte(host)
-		if len(hostBytes) > 255 {
-			hostBytes = hostBytes[:255]
-		}
-		buf.WriteByte(byte(len(hostBytes)))
-		buf.Write(hostBytes)
+		appendL8String(&buf, host)
 	}
 
 	if hasRelay {
 		buf.WriteByte(4) // Relay Info type
-		sidBytes := []byte(sponsorID)
-		if len(sidBytes) > 255 {
-			sidBytes = sidBytes[:255]
-		}
-		buf.WriteByte(byte(len(sidBytes)))
-		buf.Write(sidBytes)
-
-		raddrBytes := []byte(relayAddr)
-		if len(raddrBytes) > 255 {
-			raddrBytes = raddrBytes[:255]
-		}
-		buf.WriteByte(byte(len(raddrBytes)))
-		buf.Write(raddrBytes)
+		appendL8String(&buf, sponsorID)
+		appendL8String(&buf, relayAddr)
 	}
 
 	for _, ip := range ips {
@@ -206,39 +216,23 @@ func ParseSmartToken(smartToken string) (payload InvitePayload, secret string, e
 				idx += 16
 				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
 			case 3: // Hostname
-				if idx >= len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: hostname len out of bounds")
+				host, strErr := readL8String(data, &idx, "hostname")
+				if strErr != nil {
+					return InvitePayload{}, "", strErr
 				}
-				hostLen := int(data[idx])
-				idx++
-				if idx+hostLen > len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: hostname out of bounds")
-				}
-				host := string(data[idx : idx+hostLen])
-				idx += hostLen
 				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(host, port))
 			case 4: // Relay Information
-				if idx >= len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay sid len out of bounds")
+				sponsorIDRead, strErr := readL8String(data, &idx, "relay sid")
+				if strErr != nil {
+					return InvitePayload{}, "", strErr
 				}
-				sidLen := int(data[idx])
-				idx++
-				if idx+sidLen > len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay sid out of bounds")
-				}
-				payload.SponsorID = string(data[idx : idx+sidLen])
-				idx += sidLen
+				payload.SponsorID = sponsorIDRead
 
-				if idx >= len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay addr len out of bounds")
+				relayAddrRead, strErr := readL8String(data, &idx, "relay addr")
+				if strErr != nil {
+					return InvitePayload{}, "", strErr
 				}
-				raddrLen := int(data[idx])
-				idx++
-				if idx+raddrLen > len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: relay addr out of bounds")
-				}
-				payload.RelayAddr = string(data[idx : idx+raddrLen])
-				idx += raddrLen
+				payload.RelayAddr = relayAddrRead
 			default:
 				return InvitePayload{}, "", fmt.Errorf("malformed binary token: unknown entry type %d", entryType)
 			}

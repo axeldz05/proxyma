@@ -614,14 +614,7 @@ func (qm *QUICManager) InitiateHolePunch(ctx context.Context, peerID string, rem
 
 func (qm *QUICManager) performHolePunch(ctx context.Context, peerID string, remoteAddresses []string, sendRelayReq func(string, string, []byte) ([]byte, error)) (*quic.Conn, error) {
 	candidateAddresses := append([]string(nil), remoteAddresses...)
-	hasQUICAddress := false
-	for _, rawAddress := range candidateAddresses {
-		if _, ok := ParseQUICAddr(rawAddress); ok {
-			hasQUICAddress = true
-			break
-		}
-	}
-	if !hasQUICAddress {
+	if _, ok := FirstQUICAddr(candidateAddresses); !ok {
 		return nil, fmt.Errorf("remote peer does not advertise quic:// public address")
 	}
 

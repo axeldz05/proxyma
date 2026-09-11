@@ -426,10 +426,7 @@ func peerVerifiedTransport(base http.RoundTripper, peerID string) (http.RoundTri
 					return err
 				}
 			}
-			if len(state.PeerCertificates) == 0 {
-				return fmt.Errorf("peer identity mismatch: missing certificate")
-			}
-			return VerifyPeerCN(state.PeerCertificates[0], peerID)
+			return VerifyTLSPeerCN(&state, peerID)
 		}
 		clone.TLSClientConfig = tlsConfig
 		return clone, nil
@@ -534,11 +531,7 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(qm *QUICManager, clone *http.Requ
 	if bypass {
 		return nil, nil, false
 	}
-	hasQuicAddress := false
-	if _, ok := FirstQUICAddr(record.Addresses); ok {
-		hasQuicAddress = true
-	}
-	if !hasQuicAddress {
+	if _, ok := FirstQUICAddr(record.Addresses); !ok {
 		return nil, nil, false
 	}
 

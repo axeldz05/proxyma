@@ -57,9 +57,9 @@ func (s *Server) PublicUDPAddr() string {
 	return s.publicUDPAddr
 }
 
-// ProcessRelayRequest exposes processRelayRequest for tests.
+// ProcessRelayRequest exposes processRelayRequestContext for tests.
 func (s *Server) ProcessRelayRequest(sponsorAddr string, relayReq protocol.RelayRequest) {
-	s.processRelayRequest(sponsorAddr, relayReq)
+	s.processRelayRequestContext(context.Background(), sponsorAddr, relayReq)
 }
 
 // RefreshPublicUDPFromMapping exposes refreshPublicUDPFromMapping for tests.

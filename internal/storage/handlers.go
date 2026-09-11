@@ -6,7 +6,6 @@ import (
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
 	"proxyma/internal/utils"
-	"strings"
 )
 
 func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +82,7 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 					utils.RespondMessage(w, http.StatusOK, "Notification superseded")
 					return
 				}
-				if strings.Contains(err.Error(), "queue full") {
+				if errors.Is(err, ErrDownloadQueueFull) {
 					utils.RespondError(w, http.StatusServiceUnavailable, "Download queue full")
 					return
 				}
@@ -147,7 +146,7 @@ func (s *StorageEngine) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	err := s.DeleteLocalFile(fileName)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if IsVFSFileNotFound(err) {
 			utils.RespondError(w, http.StatusNotFound, err.Error())
 			return
 		}

@@ -61,10 +61,7 @@ func (s *Server) ExecuteSyncContext(ctx context.Context) error {
 			if ok && local.Deleted && remote.Deleted && remote.Version >= local.Version {
 				continue
 			}
-			nErr := s.peerClient.Notify(ctx, peerID, protocol.PeerNotification{
-				File:   local,
-				Source: s.Config.Address,
-			})
+			nErr := s.peerClient.Notify(ctx, peerID, s.vfsNotification(local))
 			if nErr != nil {
 				s.Config.Logger.Debug("Sync push notify failed", "peer", peerID, "file", name, "error", nErr)
 				continue
@@ -310,11 +307,7 @@ func (s *Server) LocalLogs() []protocol.LogRecord {
 }
 
 func (s *Server) prepareVFSNotification(fileInfo protocol.IndexEntry) (func(bool) error, error) {
-	payload := protocol.PeerNotification{
-		File:   fileInfo,
-		Source: s.Config.Address,
-	}
-	staged, err := s.prepareOutboxMutation(kindVFS, fileInfo.Name, payload)
+	staged, err := s.prepareOutboxMutation(kindVFS, fileInfo.Name, s.vfsNotification(fileInfo))
 	if err != nil {
 		return nil, err
 	}

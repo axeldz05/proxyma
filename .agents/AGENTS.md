@@ -53,7 +53,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * **Compute lifetime**: construct with `compute.NewComputeEngine(parentCtx, ...)` and handle its error (a nil parent is rejected). Its private `lifetimeCtx` / `cancelLifetime` own workers and derived RPC/handler timeouts; parent cancellation closes the engine. Request contexts still travel as method arguments—never store a request context on `ComputeEngine`.
 * **NAT / QUIC / router**: access published NAT state through `CurrentNATState` / `natMu`; schedule and join setup with `beginNATWork` / `stopNATWork`. `NATMapper.Start` / `WaitReady` / `Stop` is one synchronized lifetime. Router prewarms are cancellation- and generation-bound; route removal blocks late QUIC sessions, and `PeerClient.Close` joins router work.
 * **Relay**: queue capacity and `RelayManager.workSlots` bound pending and active work. Decode through `decodeRelayJSON`; enforce `MaxRelayBodyBytes` on requests and the capped response writer. Poll/request work must remain server-owned and lifetime-cancelable.
-* **Durable mutation ordering**: outbox v2 uses separate entry/generation/reservation buckets. `notifyWithOutbox` stages a generation before send and compare-deletes only the acknowledged bytes; `prepareOutboxMutation` stages gossip before VFS/pipeline commit and reconciles on commit/rollback. Legacy migration moves only structurally recognized metadata. Download work (`download_intents`), orphan cleanup (`pending_blob_gc`), and pending invites (`pending_invites`) survive restart. Invite mint persists before returning a token; consume deletes durably before CSR signing and restores on recoverable signing/CA-read failure.
+* **Durable mutation ordering**: outbox v2 uses separate entry/generation/reservation buckets. `notifyWithOutbox` stages a generation before send and compare-deletes only the acknowledged bytes; `prepareOutboxMutation` stages gossip before VFS/pipeline commit and reconciles on commit/rollback (wrapped by `commitCatalogMutation`). All outbox deliveries (eager, retry flush, async fan-out) spawn through `deliverOutboxTracked`, deriving their RPC context from `lifetimeCtx` — never `context.Background()`. Legacy migration moves only structurally recognized metadata. Download work (`download_intents`), orphan cleanup (`pending_blob_gc`), and pending invites (`pending_invites`) survive restart. Invite mint persists before returning a token; consume deletes durably before CSR signing and restores on recoverable signing/CA-read failure.
 * **Storage integrity / manifests**: server paths use error-preserving APIs (`GetFileMetaE`, `IsSubscribedE`, `HasServiceSubscriptionsE`, `IsServiceSubscribedE`, `ProcessRemoteManifestE`). Manifest reconciliation processes every entry in deterministic name order, preserves successful decisions, aggregates per-entry errors, and `ProcessRemoteManifestFromSource` still stages durable intents for every successful missing entry. VFS ordering is total: version, tombstone, hash, size, name. Blob writes stage/verify outside the metadata lock, then commit; remote content is accepted only when SHA-256 and the current name/version/hash/live tuple match.
 * **`services.json`**: use compute Load/Save/Upsert/Delete helpers only. They combine a canonical-path in-process RW lock, Linux/Android advisory `flock`, and atomic `utils.WriteJSONFile` (temp + fsync + rename + parent fsync).
 * **Pipelines / tasks**: `PipelineSchema.Version`, `Deleted`, `PipelineSchemaHash`, `ValidatePipelineRevision`, and `ApplyPipelineRevision` define revision/tombstone integrity. `PipelineExecutionState` is engine-owned and binds ID/version/hash/current step/outputs/producers plus pinned `selected_targets`; continuations require `CapabilityPipelineState` **v2**. Authenticated producer/delegate checks guard callbacks. Task status transitions are `pending` → `ingesting` when output import is required → `completed`, or `failed`; terminal states do not regress and retention is bounded.
@@ -86,9 +86,11 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `server.go` lifecycle (`Ready`, `goOwned`, `AcquireWorkLease`, `ShutdownDone`; shutdown joins every owner even if HTTP shutdown fails); `peers.go` topology; `advertisedTCPPort` / `configTCPPort` (`protocol.DefaultTCPPort`).
 * `unix_handlers.go` — **`unixHandlers`** map keyed by `uischema.MustUnixAction` + **`requireUnixArgs`**; `unix_listener.go` accept loop only.
 * `handlers.go` — **`httpRoutes`** table (method, path, handler, `authMode`, `RelayAnon`); `mTLSGuard` → `routeAuth`, `HandleRelayForward` → `relayAllowsAnonymous`; unknown path ⇒ `authMTLS`. Protected routes require self or an explicit `hasRecord` peer, with no literal-CN bypass; only announce uses `authMTLSUnregistered`. **`routeIndex`** memoizes policy with `sync.Once` (policy only, never handlers); subtree paths keep the default.
+* `peer_handlers.go` — **`decodePeerBody[T]`** anti-spoofing gate (decode + CN-must-match-body; `validate` hook preserves announce's 400-before-403 precedence) over `requirePeerCNMatchesBodyID`.
 * `registry.go` — **`PeerRegistry`** = one `map[string]*peerState` + one `RWMutex`. **`hasRecord`** is the registration proof used by `mTLSGuard` / relay / `cluster_handlers`; map presence is not. **`AddPeer` → `(updated, evicted)`**; equal-seq merge keeps `Addresses[0]`.
 * `invite.go` — durable **`Check`** / **`CheckAndConsume`** over storage `pending_invites`; join validates first, consumes atomically before `SignCSR`, and restores durably on recoverable signing/CA-read failure.
-* `catalog_kinds.go` — `catalogKinds` (`Kind` + `entityFrom` + `current` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / `lookupCachedServiceSchema` / `resolveServiceBidTarget`; eager and retry outbox paths both deliver through the table.
+* `catalog_kinds.go` — `catalogKinds` (`Kind` + `entityFrom` + `current` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / lookupCachedServiceSchema / resolveServiceBidTarget; payload builders **`serviceNotification` / `pipelineNotification` / `vfsNotification`** (wire-shape change = 1 zone per kind); eager and retry outbox paths both deliver through the table.
+* `outbox.go` — `enqueueOutbox` (L1) + **`notifyWithOutbox`** (L2); **`commitCatalogMutation`** (stage→apply→reconcile SSOT for `Local*` mutations) / **`outboxEntity`** (legacy entity fallback) / **`deliverOutboxTracked`** (every delivery is `lifetimeCtx`-bound + `goOwned`; flush and async fan-out share it); extracción, reconciliación y entrega consultan la tabla, sin switch por kind.
 * `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
@@ -101,7 +103,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `EstimateTaskCost` / `selectBestServiceBid`; relay **`OriginPeerID`** + response body cap; relay reply CN must match target.
 
 ### P2P — `internal/p2p/`
-* `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr`, `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN`, **`ForbidMissingMTLS` / `RequirePeerCN`**, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`.
+* `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr` (único lugar del scan `quic://` — holepunch y router llaman al helper), `CAKeyPath`, `CACertPaths`, `NodeCertPaths`, `ReadCAPEM` / `ResolveNodeCertPaths`, `PeerCNFromTLS` / `VerifyTLSPeerCN` / **`verifyPeerCNValue`** (wording SSOT de identidad), **`ForbidMissingMTLS` / `RequirePeerCN`**, `newNodeCertTemplate`, `signLeaf`, `LeafDNSNames`, `CSRCommonName`, `NewHTTPClient`, `PostJSONAbsolute`, `ForwardRelay`, `NewRelayRequest`, `FlattenHTTPHeader`, `LoadNodeTLS`, **`appendL8String` / `readL8String`** (codec L8 del Smart Token V2), **`openPeerBody`** (raw-body paths: blob/streams).
 * `HashCertDER` / `CAHashFromPEM` / `TLSConfigTrustCAHash` / `WriteNodePEMs`.
 * `NATMapper.SetOnMapped`; `HolePunchPingPayload` / `ParseHolePunchPing` / `BurstPings`; `routeOverQUICSession`.
 * **`RequireHTTPStatus`** / **`OpenHTTPBody`** for non-`doJSON` paths; `QUICManager` takes a typed `Logger` and accepts on its shutdown ctx; `RoundTrip` = `tryDirectAddresses` → `tryRelay`.
@@ -146,7 +148,9 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Result path | `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` |
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
 | Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
-| Notify outbox | `notifyWithOutbox` / `prepareOutboxMutation` / `enqueueOutbox` / `flushOutbox` / `OutboxPendingCount` (v2 entries + generations + reservations; legacy reconciled) |
+| Notify outbox | `notifyWithOutbox` / `prepareOutboxMutation` / `commitCatalogMutation` / `enqueueOutbox` / `flushOutbox` / `deliverOutboxTracked` (lifetime-bound) / `OutboxPendingCount` (v2 entries + generations + reservations; legacy reconciled) |
+| Gossip payload shapes | `serviceNotification` / `pipelineNotification` / `vfsNotification` (builders junto a `catalogKinds`) |
+| Inter-node body decode + CN gate | `server.decodePeerBody[T]` (validate hook keeps announce 400-first) |
 | Endpoint + auth policy | `httpRoutes` / `routeIndex` / `routeAuth` / `relayAllowsAnonymous` |
 | Per-peer state | `peerState` in `registry.go` (one lock; `hasRecord` = registered) |
 | Validation error wording | `protocol.ParamTypeError` / `ParamOptionError` / `MissingParamError` / `ErrEmptyPipelineID` |
@@ -177,12 +181,19 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Unix sock path | `protocol.SockFileName` / `UnixSockPath` |
 | Pipeline validate / cycle | `protocol.ValidatePipelineSchema` / `PipelineHasCycle` |
 | Bolt bucket names | `storage` `allBuckets` / `bucket*` / `vfsIndexBucket` (outbox v2, download intents, pending GC included) |
+| Bolt bucket open guard | `storage.boltBucket` |
+| services.json double lock (RWLock + flock) | `compute.withServicesFile` |
+| Missing VFS file / full download queue | `storage.IsVFSFileNotFound` / `storage.ErrDownloadQueueFull` (`errors.Is`, nunca `strings.Contains`) |
+| Task status failure shape / eviction touch | `compute.markTaskFailedShape` / `failedTaskResponse` / `touchStatusMeta` |
 | Admin UI actions | `uischema.Registry` / `UnixAction` / `FindAction` / `VisibleRegistry` / `SuccessMessage` |
 | Unix/CLI dispatch | `server.CallUnixUnary` / `InvokeDomainAction` / `InvokeDomainActionPrepared` / `offlineHooks` / `cliEscapes` |
 | Unix IPC | Dial/Write/Read/Scan + `dispatchUnixOrLocal` / `dispatchUnixLocalOrOffline` / `dispatchUnixStreamOrLocal` |
 | Bind errors | `BindErrorJSON` / `ParseBindError` / `IsBindError` |
 | Cert / CA hash / PEM write | `WriteNodePEMs` / `signLeaf` / `LeafDNSNames` / `CAHashFromPEM` / `ReadCAPEM` / `ResolveNodeCertPaths` / `TLSConfigTrustCAHash` / `CSRCommonName` |
 | QUIC addr | `FormatQUICAddr` / `ParseQUICAddr` / `FirstQUICAddr` |
+| Peer identity mismatch wording | `p2p.verifyPeerCNValue` (bajo `VerifyPeerCN` / `VerifyTLSPeerCN`) |
+| Smart Token V2 L8 strings | `p2p.appendL8String` / `readL8String` |
+| Raw-body peer requests (blob/stream) | `HTTPPeerClient.openPeerBody` |
 | NAT map callback | `NATMapper.SetOnMapped` / `refreshPublicUDPFromMapping` |
 | NDJSON | `utils.WriteNDJSON` / `PumpJSON*` / `ForEachNDJSON` / `ScanNDJSON` |
 | HTTP client | `NewHTTPClient` / `PostJSONAbsolute` |

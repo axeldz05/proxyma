@@ -7,10 +7,20 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-func boltPutJSON(tx *bbolt.Tx, bucket, key string, v any) error {
+// boltBucket opens a bucket inside tx, converting a missing bucket into an
+// error. It is the shared guard every bolt helper and storage path builds on.
+func boltBucket(tx *bbolt.Tx, bucket string) (*bbolt.Bucket, error) {
 	b := tx.Bucket([]byte(bucket))
 	if b == nil {
-		return fmt.Errorf("%s bucket not found", bucket)
+		return nil, fmt.Errorf("%s bucket not found", bucket)
+	}
+	return b, nil
+}
+
+func boltPutJSON(tx *bbolt.Tx, bucket, key string, v any) error {
+	b, err := boltBucket(tx, bucket)
+	if err != nil {
+		return err
 	}
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -21,9 +31,9 @@ func boltPutJSON(tx *bbolt.Tx, bucket, key string, v any) error {
 
 func boltGetJSON[T any](tx *bbolt.Tx, bucket, key string) (T, bool, error) {
 	var zero T
-	b := tx.Bucket([]byte(bucket))
-	if b == nil {
-		return zero, false, fmt.Errorf("%s bucket not found", bucket)
+	b, err := boltBucket(tx, bucket)
+	if err != nil {
+		return zero, false, err
 	}
 	data := b.Get([]byte(key))
 	if data == nil {
@@ -37,25 +47,25 @@ func boltGetJSON[T any](tx *bbolt.Tx, bucket, key string) (T, bool, error) {
 }
 
 func boltDelete(tx *bbolt.Tx, bucket, key string) error {
-	b := tx.Bucket([]byte(bucket))
-	if b == nil {
-		return fmt.Errorf("%s bucket not found", bucket)
+	b, err := boltBucket(tx, bucket)
+	if err != nil {
+		return err
 	}
 	return b.Delete([]byte(key))
 }
 
 func boltPutFlag(tx *bbolt.Tx, bucket, key string) error {
-	b := tx.Bucket([]byte(bucket))
-	if b == nil {
-		return fmt.Errorf("%s bucket not found", bucket)
+	b, err := boltBucket(tx, bucket)
+	if err != nil {
+		return err
 	}
 	return b.Put([]byte(key), []byte("true"))
 }
 
 func boltHasKey(tx *bbolt.Tx, bucket, key string) (bool, error) {
-	b := tx.Bucket([]byte(bucket))
-	if b == nil {
-		return false, fmt.Errorf("%s bucket not found", bucket)
+	b, err := boltBucket(tx, bucket)
+	if err != nil {
+		return false, err
 	}
 	return b.Get([]byte(key)) != nil, nil
 }
@@ -63,9 +73,9 @@ func boltHasKey(tx *bbolt.Tx, bucket, key string) (bool, error) {
 func boltLoadMapJSON[T any](db *bbolt.DB, bucket string) (map[string]T, error) {
 	out := make(map[string]T)
 	err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("%s bucket not found", bucket)
+		b, err := boltBucket(tx, bucket)
+		if err != nil {
+			return err
 		}
 		return b.ForEach(func(k, v []byte) error {
 			var item T

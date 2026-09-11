@@ -24,6 +24,21 @@ import (
 // current VFS entry (obsolescence, deletion, or version mismatch).
 var ErrBlobDiscarded = errors.New("blob discarded due to obsolescence or deletion")
 
+// ErrDownloadQueueFull marks a rejected download enqueue (HTTP 503 surface).
+// Producers wrap it so errors.Is stays reliable across the callback boundary.
+var ErrDownloadQueueFull = errors.New("download queue full")
+
+// VFSFileNotFoundError marks a VFS entry missing locally (HTTP 404 surface).
+type VFSFileNotFoundError struct{ Name string }
+
+func (e *VFSFileNotFoundError) Error() string { return fmt.Sprintf("file %s not found", e.Name) }
+
+// IsVFSFileNotFound reports whether err is (or wraps) a missing VFS entry.
+func IsVFSFileNotFound(err error) bool {
+	var nf *VFSFileNotFoundError
+	return errors.As(err, &nf)
+}
+
 // ErrBlobIntegrity marks content that can never satisfy the advertised hash.
 // Callers must quarantine the current source intent instead of hot-looping it.
 var ErrBlobIntegrity = errors.New("blob failed permanent integrity verification")
@@ -164,15 +179,6 @@ func (se *StorageEngine) setSubscriptionLocked(fileName string, isSubscribed boo
 	return nil
 }
 
-func (se *StorageEngine) IsSubscribed(fileName string) bool {
-	subscribed, err := se.IsSubscribedE(fileName)
-	if err != nil {
-		se.logger.Error("Failed to read subscription", "file", fileName, "error", err)
-		return false
-	}
-	return subscribed
-}
-
 func (se *StorageEngine) IsSubscribedE(fileName string) (bool, error) {
 	var subscribed bool
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
@@ -214,9 +220,9 @@ func (se *StorageEngine) HasServiceSubscriptions() bool {
 func (se *StorageEngine) HasServiceSubscriptionsE() (bool, error) {
 	var n int
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketServiceSubs))
-		if b == nil {
-			return fmt.Errorf("%s bucket not found", bucketServiceSubs)
+		b, err := boltBucket(tx, bucketServiceSubs)
+		if err != nil {
+			return err
 		}
 		n = b.Stats().KeyN
 		return nil
@@ -239,9 +245,9 @@ func (se *StorageEngine) IsServiceSubscribedE(name string) (bool, error) {
 	matched := false
 	hasSubscriptions := false
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketServiceSubs))
-		if b == nil {
-			return fmt.Errorf("%s bucket not found", bucketServiceSubs)
+		b, err := boltBucket(tx, bucketServiceSubs)
+		if err != nil {
+			return err
 		}
 		c := b.Cursor()
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
@@ -413,7 +419,7 @@ func (se *StorageEngine) DeleteLocalFile(fileName string) (err error) {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("file %s not found", fileName)
+		return &VFSFileNotFoundError{Name: fileName}
 	}
 	fileMeta := protocol.IndexEntry{
 		Name:    entry.Name,
@@ -453,7 +459,7 @@ func (se *StorageEngine) DeleteLocalCache(fileName string) error {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("file %s not found", fileName)
+		return &VFSFileNotFoundError{Name: fileName}
 	}
 	if err := se.setSubscriptionLocked(fileName, false); err != nil {
 		return err
@@ -755,9 +761,9 @@ func (se *StorageEngine) countHashRefs(hash string, subscribedOnly bool) (int, e
 	if vfs, ok := se.vfs.(*VFS); ok && vfs.index == se.subscriptions {
 		refCount := 0
 		err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-			index := tx.Bucket([]byte(vfsIndexBucket))
-			if index == nil {
-				return fmt.Errorf("%s bucket not found", vfsIndexBucket)
+			index, err := boltBucket(tx, vfsIndexBucket)
+			if err != nil {
+				return err
 			}
 			subscriptions := tx.Bucket([]byte(bucketSubscriptions))
 			if subscribedOnly && subscriptions == nil {
@@ -826,9 +832,9 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 	pending := make(map[string]bool)
 	referenced := make(map[string]bool)
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		gcBucket := tx.Bucket([]byte(bucketPendingBlobGC))
-		if gcBucket == nil {
-			return fmt.Errorf("%s bucket not found", bucketPendingBlobGC)
+		gcBucket, err := boltBucket(tx, bucketPendingBlobGC)
+		if err != nil {
+			return err
 		}
 		if err := gcBucket.ForEach(func(k, _ []byte) error {
 			pending[string(k)] = true
@@ -836,9 +842,9 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 		}); err != nil {
 			return err
 		}
-		index := tx.Bucket([]byte(vfsIndexBucket))
-		if index == nil {
-			return fmt.Errorf("%s bucket not found", vfsIndexBucket)
+		index, err := boltBucket(tx, vfsIndexBucket)
+		if err != nil {
+			return err
 		}
 		return index.ForEach(func(k, raw []byte) error {
 			var entry protocol.IndexEntry
@@ -870,9 +876,9 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 	}
 	if len(completed) != 0 {
 		if err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-			bucket := tx.Bucket([]byte(bucketPendingBlobGC))
-			if bucket == nil {
-				return fmt.Errorf("%s bucket not found", bucketPendingBlobGC)
+			bucket, err := boltBucket(tx, bucketPendingBlobGC)
+			if err != nil {
+				return err
 			}
 			for hash := range completed {
 				if err := bucket.Delete([]byte(hash)); err != nil {
@@ -890,9 +896,9 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 func (se *StorageEngine) pendingBlobGCCount() (int, error) {
 	count := 0
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(bucketPendingBlobGC))
-		if bucket == nil {
-			return fmt.Errorf("%s bucket not found", bucketPendingBlobGC)
+		bucket, err := boltBucket(tx, bucketPendingBlobGC)
+		if err != nil {
+			return err
 		}
 		count = bucket.Stats().KeyN
 		return nil
@@ -946,10 +952,6 @@ func (se *StorageEngine) Close() error {
 func (se *StorageEngine) SavePipelineSchema(schema protocol.PipelineSchema) error {
 	schema = protocol.NormalizePipelineSchemaVersion(schema)
 	return se.boltPutKeyed(bucketPipelineSchemas, schema.ID, schema)
-}
-
-func (se *StorageEngine) DeletePipelineSchema(id string) error {
-	return se.boltDeleteKeyed(bucketPipelineSchemas, id)
 }
 
 func (se *StorageEngine) LoadPipelineSchemas() (map[string]protocol.PipelineSchema, error) {
@@ -1009,12 +1011,21 @@ func isRecognizedLegacyOutboxMetadata(key, value []byte) bool {
 // migrateOutboxNamespaces moves only structurally recognized metadata. Legacy
 // notification rows stay isolated for payload-aware server reconciliation.
 func migrateOutboxNamespaces(tx *bbolt.Tx) error {
-	legacy := tx.Bucket([]byte(bucketNotifyOutbox))
-	generations := tx.Bucket([]byte(bucketNotifyOutboxV2Generations))
-	reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-	intents := tx.Bucket([]byte(bucketDownloadIntents))
-	if legacy == nil || generations == nil || reservations == nil || intents == nil {
-		return fmt.Errorf("outbox namespace bucket not found")
+	legacy, err := boltBucket(tx, bucketNotifyOutbox)
+	if err != nil {
+		return err
+	}
+	generations, err := boltBucket(tx, bucketNotifyOutboxV2Generations)
+	if err != nil {
+		return err
+	}
+	reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+	if err != nil {
+		return err
+	}
+	intents, err := boltBucket(tx, bucketDownloadIntents)
+	if err != nil {
+		return err
 	}
 
 	var generation uint64
@@ -1025,7 +1036,7 @@ func migrateOutboxNamespaces(tx *bbolt.Tx) error {
 		generation = binary.BigEndian.Uint64(raw)
 	}
 	var removeLegacy [][]byte
-	err := legacy.ForEach(func(key, value []byte) error {
+	err = legacy.ForEach(func(key, value []byte) error {
 		switch {
 		case bytes.HasPrefix(key, []byte(outboxGenerationPrefix)) && len(value) == 8:
 			if candidate := binary.BigEndian.Uint64(value); candidate > generation {
@@ -1092,10 +1103,13 @@ func (se *StorageEngine) ReserveOutboxGeneration(id string) (uint64, error) {
 }
 
 func reserveOutboxGenerationTx(tx *bbolt.Tx, id string) (uint64, error) {
-	generations := tx.Bucket([]byte(bucketNotifyOutboxV2Generations))
-	reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-	if generations == nil || reservations == nil {
-		return 0, fmt.Errorf("outbox v2 metadata bucket not found")
+	generations, err := boltBucket(tx, bucketNotifyOutboxV2Generations)
+	if err != nil {
+		return 0, err
+	}
+	reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+	if err != nil {
+		return 0, err
 	}
 	globalKey := outboxGlobalGenerationKey()
 	raw := generations.Get(globalKey)
@@ -1133,10 +1147,13 @@ func (se *StorageEngine) ReserveOutboxGenerationIfUnchanged(
 	var generation uint64
 	reserved := false
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-		if entries == nil || reservations == nil {
-			return fmt.Errorf("outbox v2 bucket not found")
+		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
+		}
+		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+		if err != nil {
+			return err
 		}
 		current := entries.Get([]byte(id))
 		if (current == nil) != (expected == nil) || !bytes.Equal(current, expected) {
@@ -1145,7 +1162,6 @@ func (se *StorageEngine) ReserveOutboxGenerationIfUnchanged(
 		if reservations.Get([]byte(id)) != nil {
 			return nil
 		}
-		var err error
 		generation, err = reserveOutboxGenerationTx(tx, id)
 		reserved = err == nil
 		return err
@@ -1156,9 +1172,9 @@ func (se *StorageEngine) ReserveOutboxGenerationIfUnchanged(
 func (se *StorageEngine) GetOutboxRaw(id string) ([]byte, error) {
 	var out []byte
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		if b == nil {
-			return fmt.Errorf("notify_outbox_v2 bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
 		}
 		if raw := b.Get([]byte(id)); raw != nil {
 			out = bytes.Clone(raw)
@@ -1172,9 +1188,9 @@ func (se *StorageEngine) GetOutboxRaw(id string) ([]byte, error) {
 // disturbing a newer reservation for the same entity.
 func (se *StorageEngine) ReleaseOutboxGeneration(id string, generation uint64) error {
 	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-		if b == nil {
-			return fmt.Errorf("outbox v2 reservations bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+		if err != nil {
+			return err
 		}
 		raw := b.Get([]byte(id))
 		if len(raw) != 8 || binary.BigEndian.Uint64(raw) != generation {
@@ -1194,11 +1210,17 @@ func (se *StorageEngine) PutOutboxRawIfCurrentGeneration(
 ) (bool, error) {
 	applied := false
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-		legacy := tx.Bucket([]byte(bucketNotifyOutbox))
-		if entries == nil || reservations == nil || legacy == nil {
-			return fmt.Errorf("outbox bucket not found")
+		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
+		}
+		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+		if err != nil {
+			return err
+		}
+		legacy, err := boltBucket(tx, bucketNotifyOutbox)
+		if err != nil {
+			return err
 		}
 		rawGeneration := reservations.Get([]byte(id))
 		if len(rawGeneration) != 8 || binary.BigEndian.Uint64(rawGeneration) != generation {
@@ -1227,9 +1249,9 @@ func (se *StorageEngine) PutOutboxRawIfCurrentGeneration(
 // PutOutboxRaw upserts a legacy/raw notify outbox entry.
 func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
 	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutbox))
-		if b == nil {
-			return fmt.Errorf("notify_outbox bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutbox)
+		if err != nil {
+			return err
 		}
 		return b.Put([]byte(id), data)
 	})
@@ -1237,10 +1259,13 @@ func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
 
 func (se *StorageEngine) DeleteOutboxEntry(id string) error {
 	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-		if entries == nil || reservations == nil {
-			return fmt.Errorf("outbox v2 bucket not found")
+		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
+		}
+		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+		if err != nil {
+			return err
 		}
 		if err := entries.Delete([]byte(id)); err != nil {
 			return err
@@ -1254,9 +1279,9 @@ func (se *StorageEngine) DeleteOutboxEntry(id string) error {
 func (se *StorageEngine) DeleteOutboxEntryIfUnchanged(id string, expected []byte) (bool, error) {
 	deleted := false
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		if b == nil {
-			return fmt.Errorf("notify_outbox_v2 bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
 		}
 		current := b.Get([]byte(id))
 		if current == nil || !bytes.Equal(current, expected) {
@@ -1274,9 +1299,9 @@ func (se *StorageEngine) DeleteOutboxEntryIfUnchanged(id string, expected []byte
 func (se *StorageEngine) OutboxEntryMatches(id string, expected []byte) (bool, error) {
 	matches := false
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		if b == nil {
-			return fmt.Errorf("notify_outbox_v2 bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
 		}
 		matches = bytes.Equal(b.Get([]byte(id)), expected)
 		return nil
@@ -1287,10 +1312,13 @@ func (se *StorageEngine) OutboxEntryMatches(id string, expected []byte) (bool, e
 func (se *StorageEngine) CountOutboxEntries() (int, error) {
 	var n int
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		v2 := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		legacy := tx.Bucket([]byte(bucketNotifyOutbox))
-		if v2 == nil || legacy == nil {
-			return fmt.Errorf("outbox bucket not found")
+		v2, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
+		}
+		legacy, err := boltBucket(tx, bucketNotifyOutbox)
+		if err != nil {
+			return err
 		}
 		n = v2.Stats().KeyN
 		return legacy.ForEach(func(k, v []byte) error {
@@ -1306,9 +1334,9 @@ func (se *StorageEngine) CountOutboxEntries() (int, error) {
 func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutboxV2))
-		if b == nil {
-			return fmt.Errorf("notify_outbox_v2 bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		if err != nil {
+			return err
 		}
 		return b.ForEach(func(k, v []byte) error {
 			cp := make([]byte, len(v))
@@ -1325,9 +1353,9 @@ func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 func (se *StorageEngine) ListLegacyOutboxRaw() (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutbox))
-		if b == nil {
-			return fmt.Errorf("notify_outbox bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutbox)
+		if err != nil {
+			return err
 		}
 		return b.ForEach(func(k, v []byte) error {
 			if isRecognizedLegacyOutboxMetadata(k, v) {
@@ -1342,9 +1370,9 @@ func (se *StorageEngine) ListLegacyOutboxRaw() (map[string][]byte, error) {
 
 func (se *StorageEngine) DeleteLegacyOutboxEntriesIfUnchanged(entries map[string][]byte) error {
 	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketNotifyOutbox))
-		if b == nil {
-			return fmt.Errorf("notify_outbox bucket not found")
+		b, err := boltBucket(tx, bucketNotifyOutbox)
+		if err != nil {
+			return err
 		}
 		for id, expected := range entries {
 			if current := b.Get([]byte(id)); current != nil && bytes.Equal(current, expected) {
@@ -1380,9 +1408,9 @@ func (se *StorageEngine) requestRemoteDownload(file protocol.IndexEntry, source 
 		if !subscribed {
 			return ErrBlobDiscarded
 		}
-		b := tx.Bucket([]byte(bucketDownloadIntents))
-		if b == nil {
-			return fmt.Errorf("download_intents bucket not found")
+		b, err := boltBucket(tx, bucketDownloadIntents)
+		if err != nil {
+			return err
 		}
 		return b.Put([]byte(key), raw)
 	})
@@ -1447,9 +1475,9 @@ func (se *StorageEngine) rollbackDownloadReservation(key string, token uint64) {
 func (se *StorageEngine) listDownloadIntents() (map[string]downloadIntent, error) {
 	intents := make(map[string]downloadIntent)
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketDownloadIntents))
-		if b == nil {
-			return fmt.Errorf("download_intents bucket not found")
+		b, err := boltBucket(tx, bucketDownloadIntents)
+		if err != nil {
+			return err
 		}
 		return b.ForEach(func(k, v []byte) error {
 			var intent downloadIntent
@@ -1554,9 +1582,9 @@ func (se *StorageEngine) QuarantineCorruptDownload(file protocol.IndexEntry) err
 func (se *StorageEngine) completeDownloadIntent(file protocol.IndexEntry) error {
 	key := downloadIntentStorageKey(file.Name)
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketDownloadIntents))
-		if b == nil {
-			return fmt.Errorf("download_intents bucket not found")
+		b, err := boltBucket(tx, bucketDownloadIntents)
+		if err != nil {
+			return err
 		}
 		raw := b.Get([]byte(key))
 		if raw == nil {

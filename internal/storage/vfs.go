@@ -89,25 +89,46 @@ func queueSupersededBlobGCTx(tx *bbolt.Tx, previous, next protocol.IndexEntry) e
 	return boltPutFlag(tx, bucketPendingBlobGC, previous.Hash)
 }
 
+// resolveVFSWrite is the shared write core of every VFS upsert variant. Inside
+// an open tx it loads the current entry, applies the replicated total order
+// (rejecting non-winning explicit versions and resolving Version<=0 auto-bumps),
+// writes the winner and queues superseded-blob GC. It returns the effective
+// entry (existing on a no-op, the written entry otherwise) plus the previous
+// entry and whether it existed.
+func resolveVFSWrite(tx *bbolt.Tx, entry protocol.IndexEntry) (written, existing protocol.IndexEntry, existed, applied bool, err error) {
+	existing, existed, err = boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name)
+	if err != nil {
+		return existing, existing, existed, false, err
+	}
+	if entry.Version > 0 {
+		if existed && compareIndexEntries(entry, existing) <= 0 {
+			return existing, existing, existed, false, nil
+		}
+	} else {
+		entry.Version = 1
+		if existed {
+			entry.Version = existing.Version + 1
+		}
+	}
+	if err := boltPutJSON(tx, vfsIndexBucket, entry.Name, entry); err != nil {
+		return existing, existing, existed, false, err
+	}
+	if existed {
+		if err := queueSupersededBlobGCTx(tx, existing, entry); err != nil {
+			return existing, existing, existed, false, err
+		}
+	}
+	return entry, existing, existed, true, nil
+}
+
 func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 	updated := false
 	err := v.index.Update(func(tx *bbolt.Tx) error {
-		existing, exists, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name)
+		_, _, _, applied, err := resolveVFSWrite(tx, entry)
 		if err != nil {
 			return err
 		}
-		if exists && compareIndexEntries(entry, existing) <= 0 {
-			return nil
-		}
-		if err := boltPutJSON(tx, vfsIndexBucket, entry.Name, entry); err != nil {
-			return err
-		}
-		if exists {
-			if err := queueSupersededBlobGCTx(tx, existing, entry); err != nil {
-				return err
-			}
-		}
-		updated = true
+		updated = applied
 		return nil
 	})
 	if err != nil {
@@ -119,25 +140,11 @@ func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 // UpsertAutoVersion bumps Version atomically inside the Bolt transaction when Version<=0 (M5).
 func (v *VFS) UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error) {
 	err := v.index.Update(func(tx *bbolt.Tx) error {
-		existing, exists, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name)
+		written, _, _, _, err := resolveVFSWrite(tx, entry)
 		if err != nil {
 			return err
 		}
-		if entry.Version <= 0 {
-			entry.Version = 1
-			if exists {
-				entry.Version = existing.Version + 1
-			}
-		} else if exists && compareIndexEntries(entry, existing) <= 0 {
-			entry = existing
-			return nil
-		}
-		if err := boltPutJSON(tx, vfsIndexBucket, entry.Name, entry); err != nil {
-			return err
-		}
-		if exists {
-			return queueSupersededBlobGCTx(tx, existing, entry)
-		}
+		entry = written
 		return nil
 	})
 	return entry, err
@@ -154,46 +161,30 @@ type indexSubscriptionMutation struct {
 // bbolt transaction. Explicit non-winning versions are no-ops.
 func (v *VFS) upsertAndSubscribe(entry protocol.IndexEntry) (indexSubscriptionMutation, error) {
 	result := indexSubscriptionMutation{Entry: entry}
-	wrote := false
+	applied := false
 	err := v.index.Update(func(tx *bbolt.Tx) error {
-		existing, exists, err := boltGetJSON[protocol.IndexEntry](tx, vfsIndexBucket, entry.Name)
+		written, existing, existed, appliedTx, err := resolveVFSWrite(tx, entry)
 		if err != nil {
 			return err
 		}
 		result.Previous = existing
-		result.HadPrevious = exists
-
-		if entry.Version > 0 {
-			if exists && compareIndexEntries(entry, existing) <= 0 {
-				result.Entry = existing
-				return nil
-			}
-		} else {
-			entry.Version = 1
-			if exists {
-				entry.Version = existing.Version + 1
-			}
-		}
-		if err := boltPutJSON(tx, vfsIndexBucket, entry.Name, entry); err != nil {
-			return err
+		result.HadPrevious = existed
+		if !appliedTx {
+			result.Entry = written // no-op: helper returns the existing entry
+			return nil
 		}
 		if err := boltPutFlag(tx, bucketSubscriptions, entry.Name); err != nil {
 			return err
 		}
-		if exists {
-			if err := queueSupersededBlobGCTx(tx, existing, entry); err != nil {
-				return err
-			}
-		}
-		result.Entry = entry
-		wrote = true
+		result.Entry = written
+		applied = true
 		return nil
 	})
 	if err != nil {
 		result.Applied = false
 		return result, err
 	}
-	result.Applied = wrote
+	result.Applied = applied
 	return result, nil
 }
 

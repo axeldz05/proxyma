@@ -109,6 +109,15 @@ func (s *Server) notificationEntityFromPayload(kind gossipKind, raw json.RawMess
 	return spec.entityFrom(raw)
 }
 
+// outboxEntity resolves the routing entity of a queued entry, falling back to
+// the kind's payload extractor for legacy rows stored without an Entity field.
+func (s *Server) outboxEntity(kind gossipKind, raw json.RawMessage, stored string) (string, bool) {
+	if stored != "" {
+		return stored, true
+	}
+	return s.notificationEntityFromPayload(kind, raw)
+}
+
 func (s *Server) matchingLegacyOutboxEntries(peerID string, kind gossipKind, entity string) (map[string][]byte, error) {
 	matches := make(map[string][]byte)
 	rawEntries, err := s.Storage.ListLegacyOutboxRaw()
@@ -120,11 +129,7 @@ func (s *Server) matchingLegacyOutboxEntries(peerID string, kind gossipKind, ent
 		if json.Unmarshal(raw, &entry) != nil || entry.PeerID != peerID || entry.Kind != kind {
 			continue
 		}
-		legacyEntity := entry.Entity
-		ok := legacyEntity != ""
-		if !ok {
-			legacyEntity, ok = s.notificationEntityFromPayload(kind, entry.Payload)
-		}
+		legacyEntity, ok := s.outboxEntity(kind, entry.Payload, entry.Entity)
 		if ok && legacyEntity == entity {
 			matches[id] = raw
 		}
@@ -238,18 +243,28 @@ func (m *stagedOutboxMutation) reconcileCurrent() ([]outboxAttempt, error) {
 	return reconciled, nil
 }
 
+// deliverOutboxTracked spawns one lifetime-bound outbox delivery. The done
+// callback always runs exactly once, also when shutdown already stopped
+// accepting owned work (the entry stays staged for the next flush/restart).
+func (s *Server) deliverOutboxTracked(attempt outboxAttempt, done func()) {
+	if !s.goOwned(func() {
+		defer done()
+		ctx, cancel := context.WithTimeout(s.lifetimeCtx, PeerRPCDefault)
+		defer cancel()
+		_ = s.deliverOutboxAttempt(ctx, attempt, func(ctx context.Context) error {
+			return s.callPeer(ctx, attempt.Entry.PeerID, func(ctx context.Context, peerID string) error {
+				return s.deliverOutboxEntry(ctx, peerID, attempt.Entry)
+			})
+		})
+	}) {
+		done()
+	}
+}
+
 func (s *Server) deliverOutboxAttemptsAsync(attempts []outboxAttempt) {
 	for _, attempt := range attempts {
 		attempt := attempt
-		s.goOwned(func() {
-			ctx, cancel := context.WithTimeout(s.lifetimeCtx, PeerRPCDefault)
-			defer cancel()
-			_ = s.deliverOutboxAttempt(ctx, attempt, func(ctx context.Context) error {
-				return s.callPeer(ctx, attempt.Entry.PeerID, func(ctx context.Context, peerID string) error {
-					return s.deliverOutboxEntry(ctx, peerID, attempt.Entry)
-				})
-			})
-		})
+		s.deliverOutboxTracked(attempt, func() {})
 	}
 }
 
@@ -387,11 +402,7 @@ func (s *Server) reconcileLegacyOutbox(rawEntries map[string][]byte) error {
 		if json.Unmarshal(raw, &entry) != nil {
 			continue
 		}
-		entity := entry.Entity
-		ok := entity != ""
-		if !ok {
-			entity, ok = s.notificationEntityFromPayload(entry.Kind, entry.Payload)
-		}
+		entity, ok := s.outboxEntity(entry.Kind, entry.Payload, entry.Entity)
 		if !ok {
 			continue
 		}
@@ -468,13 +479,9 @@ func (s *Server) reconcileActiveOutbox(rawEntries map[string][]byte) error {
 		if err := json.Unmarshal(raw, &entry); err != nil {
 			continue
 		}
-		entity := entry.Entity
-		if entity == "" {
-			var ok bool
-			entity, ok = s.notificationEntityFromPayload(entry.Kind, entry.Payload)
-			if !ok {
-				continue
-			}
+		entity, ok := s.outboxEntity(entry.Kind, entry.Payload, entry.Entity)
+		if !ok {
+			continue
 		}
 		lockID := s.outboxKey(entry.PeerID, entry.Kind, entity)
 		unlock := s.lockOutboxDelivery(lockID)
@@ -561,16 +568,7 @@ func (s *Server) flushOutbox() {
 			Durable:   true,
 		}
 		wg.Add(1)
-		go func(attempt outboxAttempt) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
-			defer cancel()
-			_ = s.deliverOutboxAttempt(ctx, attempt, func(ctx context.Context) error {
-				return s.callPeer(ctx, attempt.Entry.PeerID, func(ctx context.Context, peerID string) error {
-					return s.deliverOutboxEntry(ctx, peerID, attempt.Entry)
-				})
-			})
-		}(attempt)
+		s.deliverOutboxTracked(attempt, wg.Done)
 	}
 	wg.Wait()
 }

@@ -93,17 +93,38 @@ func lockServicesFileMode(storagePath string, exclusive, nonblocking bool) (bool
 	return true, unlock, nil
 }
 
+// withServicesFile runs fn under the services.json double lock: the in-process
+// RWLock (shared for readers, exclusive for writers) plus the cross-process
+// advisory flock. It is the SSOT lock discipline for every services.json gate.
+func withServicesFile(storagePath string, exclusive bool, fn func() error) error {
+	lock := servicesFileLock(storagePath)
+	if exclusive {
+		lock.Lock()
+		defer lock.Unlock()
+	} else {
+		lock.RLock()
+		defer lock.RUnlock()
+	}
+	unlock, err := lockServicesFile(storagePath, exclusive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+	return fn()
+}
+
 // LoadServicesMap reads services.json (L1). Missing file yields an empty map.
 func LoadServicesMap(storagePath string) (map[string]protocol.LocalService, error) {
-	lock := servicesFileLock(storagePath)
-	lock.RLock()
-	defer lock.RUnlock()
-	unlock, err := lockServicesFile(storagePath, false)
+	var services map[string]protocol.LocalService
+	err := withServicesFile(storagePath, false, func() error {
+		var loadErr error
+		services, loadErr = loadServicesMap(storagePath)
+		return loadErr
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = unlock() }()
-	return loadServicesMap(storagePath)
+	return services, nil
 }
 
 func loadServicesMap(storagePath string) (map[string]protocol.LocalService, error) {
@@ -120,15 +141,9 @@ func loadServicesMap(storagePath string) (map[string]protocol.LocalService, erro
 
 // SaveServicesMap writes services.json (L1).
 func SaveServicesMap(storagePath string, services map[string]protocol.LocalService) error {
-	lock := servicesFileLock(storagePath)
-	lock.Lock()
-	defer lock.Unlock()
-	unlock, err := lockServicesFile(storagePath, true)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = unlock() }()
-	return saveServicesMap(storagePath, services)
+	return withServicesFile(storagePath, true, func() error {
+		return saveServicesMap(storagePath, services)
+	})
 }
 
 func saveServicesMap(storagePath string, services map[string]protocol.LocalService) error {
@@ -240,41 +255,29 @@ func UpsertLocalService(storagePath string, serviceName string, localService pro
 	if err != nil {
 		return err
 	}
-	lock := servicesFileLock(storagePath)
-	lock.Lock()
-	defer lock.Unlock()
-	unlock, err := lockServicesFile(storagePath, true)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = unlock() }()
-	services, err := loadServicesMap(storagePath)
-	if err != nil {
-		return err
-	}
-	services[serviceName] = normalized
-	return saveServicesMap(storagePath, services)
+	return withServicesFile(storagePath, true, func() error {
+		services, err := loadServicesMap(storagePath)
+		if err != nil {
+			return err
+		}
+		services[serviceName] = normalized
+		return saveServicesMap(storagePath, services)
+	})
 }
 
 // DeleteLocalService removes a service from services.json (L2).
 func DeleteLocalService(storagePath, name string) error {
-	lock := servicesFileLock(storagePath)
-	lock.Lock()
-	defer lock.Unlock()
-	unlock, err := lockServicesFile(storagePath, true)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = unlock() }()
-	services, err := loadServicesMap(storagePath)
-	if err != nil {
-		return err
-	}
-	if _, exists := services[name]; !exists {
-		return fmt.Errorf("service '%s' not found", name)
-	}
-	delete(services, name)
-	return saveServicesMap(storagePath, services)
+	return withServicesFile(storagePath, true, func() error {
+		services, err := loadServicesMap(storagePath)
+		if err != nil {
+			return err
+		}
+		if _, exists := services[name]; !exists {
+			return fmt.Errorf("service '%s' not found", name)
+		}
+		delete(services, name)
+		return saveServicesMap(storagePath, services)
+	})
 }
 
 func normalizeAndValidateLocalService(name string, service protocol.LocalService) (protocol.LocalService, error) {

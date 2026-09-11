@@ -348,7 +348,7 @@ func TestHandleNotificationRetriesMissingSubscribedBlobAfterQueueFull(t *testing
 		func(protocol.IndexEntry, string) error {
 			attempts++
 			if attempts == 1 {
-				return fmt.Errorf("download queue full")
+				return storage.ErrDownloadQueueFull
 			}
 			return nil
 		},

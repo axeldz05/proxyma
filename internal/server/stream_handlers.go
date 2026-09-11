@@ -10,11 +10,10 @@ import (
 )
 
 func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.ServiceNotification](w, r)
+	req, ok := decodePeerBody(w, r,
+		func(req protocol.ServiceNotification) string { return req.NodeID },
+		nil)
 	if !ok {
-		return
-	}
-	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
 		return
 	}
 	subscribed, err := s.Storage.IsServiceSubscribedE(req.Schema.Name)
@@ -32,11 +31,10 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleSchemaNotify(w http.ResponseWriter, r *http.Request) {
-	req, ok := utils.DecodeJSONOrError[protocol.PipelineNotification](w, r)
+	req, ok := decodePeerBody(w, r,
+		func(req protocol.PipelineNotification) string { return req.NodeID },
+		nil)
 	if !ok {
-		return
-	}
-	if !requirePeerCNMatchesBodyID(w, r, req.NodeID) {
 		return
 	}
 	req.Schema = protocol.NormalizePipelineSchemaVersion(req.Schema)
@@ -65,7 +63,6 @@ func (s *Server) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 		"memory_limit": memLimit,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	utils.RespondJSON(w, http.StatusOK, res)
 }
 
@@ -74,14 +71,12 @@ func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleHolePunchInit(w http.ResponseWriter, r *http.Request) {
-	msg, ok := utils.DecodeJSONOrError[p2p.HolePunchMessage](w, r)
+	msg, ok := decodePeerBody(w, r,
+		func(msg p2p.HolePunchMessage) string { return msg.SenderID },
+		nil)
 	if !ok {
 		return
 	}
-	if !requirePeerCNMatchesBodyID(w, r, msg.SenderID) {
-		return
-	}
-
 	s.Config.Logger.Info("Received hole punch initialization request", "sender", msg.SenderID, "senderUDP", msg.PublicUDP)
 
 	natState := s.CurrentNATState()

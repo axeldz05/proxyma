@@ -18,6 +18,21 @@ const (
 	kindVFS      gossipKind = "vfs"
 )
 
+// Notification builders (L2 SSOT): every gossip payload for a kind is built
+// here, so a wire-shape change touches one zone per kind.
+
+func (s *Server) serviceNotification(action string, schema protocol.ServiceSchema) protocol.ServiceNotification {
+	return protocol.ServiceNotification{Action: action, NodeID: s.Config.ID, Schema: schema}
+}
+
+func (s *Server) pipelineNotification(action string, schema protocol.PipelineSchema) protocol.PipelineNotification {
+	return protocol.PipelineNotification{Action: action, NodeID: s.Config.ID, Schema: schema}
+}
+
+func (s *Server) vfsNotification(file protocol.IndexEntry) protocol.PeerNotification {
+	return protocol.PeerNotification{File: file, Source: s.Config.Address}
+}
+
 // catalogKind is the SSOT for one gossip domain: how its entity is identified,
 // reconciled against current state, pushed to a newly joined peer, and delivered.
 // Registering a new domain means adding one entry here — no switch elsewhere.
@@ -54,11 +69,7 @@ func (s *Server) catalogKinds() []catalogKind {
 				if schema.Deleted {
 					action = protocol.ActionRemove
 				}
-				return protocol.PipelineNotification{
-					Action: action,
-					NodeID: s.Config.ID,
-					Schema: schema,
-				}, true, nil
+				return s.pipelineNotification(action, schema), true, nil
 			},
 			syncOnJoin: func(s *Server, peerID string) {
 				for _, schema := range s.Compute.ListPipelines() {
@@ -84,17 +95,15 @@ func (s *Server) catalogKinds() []catalogKind {
 					return nil, false, err
 				}
 				if service, ok := services[entity]; ok {
-					return protocol.ServiceNotification{
-						Action: protocol.ActionAdd,
-						NodeID: s.Config.ID,
-						Schema: protocol.NormalizeServiceSchema(entity, service.Schema, service.Type),
-					}, true, nil
+					return s.serviceNotification(
+						protocol.ActionAdd,
+						protocol.NormalizeServiceSchema(entity, service.Schema, service.Type),
+					), true, nil
 				}
-				return protocol.ServiceNotification{
-					Action: protocol.ActionRemove,
-					NodeID: s.Config.ID,
-					Schema: protocol.ServiceSchema{Name: entity},
-				}, true, nil
+				return s.serviceNotification(
+					protocol.ActionRemove,
+					protocol.ServiceSchema{Name: entity},
+				), true, nil
 			},
 			syncOnJoin: func(s *Server, peerID string) {
 				for _, name := range s.Compute.ListServices() {
@@ -124,10 +133,7 @@ func (s *Server) catalogKinds() []catalogKind {
 				if !exists {
 					return nil, false, nil
 				}
-				return protocol.PeerNotification{
-					File:   file,
-					Source: s.Config.Address,
-				}, true, nil
+				return s.vfsNotification(file), true, nil
 			},
 			deliver: func(s *Server, ctx context.Context, peerID string, raw json.RawMessage) error {
 				return deliverNotification(ctx, raw, func(ctx context.Context, n protocol.PeerNotification) error {

@@ -76,6 +76,10 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	var resp *http.Response
 	var errs []string
 	var successfulAddr string
+	// addErr keeps the aggregate wording ("- [<addr>]: <cause>") in one place.
+	addErr := func(addr, format string, args ...any) {
+		errs = append(errs, "- ["+addr+"]: "+fmt.Sprintf(format, args...))
+	}
 
 	logFn("Starting cluster join loops over packed addresses...", nil)
 	safeDirect, staleIPs := splitDirectAddresses(payload.Addresses)
@@ -86,7 +90,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 			}
 			if endpointErr := validateJoinEndpoint(addr); endpointErr != nil {
 				logFn("Skipping unsafe cluster join address", endpointErr)
-				errs = append(errs, fmt.Sprintf("- [%s]: %v", addr, endpointErr))
+				addErr(addr, "%v", endpointErr)
 				continue
 			}
 			urlStr := fmt.Sprintf("%s%s", addr, protocol.PathClusterJoin)
@@ -97,13 +101,13 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 					return ctxErr
 				}
 				logFn(fmt.Sprintf("Connection/TLS error to %s", addr), doErr)
-				errs = append(errs, fmt.Sprintf("- [%s]: Connection/TLS error: %v", addr, doErr))
+				addErr(addr, "Connection/TLS error: %v", doErr)
 				continue
 			}
 			if r.StatusCode != http.StatusOK {
 				_ = r.Body.Close()
 				logFn(fmt.Sprintf("Cluster rejected join for %s with status %d", addr, r.StatusCode), nil)
-				errs = append(errs, fmt.Sprintf("- [%s]: Cluster rejected join: Status %d", addr, r.StatusCode))
+				addErr(addr, "Cluster rejected join: Status %d", r.StatusCode)
 				continue
 			}
 			resp = r
@@ -124,7 +128,7 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 	if relayUsable {
 		if endpointErr := validateJoinEndpoint(payload.RelayAddr); endpointErr != nil {
 			logFn("Skipping unsafe relay join address", endpointErr)
-			errs = append(errs, fmt.Sprintf("- [Relay %s]: %v", payload.RelayAddr, endpointErr))
+			addErr("Relay "+payload.RelayAddr, "%v", endpointErr)
 			relayUsable = false
 		}
 	}
@@ -152,14 +156,14 @@ func JoinCluster(ctx context.Context, token string, nodeID string, localAddr str
 				logFn("Relay-assisted join succeeded!", nil)
 			} else {
 				logFn(fmt.Sprintf("Relayed join rejected by sponsor: Status %d", relayRes.StatusCode), nil)
-				errs = append(errs, fmt.Sprintf("- [Relay %s]: Sponsor rejected join: Status %d", payload.RelayAddr, relayRes.StatusCode))
+				addErr("Relay "+payload.RelayAddr, "Sponsor rejected join: Status %d", relayRes.StatusCode)
 			}
 		} else {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", "", nil, "", fmt.Errorf("cluster join canceled: %w", ctxErr)
 			}
 			logFn("Relay connection/TLS error", fwdErr)
-			errs = append(errs, fmt.Sprintf("- [Relay %s]: Connection error: %v", payload.RelayAddr, fwdErr))
+			addErr("Relay "+payload.RelayAddr, "Connection error: %v", fwdErr)
 		}
 	}
 

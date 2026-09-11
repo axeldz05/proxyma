@@ -344,37 +344,34 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 		s.lifecycleMu.Unlock()
 		return fmt.Errorf("listen unix socket: %w", err)
 	}
-	if unixListener.Addr() != nil && unixListener.Addr().Network() == "unix" {
-		if err := os.Chmod(sockPath, 0o600); err != nil {
-			_ = unixListener.Close()
-			_ = os.Remove(sockPath)
-			s.lifecycleMu.Unlock()
-			return fmt.Errorf("secure unix socket: %w", err)
+	var httpListener net.Listener
+	// fail tears down every listener acquired so far and releases lifecycleMu.
+	fail := func(err error) error {
+		if httpListener != nil {
+			_ = httpListener.Close()
 		}
-	}
-	httpListener, err := s.listenFunc("tcp", addr)
-	if err != nil {
 		_ = unixListener.Close()
 		_ = os.Remove(sockPath)
 		s.lifecycleMu.Unlock()
-		return fmt.Errorf("listen TCP: %w", err)
+		return err
+	}
+	if unixListener.Addr() != nil && unixListener.Addr().Network() == "unix" {
+		if err := os.Chmod(sockPath, 0o600); err != nil {
+			return fail(fmt.Errorf("secure unix socket: %w", err))
+		}
+	}
+	httpListener, err = s.listenFunc("tcp", addr)
+	if err != nil {
+		return fail(fmt.Errorf("listen TCP: %w", err))
 	}
 	if portStr == "0" {
 		boundAddress, boundErr := addressWithListenerPort(s.Config.Address, httpListener)
 		if boundErr != nil {
-			_ = httpListener.Close()
-			_ = unixListener.Close()
-			_ = os.Remove(sockPath)
-			s.lifecycleMu.Unlock()
-			return fmt.Errorf("resolve bound TCP address: %w", boundErr)
+			return fail(fmt.Errorf("resolve bound TCP address: %w", boundErr))
 		}
 		s.SetAddress(boundAddress)
 		if err := protocol.SaveConfig(s.Config); err != nil {
-			_ = httpListener.Close()
-			_ = unixListener.Close()
-			_ = os.Remove(sockPath)
-			s.lifecycleMu.Unlock()
-			return fmt.Errorf("persist bound TCP address: %w", err)
+			return fail(fmt.Errorf("persist bound TCP address: %w", err))
 		}
 		addr = ":" + strconv.Itoa(httpListener.Addr().(*net.TCPAddr).Port)
 	}
@@ -687,7 +684,7 @@ func (s *Server) enqueueDownload(job DownloadJob) error {
 	case s.downloadQueue <- job:
 		return nil
 	default:
-		return fmt.Errorf("download queue full (hash=%s source=%s)", job.File.Hash, job.Source)
+		return fmt.Errorf("%w (hash=%s source=%s)", storage.ErrDownloadQueueFull, job.File.Hash, job.Source)
 	}
 }
 

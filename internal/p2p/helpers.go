@@ -257,15 +257,20 @@ func FirstQUICAddr(addrs []string) (string, bool) {
 	return "", false
 }
 
+// verifyPeerCNValue is the SSOT wording for peer identity mismatch.
+func verifyPeerCNValue(cn, expectedPeerID string) error {
+	if cn != expectedPeerID {
+		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cn)
+	}
+	return nil
+}
+
 // VerifyPeerCN checks that cert CommonName matches expectedPeerID.
 func VerifyPeerCN(cert *x509.Certificate, expectedPeerID string) error {
 	if cert == nil {
 		return fmt.Errorf("peer identity mismatch: missing certificate")
 	}
-	if cert.Subject.CommonName != expectedPeerID {
-		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cert.Subject.CommonName)
-	}
-	return nil
+	return verifyPeerCNValue(cert.Subject.CommonName, expectedPeerID)
 }
 
 // VerifyTLSPeerCN extracts the leaf CN from state and verifies it against expectedPeerID (L2).
@@ -274,10 +279,7 @@ func VerifyTLSPeerCN(state *tls.ConnectionState, expectedPeerID string) error {
 	if !ok {
 		return fmt.Errorf("peer identity mismatch: missing certificate")
 	}
-	if cn != expectedPeerID {
-		return fmt.Errorf("peer identity mismatch: expected %s, got %s", expectedPeerID, cn)
-	}
-	return nil
+	return verifyPeerCNValue(cn, expectedPeerID)
 }
 
 // BandwidthRecorder abstracts bandwidth tracking to prevent circular dependencies.

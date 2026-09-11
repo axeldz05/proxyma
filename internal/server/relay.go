@@ -486,10 +486,6 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 	}
 }
 
-func (s *Server) processRelayRequest(sponsorAddr string, relayReq protocol.RelayRequest) {
-	s.processRelayRequestContext(context.Background(), sponsorAddr, relayReq)
-}
-
 func (s *Server) processRelayRequestContext(ctx context.Context, sponsorAddr string, relayReq protocol.RelayRequest) {
 	if relayCapExceeded(len(relayReq.Body)) {
 		s.sendRelayResponseContext(ctx, sponsorAddr, protocol.RelayResponse{

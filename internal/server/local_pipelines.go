@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"proxyma/internal/protocol"
 )
@@ -58,13 +57,10 @@ func (s *Server) LocalPipelineAdd(schemaJSON string) error {
 		return err
 	}
 	schema.Deleted = false
-	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: protocol.ActionAdd}
-	staged, err := s.prepareOutboxMutation(kindPipeline, schema.ID, payload)
-	if err != nil {
-		return err
-	}
-	mutationErr := s.applyPipelineAction(schema, protocol.ActionAdd)
-	return errors.Join(mutationErr, staged.finish(mutationErr == nil))
+	payload := s.pipelineNotification(protocol.ActionAdd, schema)
+	return s.commitCatalogMutation(kindPipeline, schema.ID, payload, func() error {
+		return s.applyPipelineAction(schema, protocol.ActionAdd)
+	})
 }
 
 func (s *Server) LocalPipelineRemove(id string) error {
@@ -79,13 +75,10 @@ func (s *Server) LocalPipelineRemove(id string) error {
 		}
 	}
 	schema.Deleted = true
-	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: protocol.ActionRemove}
-	staged, err := s.prepareOutboxMutation(kindPipeline, schema.ID, payload)
-	if err != nil {
-		return err
-	}
-	mutationErr := s.applyPipelineAction(schema, protocol.ActionRemove)
-	return errors.Join(mutationErr, staged.finish(mutationErr == nil))
+	payload := s.pipelineNotification(protocol.ActionRemove, schema)
+	return s.commitCatalogMutation(kindPipeline, schema.ID, payload, func() error {
+		return s.applyPipelineAction(schema, protocol.ActionRemove)
+	})
 }
 
 func (s *Server) LocalPipelineList() []protocol.PipelineSchema {
@@ -125,18 +118,12 @@ func (s *Server) LocalPipelineClone(id string, newID string, targetNodeID string
 
 func (s *Server) notifyPipeline(ctx context.Context, peerID string, schema protocol.PipelineSchema, action string) error {
 	schema = protocol.NormalizePipelineSchemaVersion(schema)
-	payload := protocol.PipelineNotification{NodeID: s.Config.ID, Schema: schema, Action: action}
+	payload := s.pipelineNotification(action, schema)
 	return s.notifyWithOutbox(ctx, peerID, kindPipeline, schema.ID, payload)
 }
 
 func (s *Server) NotifySchemaToPeer(peerID string, schema protocol.PipelineSchema, action string) {
 	s.gossipToPeer(peerID, func(ctx context.Context, peerID string) error {
-		return s.notifyPipeline(ctx, peerID, schema, action)
-	})
-}
-
-func (s *Server) NotifySchema(schema protocol.PipelineSchema, action string) {
-	s.gossipAll(func(ctx context.Context, peerID string) error {
 		return s.notifyPipeline(ctx, peerID, schema, action)
 	})
 }

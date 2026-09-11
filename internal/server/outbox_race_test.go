@@ -28,6 +28,8 @@ func newOutboxRaceTestServer(t *testing.T, id string, mock *testutil.MockPeerCli
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, engine.Close()) })
 
+	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
+	t.Cleanup(cancelLifetime)
 	s := &Server{
 		Config:        cfg,
 		Storage:       engine,
@@ -35,6 +37,7 @@ func newOutboxRaceTestServer(t *testing.T, id string, mock *testutil.MockPeerCli
 		Peers:         NewPeerRegistry(cfg.Logger, cfg.ID),
 		done:          make(chan struct{}),
 		acceptingWork: true,
+		lifetimeCtx:   lifetimeCtx,
 	}
 	_, _ = s.Peers.AddPeer("peer-b", protocol.AddressRecord{Addresses: []string{"https://peer-b"}})
 	return s
@@ -510,6 +513,8 @@ func TestRestartReconcilesWriteAheadIntentBeforeReplay(t *testing.T) {
 	restartedStorage, err := storage.NewStorageEngine(cfg.Logger, dir, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, restartedStorage.Close()) })
+	restartedLifetime, cancelRestarted := context.WithCancel(context.Background())
+	t.Cleanup(cancelRestarted)
 	restarted := &Server{
 		Config:  cfg,
 		Storage: restartedStorage,
@@ -517,8 +522,10 @@ func TestRestartReconcilesWriteAheadIntentBeforeReplay(t *testing.T) {
 			delivered <- n.Action
 			return nil
 		}},
-		Peers: NewPeerRegistry(cfg.Logger, cfg.ID),
-		done:  make(chan struct{}),
+		Peers:         NewPeerRegistry(cfg.Logger, cfg.ID),
+		done:          make(chan struct{}),
+		acceptingWork: true,
+		lifetimeCtx:   restartedLifetime,
 	}
 	_, _ = restarted.Peers.AddPeer("peer-b", protocol.AddressRecord{Addresses: []string{"https://peer-b"}})
 

@@ -124,16 +124,9 @@ func InvokeDomainActionPrepared(domain, action string, args map[string]string) s
 
 	storagePath := GetStoragePath()
 	offline := offlineHookForStorage(domain, action, args, storagePath)
-	var raw string
-	if offline != nil {
-		raw = dispatchUnixLocalOrOfflineAt(storagePath, detail.UnixAction, args, func(s *server.Server) (any, error) {
-			return server.CallUnixUnary(s, detail.UnixAction, args)
-		}, offline)
-	} else {
-		raw = dispatchUnixLocalOrOfflineAt(storagePath, detail.UnixAction, args, func(s *server.Server) (any, error) {
-			return server.CallUnixUnary(s, detail.UnixAction, args)
-		}, nil)
-	}
+	raw := dispatchUnixLocalOrOfflineAt(storagePath, detail.UnixAction, args, func(s *server.Server) (any, error) {
+		return server.CallUnixUnary(s, detail.UnixAction, args)
+	}, offline)
 	if IsBindError(raw) {
 		return raw
 	}
@@ -175,10 +168,6 @@ var offlineHooks = map[string]func(storagePath string, args map[string]string) (
 		}
 		return protocol.NormalizeServiceSchema(args["name"], svc.Schema, svc.Type), nil
 	},
-}
-
-func offlineHookFor(domain, action string, args map[string]string) func() (any, error) {
-	return offlineHookForStorage(domain, action, args, GetStoragePath())
 }
 
 func offlineHookForStorage(
