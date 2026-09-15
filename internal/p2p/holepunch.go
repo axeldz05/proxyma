@@ -210,6 +210,13 @@ type QUICManager struct {
 
 	dialsMu sync.Mutex
 	dials   map[string]*dialResult
+
+	// Secondary QUIC transport riding a TURN allocation conn (see
+	// TURNManager). It shares the session map, TLS configs and accept-loop
+	// handling with the primary punched-socket transport.
+	turnMu        sync.Mutex
+	turnTransport *quic.Transport
+	turnListener  *quic.Listener
 }
 
 func NewQUICManager(localID string, conn *net.UDPConn, clientTLS, serverTLS *tls.Config, handler http.Handler, logger Logger) *QUICManager {
@@ -354,17 +361,64 @@ func (qm *QUICManager) StartListener() error {
 	}
 	qm.QUICListener = listener
 
-	go func() {
-		for {
-			conn, err := listener.Accept(qm.lifetime())
-			if err != nil {
-				return
-			}
-			go qm.handleIncomingConnection(conn)
-		}
-	}()
+	go qm.acceptLoop(listener)
 
 	return nil
+}
+
+func (qm *QUICManager) acceptLoop(listener *quic.Listener) {
+	for {
+		qconn, err := listener.Accept(qm.lifetime())
+		if err != nil {
+			return
+		}
+		go qm.handleIncomingConnection(qconn)
+	}
+}
+
+// AttachTURNConn publishes conn (a TURN allocation PacketConn) as a secondary
+// QUIC transport that accepts inbound sessions through the relay. A later call
+// with a different conn (allocation rotated after credential expiry) replaces
+// the previous transport; the same conn is a no-op.
+func (qm *QUICManager) AttachTURNConn(conn net.PacketConn) error {
+	qm.turnMu.Lock()
+	defer qm.turnMu.Unlock()
+	if qm.turnTransport != nil {
+		if qm.turnTransport.Conn == conn {
+			return nil
+		}
+		_ = qm.turnListener.Close()
+		_ = qm.turnTransport.Close()
+		qm.turnListener, qm.turnTransport = nil, nil
+	}
+	serverTLS, _ := qm.serverTLSSnapshot()
+	if serverTLS == nil {
+		return fmt.Errorf("QUIC server TLS is not configured")
+	}
+	listenerTLS := serverTLS.Clone()
+	listenerTLS.GetConfigForClient = qm.serverConfigForClient
+	listenerTLS.NextProtos = []string{quicALPN}
+	transport := &quic.Transport{Conn: conn}
+	listener, err := transport.Listen(listenerTLS, defaultQUICConfig())
+	if err != nil {
+		return err
+	}
+	qm.turnTransport = transport
+	qm.turnListener = listener
+	go qm.acceptLoop(listener)
+	return nil
+}
+
+// DialOverTURN dials peerID through the attached TURN transport, registering
+// the resulting session like a punched dial does.
+func (qm *QUICManager) DialOverTURN(ctx context.Context, peerID string, raddr *net.UDPAddr) (*quic.Conn, error) {
+	qm.turnMu.Lock()
+	transport := qm.turnTransport
+	qm.turnMu.Unlock()
+	if transport == nil {
+		return nil, fmt.Errorf("TURN transport is not attached")
+	}
+	return qm.dialSessionWithTransport(transport, ctx, peerID, raddr)
 }
 
 // lifetime returns the manager context, which Close cancels. Managers built by
@@ -508,6 +562,18 @@ func (qm *QUICManager) Close() {
 		}
 		if qm.Transport != nil {
 			_ = qm.Transport.Close()
+		}
+		qm.turnMu.Lock()
+		turnListener := qm.turnListener
+		qm.turnListener = nil
+		turnTransport := qm.turnTransport
+		qm.turnTransport = nil
+		qm.turnMu.Unlock()
+		if turnListener != nil {
+			_ = turnListener.Close()
+		}
+		if turnTransport != nil {
+			_ = turnTransport.Close()
 		}
 		qm.tlsMu.Lock()
 		qm.tlsGeneration++
@@ -827,32 +893,7 @@ func (qm *QUICManager) establishSessionAfterPunch(ctx context.Context, peerID st
 		if qm.Logger != nil {
 			qm.Logger.Debug("Dialing QUIC session as caller", "peer", peerID)
 		}
-		clientTLS, generation := qm.clientTLSSnapshot()
-		if clientTLS == nil {
-			return nil, fmt.Errorf("QUIC client TLS is not configured")
-		}
-		qconn, err := qm.Transport.Dial(ctx, rUDPAddr, clientTLS, defaultQUICConfig())
-		if err != nil {
-			return nil, fmt.Errorf("failed to dial direct QUIC session: %w", err)
-		}
-
-		tlsState := qconn.ConnectionState().TLS
-		if err := VerifyTLSPeerCN(&tlsState, peerID); err != nil {
-			_ = qconn.CloseWithError(0, "peer identity mismatch")
-			return nil, fmt.Errorf("peer identity mismatch in QUIC: %w", err)
-		}
-
-		if !qm.setSession(peerID, qconn, &generation) {
-			_ = qconn.CloseWithError(0, "tls rotated during dial")
-			return nil, fmt.Errorf("QUIC TLS rotated during dial to %s", peerID)
-		}
-
-		if qm.Logger != nil {
-			qm.Logger.Debug("Outbound QUIC session accept loop starting", "peer", peerID)
-		}
-		go qm.serveIncomingStreams(qconn, &tlsState)
-
-		return qconn, nil
+		return qm.dialSessionWithTransport(qm.Transport, ctx, peerID, rUDPAddr)
 	}
 
 	if qm.Logger != nil {
@@ -871,6 +912,37 @@ func (qm *QUICManager) establishSessionAfterPunch(ctx context.Context, peerID st
 			}
 		}
 	}
+}
+
+// dialSessionWithTransport dials raddr over transport, verifies the peer
+// certificate CN matches peerID and publishes the session in the shared map.
+func (qm *QUICManager) dialSessionWithTransport(transport *quic.Transport, ctx context.Context, peerID string, raddr *net.UDPAddr) (*quic.Conn, error) {
+	clientTLS, generation := qm.clientTLSSnapshot()
+	if clientTLS == nil {
+		return nil, fmt.Errorf("QUIC client TLS is not configured")
+	}
+	qconn, err := transport.Dial(ctx, raddr, clientTLS, defaultQUICConfig())
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial QUIC session: %w", err)
+	}
+
+	tlsState := qconn.ConnectionState().TLS
+	if err := VerifyTLSPeerCN(&tlsState, peerID); err != nil {
+		_ = qconn.CloseWithError(0, "peer identity mismatch")
+		return nil, fmt.Errorf("peer identity mismatch in QUIC: %w", err)
+	}
+
+	if !qm.setSession(peerID, qconn, &generation) {
+		_ = qconn.CloseWithError(0, "tls rotated during dial")
+		return nil, fmt.Errorf("QUIC TLS rotated during dial to %s", peerID)
+	}
+
+	if qm.Logger != nil {
+		qm.Logger.Debug("Outbound QUIC session accept loop starting", "peer", peerID)
+	}
+	go qm.serveIncomingStreams(qconn, &tlsState)
+
+	return qconn, nil
 }
 
 // ReloadTLS refreshes QUIC TLS material from the live HTTP configs and drops sessions (L2).

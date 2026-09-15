@@ -18,8 +18,10 @@ The project is under active development. The core mesh is implemented, but some 
   returned outputs can be staged through the VFS.
 * **Connectivity:** Uses mTLS for protected inter-node routes, direct HTTP/QUIC where available,
   STUN-assisted UDP hole punching, IPv4 UPnP/NAT-PMP mapping, and long-polling relay fallback.
-  Enrollment, probing, and relay bootstrap have intentional anonymous routes. TURN is not
-  implemented, and the E2E suite does not validate a real consumer gateway's port mapping.
+  Enrollment, probing, and relay bootstrap have intentional anonymous routes. An embedded TURN
+  server (pion/turn, IPv4 and IPv6) plus TURN client fallback is available via `turn_enabled` /
+  `turn_server` config; nodes that cannot discover a public endpoint keep QUIC over TURN relays,
+  and the E2E suite does not validate a real consumer gateway's port mapping.
 * **CLI, Go-mobile bind, and Android:** Provides a Cobra CLI, an in-process/Unix IPC binding layer,
   and a Jetpack Compose Android client. Android builds intentionally return unsupported for WebRTC
   service registration and signaling.
@@ -105,7 +107,8 @@ contract. The stable E2E profile covers the public behaviors listed in
 - [x] CSR enrollment and mTLS authorization for protected inter-node routes.
 - [x] UDP NAT Hole Punching and direct QUIC connectivity.
 - [x] IPv4 UPnP/NAT-PMP implementation and STUN discovery.
-- [ ] Hardware-gateway E2E validation and TURN fallback.
+- [x] TURN fallback (embedded pion/turn server + relayed QUIC dialing).
+- [ ] Hardware-gateway E2E validation of TURN/relay fallback on real consumer gateways.
 
 ### Phase 2: Orchestration & Services
 - [x] Custom services engine and workflow orchestration.

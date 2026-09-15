@@ -252,11 +252,18 @@ func (s *Server) LocalVFSList() ([]protocol.VFSFileStatus, error) {
 	return list, nil
 }
 
-// announceAndSync announces to bootstrap (if set) then runs ExecuteSync.
+// announceAndSync announces to the current sponsor (or the explicit bootstrap
+// seed) then runs ExecuteSync.
 func (s *Server) announceAndSync() error {
-	if s.Config.BootstrapNode != "" {
-		if err := s.AnnouncePresence(s.Config.BootstrapNode); err != nil {
-			s.Config.Logger.Warn("Announce before sync failed", "bootstrap", s.Config.BootstrapNode, "error", err)
+	target := s.Config.BootstrapNode
+	if s.peerClient != nil {
+		if current := s.peerClient.CurrentSponsorAddress(); current != "" {
+			target = current
+		}
+	}
+	if target != "" {
+		if err := s.AnnouncePresence(target); err != nil {
+			s.Config.Logger.Warn("Announce before sync failed", "sponsor", target, "error", err)
 			syncErr := s.ExecuteSync()
 			if syncErr != nil {
 				return fmt.Errorf("announce failed: %v; sync failed: %w", err, syncErr)

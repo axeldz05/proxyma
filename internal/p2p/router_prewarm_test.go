@@ -26,6 +26,7 @@ func TestRemovePeerRouteCancelsDetachedPrewarm(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = udp.Close() })
 	qm := p2p.NewQUICManager("local", udp, nil, nil, nil, nil)
+	qm.SetPublicUDPAddr("127.0.0.1:45000") // prewarm requires a discovered public mapping
 	t.Cleanup(qm.Close)
 
 	started := make(chan struct{})
@@ -73,6 +74,7 @@ func TestRouterCloseCancelsAndJoinsPrewarm(t *testing.T) {
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
 	require.NoError(t, err)
 	qm := p2p.NewQUICManager("local", udp, nil, nil, nil, nil)
+	qm.SetPublicUDPAddr("127.0.0.1:45000") // prewarm requires a discovered public mapping
 	t.Cleanup(qm.Close)
 
 	started := make(chan struct{})

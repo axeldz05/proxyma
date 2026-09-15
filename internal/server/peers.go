@@ -134,6 +134,11 @@ func (s *Server) buildPresenceAddresses(tcpPortStr string, natState NATState, lo
 	if natState.PublicUDPAddr != "" {
 		addresses = append(addresses, p2p.FormatQUICAddr(natState.PublicUDPAddr))
 	}
+	// A TURN allocation lets peers dial us through the relay even when no
+	// direct candidate is reachable; announce it last so direct paths win.
+	if natState.TURNUDPAddr != "" && !seen[p2p.FormatQUICAddr(natState.TURNUDPAddr)] {
+		addresses = append(addresses, p2p.FormatQUICAddr(natState.TURNUDPAddr))
+	}
 	return addresses
 }
 
@@ -166,6 +171,9 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 			s.AddPeer(id, addrRec)
 		}
 	}
+	// The snapshot may have introduced a new sponsor or demoted the current
+	// one; realign before continuing.
+	s.reconcileSponsor()
 	s.Config.Logger.Info("Successfully synced topology from sponsor", "peers_count", len(announceResp))
 	s.goOwned(func() {
 		_ = s.ExecuteSync()

@@ -412,37 +412,14 @@ func (s *Server) StartRelayPolling(ctx context.Context, sponsorAddr string) {
 
 			s.peerClient.CloseIdleConnections()
 
-			// Try to find another sponsor from GetSponsorPeers()
-			sponsors := s.GetSponsorPeers()
-			if len(sponsors) > 0 {
-				nextSponsor := ""
-				fallback := false
-				for id, addr := range sponsors {
-					if addr != sponsorAddr && s.IsPeerOnline(id) {
-						nextSponsor = addr
-						break
-					}
-				}
-				if nextSponsor == "" {
-					for _, addr := range sponsors {
-						if addr != sponsorAddr {
-							nextSponsor = addr
-							fallback = true
-							break
-						}
-					}
-				}
-				if nextSponsor != "" {
-					if fallback {
-						s.Config.Logger.Info("Switching relay sponsor (fallback to offline/any)", "old", sponsorAddr, "new", nextSponsor)
-					} else {
-						s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", nextSponsor)
-					}
-					// Keep outbound relay and hole-punch routing synchronized with
-					// the sponsor used by this polling loop.
-					s.peerClient.UpdateSponsorAddress(nextSponsor)
-					sponsorAddr = nextSponsor
-				}
+			// Deterministic sponsor selection from the registry snapshot
+			// (online candidates first, sorted by peer ID).
+			if nextSponsor, ok := s.selectSponsor(sponsorAddr); ok {
+				s.Config.Logger.Info("Switching relay sponsor", "old", sponsorAddr, "new", nextSponsor)
+				// Keep outbound relay and hole-punch routing synchronized with
+				// the sponsor used by this polling loop.
+				s.peerClient.UpdateSponsorAddress(nextSponsor)
+				sponsorAddr = nextSponsor
 			}
 
 			// Network error backoff

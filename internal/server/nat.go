@@ -55,17 +55,31 @@ type NATState struct {
 	IsSponsor     bool
 	PublicUDPAddr string
 	QUICManager   *p2p.QUICManager
+	TURNUDPAddr   string
 }
 
 // CurrentNATState returns a synchronized snapshot for cross-file consumers.
 func (s *Server) CurrentNATState() NATState {
 	s.natMu.RLock()
 	defer s.natMu.RUnlock()
-	return NATState{
+	state := NATState{
 		IsSponsor:     s.isSponsor,
 		PublicUDPAddr: s.publicUDPAddr,
 		QUICManager:   s.quicMgr,
 	}
+	if s.turnMgr != nil {
+		state.TURNUDPAddr = s.turnMgr.RelayedAddress()
+	}
+	return state
+}
+
+// detachTURNServer removes the embedded TURN server so shutdown closes it exactly once.
+func (s *Server) detachTURNServer() *turnServer {
+	s.natMu.Lock()
+	defer s.natMu.Unlock()
+	ts := s.turnSrv
+	s.turnSrv = nil
+	return ts
 }
 
 func (s *Server) detachQUICManager() *p2p.QUICManager {
@@ -184,21 +198,47 @@ func (s *Server) determineSponsorAndNATStatus(ctx context.Context) {
 		return
 	}
 
+	// The embedded TURN server needs the best-known public IP for relay
+	// addresses; start it regardless of the sponsor outcome.
+	s.maybeStartTURNServer(endpoint.IP)
+
 	if !publicKnown {
 		s.Config.Logger.Warn("Could not determine public IP, assuming private/CGNAT network")
-		_ = endpoint.Conn.Close()
 		s.applySponsorStatus(false)
+		// No announced endpoint, but the QUIC stack still runs: outbound
+		// QUIC dials, TURN relays and inbound TURN sessions all work.
+		s.startQUIC(ctx, endpoint, false)
+		s.maybeStartTURNCallee()
 		return
 	}
 
-	s.startDirectQUIC(ctx, endpoint)
+	s.startQUIC(ctx, endpoint, true)
 	if ctx.Err() != nil {
 		return
 	}
 	detected := s.detectPublicReachability(ctx, endpoint.IP)
 	if ctx.Err() == nil {
 		s.applySponsorStatus(detected)
+		if !detected {
+			s.maybeStartTURNCallee()
+		}
 	}
+}
+
+// maybeStartTURNCallee allocates a TURN relayed address when the node concluded
+// it is not publicly reachable, so peers can still dial it through the relay.
+func (s *Server) maybeStartTURNCallee() {
+	s.natMu.RLock()
+	tm := s.turnMgr
+	s.natMu.RUnlock()
+	if tm == nil || s.lifetimeCtx.Err() != nil {
+		return
+	}
+	s.goOwned(func() {
+		if _, err := tm.EnsureAllocation(s.lifetimeCtx); err != nil {
+			s.Config.Logger.Warn("TURN allocation failed; staying on direct+relay connectivity", "error", err)
+		}
+	})
 }
 
 // openUDPEndpoint returns the socket QUIC will use plus whether STUN already
@@ -235,11 +275,10 @@ func (s *Server) openUDPEndpoint(ctx context.Context) (publicEndpoint, bool, err
 	}
 
 	s.Config.Logger.Warn("STUN check failed, trying UPnP fallback to discover gateway", "error", stunErr)
-	if s.Config.DisableUPnP {
-		return publicEndpoint{}, false, stunErr
-	}
 
-	// UPnP/NAT-PMP map IPv4 gateways, so keep this fallback explicitly IPv4.
+	// Even without STUN the node keeps a UDP socket: outbound QUIC, TURN
+	// relays and direct dials remain usable, only the announced public
+	// endpoint is missing.
 	local, listenErr := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if listenErr != nil {
 		s.Config.Logger.Warn("Could not bind local UDP socket after STUN failure", "error", listenErr)
@@ -335,17 +374,26 @@ func (s *Server) discardNATMapper(mapper *p2p.NATMapper) {
 	mapper.Stop()
 }
 
-// startDirectQUIC reuses the discovery socket as the QUIC transport. Without TLS
-// material there is nothing to serve, so the socket is released.
+// startDirectQUIC reuses the discovery socket as the QUIC transport with a
+// known public endpoint (published for hole punching and announcements).
 func (s *Server) startDirectQUIC(ctx context.Context, endpoint publicEndpoint) {
+	s.startQUIC(ctx, endpoint, true)
+}
+
+// startQUIC reuses the discovery socket as the QUIC transport. With a known
+// public endpoint its address is published; without one (STUN and UPnP both
+// failed) the listener still serves outbound QUIC dials and TURN relays, it
+// just cannot announce a direct quic:// address.
+func (s *Server) startQUIC(ctx context.Context, endpoint publicEndpoint, publicKnown bool) {
 	if ctx.Err() != nil {
 		_ = endpoint.Conn.Close()
 		return
 	}
-	if endpoint.Conn == nil || endpoint.IP == "" || endpoint.Port <= 0 {
-		if endpoint.Conn != nil {
-			_ = endpoint.Conn.Close()
-		}
+	if endpoint.Conn == nil {
+		return
+	}
+	if publicKnown && (endpoint.IP == "" || endpoint.Port <= 0) {
+		_ = endpoint.Conn.Close()
 		s.Config.Logger.Error("Cannot start QUIC listener with an invalid public UDP endpoint",
 			"ip", endpoint.IP, "port", endpoint.Port)
 		return
@@ -359,9 +407,14 @@ func (s *Server) startDirectQUIC(ctx context.Context, endpoint publicEndpoint) {
 		return
 	}
 
-	publicUDPAddr := net.JoinHostPort(endpoint.IP, strconv.Itoa(endpoint.Port))
+	publicUDPAddr := ""
+	if publicKnown {
+		publicUDPAddr = net.JoinHostPort(endpoint.IP, strconv.Itoa(endpoint.Port))
+	}
 	qm := p2p.NewQUICManager(s.Config.ID, endpoint.Conn, ctls, stls, s.handler, s.Config.Logger)
-	qm.SetPublicUDPAddr(publicUDPAddr)
+	if publicUDPAddr != "" {
+		qm.SetPublicUDPAddr(publicUDPAddr)
+	}
 
 	if err := qm.StartListener(); err != nil {
 		s.Config.Logger.Error("Failed to start QUIC listener", "error", err)
@@ -375,13 +428,22 @@ func (s *Server) startDirectQUIC(ctx context.Context, endpoint publicEndpoint) {
 		return
 	}
 	s.udpConn = endpoint.Conn
-	s.publicUDPAddr = publicUDPAddr
+	if publicKnown {
+		s.publicUDPAddr = publicUDPAddr
+	}
 	s.quicMgr = qm
 	if s.peerClient != nil {
 		s.peerClient.SetQUICManager(qm)
 	}
+	if s.turnMgr != nil {
+		s.turnMgr.SetQUICManager(qm)
+	}
 	s.natMu.Unlock()
-	s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", publicUDPAddr)
+	if publicKnown {
+		s.Config.Logger.Info("Direct QUIC listener started", "publicAddr", publicUDPAddr)
+	} else {
+		s.Config.Logger.Info("Local QUIC listener started without a public endpoint; TURN relays remain available")
+	}
 }
 
 // detectPublicReachability decides whether this node can serve as a Sponsor:

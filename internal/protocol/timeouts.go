@@ -16,4 +16,7 @@ const (
 
 	HandlerDialUnary  = 10 * time.Second // local unary gRPC/HTTP handler client
 	HandlerDialStream = 30 * time.Second // local stream/WebRTC/screen handler client
+
+	TURNCredentialTTL  = time.Hour       // TURN REST credential window; caps the allocation lifetime
+	TURNFallbackBudget = 6 * time.Second // TURN allocate+dial budget in the router fallback phase
 )

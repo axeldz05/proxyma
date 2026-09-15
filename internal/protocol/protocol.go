@@ -632,8 +632,19 @@ type NodeConfig struct {
 	MinRelayPollInterval int    `json:"min_relay_poll_interval,omitempty"`
 	MaxRelayPollInterval int    `json:"max_relay_poll_interval,omitempty"`
 	DisableUPnP          bool   `json:"disable_upnp,omitempty"`
+	TURNEnabled          bool   `json:"turn_enabled,omitempty"`     // serve TURN relay for the mesh (embedded pion/turn server)
+	TURNListenAddr       string `json:"turn_listen_addr,omitempty"` // UDP listen address of the embedded TURN server
+	TURNPublicAddr       string `json:"turn_public_addr,omitempty"` // IP returned in XOR-RELAYED-ADDRESS when discovery cannot provide one
+	TURNServer           string `json:"turn_server,omitempty"`      // host:port of the TURN server to use as a client fallback
+	TURNSecret           string `json:"turn_secret,omitempty"`      // shared secret for TURN REST-style ephemeral credentials
+	TURNRealm            string `json:"turn_realm,omitempty"`       // TURN realm (default TURNDefaultRealm)
 	Logger               *slog.Logger
 }
+
+const (
+	TURNDefaultRealm      = "proxyma"
+	TURNDefaultListenAddr = ":3478"
+)
 
 const (
 	StrategyFastest  = "proxyma/strategy/fastest"

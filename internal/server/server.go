@@ -80,9 +80,12 @@ type Server struct {
 	udpConn          *net.UDPConn
 	publicUDPAddr    string
 	quicMgr          *p2p.QUICManager
+	turnSrv          *turnServer
+	turnMgr          *p2p.TURNManager
 	natMapper        *p2p.NATMapper
 	natMapperFactory func(*slog.Logger, int, int) *p2p.NATMapper
 	natMu            sync.RWMutex
+	sponsorSelector  SponsorSelector
 
 	webrtcPCs   sync.Map
 	webrtcPCSeq uint64
@@ -136,6 +139,21 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 		s.peerClient.UpdateSponsorAddress(cfg.BootstrapNode)
 		s.peerClient.SetNodeID(cfg.ID)
 		s.peerClient.SetOwnAddress(cfg.Address)
+		if cfg.TURNServer != "" {
+			turnMgr, err := p2p.NewTURNManager(p2p.TURNManagerConfig{
+				ServerAddr: cfg.TURNServer,
+				Secret:     cfg.TURNSecret,
+				Realm:      cfg.TURNRealm,
+				LocalID:    cfg.ID,
+				Logger:     cfg.Logger,
+			})
+			if err != nil {
+				s.cancelLife()
+				return nil, fmt.Errorf("initialize TURN manager: %w", err)
+			}
+			s.turnMgr = turnMgr
+			s.peerClient.SetTURNManager(turnMgr)
+		}
 	}
 
 	var err error
@@ -180,6 +198,15 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 		}
 	} else {
 		cfg.Logger.Error("Failed to load persisted peers", "error", err)
+	}
+
+	// Without an explicit bootstrap, adopt a sponsor from the persisted
+	// topology so restarts resume routing through a known sponsor.
+	if s.Config.BootstrapNode == "" && s.peerClient != nil {
+		if addr, ok := s.selectSponsor(""); ok {
+			s.peerClient.UpdateSponsorAddress(addr)
+			cfg.Logger.Info("Sponsor adopted from persisted topology", "sponsor", addr)
+		}
 	}
 
 	// Configure compute callbacks
@@ -649,6 +676,11 @@ func (s *Server) finishShutdown(ctx context.Context) {
 	if qm := s.detachQUICManager(); qm != nil {
 		qm.Close()
 		s.Config.Logger.Info("QUIC Manager closed.")
+	}
+
+	if ts := s.detachTURNServer(); ts != nil {
+		ts.Close()
+		s.Config.Logger.Info("Embedded TURN server closed.")
 	}
 
 	if s.Storage != nil {

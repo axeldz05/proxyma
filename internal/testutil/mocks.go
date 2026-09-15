@@ -155,7 +155,9 @@ func (m *MockPeerClient) RemovePeerRoute(peerID string)                         
 func (m *MockPeerClient) SetNodeID(id string)                                          {}
 func (m *MockPeerClient) SetOwnAddress(addr string)                                    {}
 func (m *MockPeerClient) UpdateSponsorAddress(addr string)                             {}
+func (m *MockPeerClient) CurrentSponsorAddress() string                                { return "" }
 func (m *MockPeerClient) CloseIdleConnections()                                        {}
 func (m *MockPeerClient) SetQUICManager(qm *p2p.QUICManager)                           {}
+func (m *MockPeerClient) SetTURNManager(tm *p2p.TURNManager)                           {}
 func (m *MockPeerClient) SetLifetimeContext(ctx context.Context)                       {}
 func (m *MockPeerClient) Close()                                                       {}

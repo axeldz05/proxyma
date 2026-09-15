@@ -36,8 +36,10 @@ type PeerClient interface {
 	SetNodeID(id string)
 	SetOwnAddress(addr string)
 	UpdateSponsorAddress(addr string)
+	CurrentSponsorAddress() string
 	CloseIdleConnections()
 	SetQUICManager(qm *QUICManager)
+	SetTURNManager(tm *TURNManager)
 	SetLifetimeContext(ctx context.Context)
 	Close()
 }
@@ -94,8 +96,16 @@ func (c *HTTPPeerClient) UpdateSponsorAddress(addr string) {
 	c.router.UpdateSponsorAddress(addr)
 }
 
+func (c *HTTPPeerClient) CurrentSponsorAddress() string {
+	return c.router.CurrentSponsorAddress()
+}
+
 func (c *HTTPPeerClient) SetQUICManager(qm *QUICManager) {
 	c.router.SetQUICManager(qm)
+}
+
+func (c *HTTPPeerClient) SetTURNManager(tm *TURNManager) {
+	c.router.SetTURNManager(tm)
 }
 
 func (c *HTTPPeerClient) SetLifetimeContext(ctx context.Context) {

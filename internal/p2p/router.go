@@ -48,6 +48,7 @@ type P2PRoundTripper struct {
 	NodeID          string
 	OwnAddress      string
 	QM              *QUICManager
+	TURN            *TURNManager
 	prewarms        map[string]*prewarmAttempt
 	routeGeneration map[string]uint64
 	lifetime        context.Context
@@ -87,7 +88,7 @@ func (r *P2PRoundTripper) UpdatePeerRoute(peerID string, record protocol.Address
 	var prewarmCtx context.Context
 	if qm != nil {
 		qm.AllowPeerSessions(peerID)
-		if sponsorAddr != "" {
+		if sponsorAddr != "" && qm.PublicUDPAddress() != "" {
 			if _, hasQUIC := FirstQUICAddr(record.Addresses); hasQUIC {
 				if _, exists := qm.GetSession(peerID); !exists {
 					prewarmCtx, attempt = r.newPrewarmAttemptLocked(peerID, qm, generation)
@@ -100,6 +101,9 @@ func (r *P2PRoundTripper) UpdatePeerRoute(peerID string, record protocol.Address
 
 	if attempt != nil {
 		go r.prewarmConnection(prewarmCtx, attempt, peerID, record, sponsorAddr)
+	}
+	if r.TURN != nil {
+		r.TURN.SetPeerAddresses(record.Addresses)
 	}
 }
 
@@ -176,6 +180,7 @@ func (r *P2PRoundTripper) RemovePeerRoute(peerID string) {
 		attempt.cancel()
 		delete(r.prewarms, peerID)
 	}
+	removed := r.routes[peerID]
 	if r.routes != nil {
 		delete(r.routes, peerID)
 	}
@@ -191,12 +196,23 @@ func (r *P2PRoundTripper) RemovePeerRoute(peerID string) {
 		attempt.qm.BlockPeerSessions(peerID, 0, "peer removed")
 	}
 	r.mu.Unlock()
+	if r.TURN != nil {
+		r.TURN.ForgetPeerAddresses(removed.Addresses)
+	}
 }
 
 func (r *P2PRoundTripper) UpdateSponsorAddress(addr string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.SponsorAddress = addr
+}
+
+// CurrentSponsorAddress returns the sponsor the router currently routes
+// through ("" when none).
+func (r *P2PRoundTripper) CurrentSponsorAddress() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.SponsorAddress
 }
 
 func (r *P2PRoundTripper) logDebug(msg string, args ...any) {
@@ -258,6 +274,15 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Phase 1.5: UDP Hole Punching to establish QUIC session
 	if resp, err, handled := r.tryHolePunchAndRoute(qm, clone, req, peerID, record, sponsorAddr); handled {
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+
+	// Phase 1.7: TURN relay fallback (needs no sponsor, only the peer's
+	// advertised public addresses and a configured TURN server).
+	if resp, err, handled := r.tryTURNDial(qm, clone, req, peerID, record); handled {
 		if err == nil {
 			return resp, nil
 		}
@@ -527,6 +552,11 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(qm *QUICManager, clone *http.Requ
 	if qm == nil || sponsorAddr == "" {
 		return nil, nil, false
 	}
+	// Without a locally discovered public mapping, bursting pings cannot open
+	// anything; skip straight to the TURN phase.
+	if qm.PublicUDPAddress() == "" {
+		return nil, nil, false
+	}
 	bypass, _ := clone.Context().Value(BypassHolePunchKey{}).(bool)
 	if bypass {
 		return nil, nil, false
@@ -565,6 +595,50 @@ func (r *P2PRoundTripper) tryHolePunchAndRoute(qm *QUICManager, clone *http.Requ
 	resp, ok := r.routeOverQUICSession(qm, peerID, sess, req, clone)
 	if !ok {
 		return nil, fmt.Errorf("failed to send request over newly punched QUIC session"), true
+	}
+	return resp, nil, true
+}
+
+// tryTURNDial routes the request over a QUIC session established through a
+// TURN allocation. It runs after hole punching failed and needs no sponsor —
+// only the peer's advertised public addresses.
+func (r *P2PRoundTripper) tryTURNDial(qm *QUICManager, clone *http.Request, req *http.Request, peerID string, record protocol.AddressRecord) (*http.Response, error, bool) {
+	r.mu.RLock()
+	tm := r.TURN
+	r.mu.RUnlock()
+	if tm == nil || qm == nil {
+		return nil, nil, false
+	}
+	if bypass, _ := clone.Context().Value(BypassHolePunchKey{}).(bool); bypass {
+		return nil, nil, false
+	}
+	if _, ok := FirstQUICAddr(record.Addresses); !ok {
+		return nil, nil, false
+	}
+
+	budget := protocol.TURNFallbackBudget
+	if deadline, ok := clone.Context().Deadline(); ok {
+		timeLeft := time.Until(deadline)
+		if timeLeft > 1000*time.Millisecond {
+			budget = min(timeLeft-1000*time.Millisecond, protocol.TURNFallbackBudget)
+		} else {
+			return nil, nil, false
+		}
+	}
+
+	r.logDebug("Attempting TURN relayed dial", "peerID", peerID)
+	ctx, cancel := context.WithTimeout(clone.Context(), budget)
+	sess, err := tm.DialPeer(ctx, peerID, record.Addresses)
+	cancel()
+	if err != nil {
+		r.logDebug("TURN relayed dial failed", "peerID", peerID, "error", err)
+		return nil, err, true
+	}
+
+	r.logDebug("TURN relayed dial succeeded, routing over relayed QUIC", "peerID", peerID)
+	resp, ok := r.routeOverQUICSession(qm, peerID, sess, req, clone)
+	if !ok {
+		return nil, fmt.Errorf("failed to send request over TURN QUIC session"), true
 	}
 	return resp, nil, true
 }
@@ -686,6 +760,13 @@ func (r *P2PRoundTripper) SetQUICManager(qm *QUICManager) {
 	r.mu.Unlock()
 }
 
+// SetTURNManager attaches the TURN fallback manager; nil disables the phase.
+func (r *P2PRoundTripper) SetTURNManager(tm *TURNManager) {
+	r.mu.Lock()
+	r.TURN = tm
+	r.mu.Unlock()
+}
+
 func (r *P2PRoundTripper) SetLifetimeContext(parent context.Context) {
 	if parent == nil {
 		parent = context.Background()
@@ -731,6 +812,9 @@ func (r *P2PRoundTripper) Close() {
 	r.mu.Unlock()
 
 	r.prewarmWG.Wait()
+	if tm := r.TURN; tm != nil {
+		tm.Close()
+	}
 	closeIdle(r.Base)
 	close(done)
 }
