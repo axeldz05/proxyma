@@ -12,7 +12,7 @@ ANDROID_DIR=cmd/proxyma-android
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build test test-integration test-bootstrap-smoke test-cover test-sanitizer test-e2e-harness test-race test-ci test-android-contract test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
+.PHONY: all build test test-raw test-integration test-bootstrap-smoke test-cover test-sanitizer test-e2e-harness test-race test-ci test-android-contract test-android-bind test-android lint clean help init-cluster test-e2e test-e2e-pr test-e2e-network test-e2e-full test-all coverage
 
 all: lint test build ## Run lint, tests, and build
 
@@ -20,13 +20,17 @@ build: ## Build the Proxyma CLI
 	@echo "$(BLUE)Compiling Proxyma...$(NC)"
 	$(GO) build -o "$(BINARY_NAME)" ./cmd/proxyma
 
-test: ## Run the Go test suite
+test: ## Run the Go test suite with detailed failure reporting
 	@echo "$(BLUE)Running tests...$(NC)"
+	python3 ./scripts/test_report.py go $(ARGS)
+
+test-raw: ## Run the raw Go test suite
+	@echo "$(BLUE)Running raw tests...$(NC)"
 	$(GO) test -v ./...
 
 test-integration: ## Run live public-contract integration tests
 	@echo "$(BLUE)Running integration contract tests...$(NC)"
-	$(GO) test -v ./cmd/proxyma-bind ./internal/server
+	python3 ./scripts/test_report.py go ./cmd/proxyma-bind ./internal/server $(ARGS)
 	bash ./tests/dev/bootstrap_dev_smoke_test.sh
 
 test-bootstrap-smoke: ## Smoke-test the isolated developer bootstrap
@@ -48,14 +52,14 @@ test-sanitizer: test-e2e-harness ## Verify E2E harness sanitization
 # The race suite is green. It remains separate from `test` because it is slower.
 test-race: ## Run the Go test suite with race detection
 	@echo "$(BLUE)Running tests with the race detector...$(NC)"
-	$(GO) test -race -count=1 ./...
+	python3 ./scripts/test_report.py go -race -count=1 ./... $(ARGS)
 
 test-ci: test-cover test-e2e-harness test-race ## Run the local CI test gates
 
 test-android-contract: ## Run Android build-tag contracts on the host
 	@echo "$(BLUE)Running Android build-tag contracts on the host...$(NC)"
-	$(GO) test -count=1 -tags=androidcontract \
-		./internal/compute/androidcontract ./internal/server/androidcontract
+	python3 ./scripts/test_report.py go -count=1 -tags=androidcontract \
+		./internal/compute/androidcontract ./internal/server/androidcontract $(ARGS)
 
 test-android-bind: ## Build the Android AAR and verify required Java APIs
 test-android: test-android-contract ## Build and test Android against one fresh temporary AAR
@@ -144,17 +148,18 @@ test-e2e: test-e2e-full ## Run the stable full E2E profile
 
 test-e2e-pr: ## Run deterministic PR E2E contracts
 	@echo "$(BLUE)Running deterministic PR E2E contracts...$(NC)"
-	E2E_PROFILE=pr ./tests/e2e/run.sh
+	E2E_PROFILE=pr python3 ./scripts/test_report.py e2e $(ARGS)
 
 test-e2e-network: ## Run network and fault-injection E2E tests
 	@echo "$(BLUE)Running network E2E tests...$(NC)"
-	E2E_PROFILE=network ./tests/e2e/run.sh
+	E2E_PROFILE=network python3 ./scripts/test_report.py e2e $(ARGS)
 
 test-e2e-full: ## Run all stable E2E tests
 	@echo "$(BLUE)Running the stable full E2E suite...$(NC)"
-	E2E_PROFILE=full ./tests/e2e/run.sh
+	E2E_PROFILE=full python3 ./scripts/test_report.py e2e $(ARGS)
 
-test-all: test test-e2e ## Run unit and E2E tests
+test-all: ## Run unit, Android contract, and E2E tests
+	python3 ./scripts/test_report.py all $(ARGS)
 
 coverage: ## Generate the unified coverage report
 	@echo "$(BLUE)Generating unified coverage report...$(NC)"
