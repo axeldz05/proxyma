@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"errors"
 	"proxyma/internal/protocol"
 	"proxyma/internal/testutil"
 	"sync/atomic"
@@ -69,7 +70,7 @@ func TestFlushOutboxDeliveryHonorsLifetimeContext(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		err, _ := observedErr.Load().(error)
-		return err == context.Canceled
+		return errors.Is(err, context.Canceled)
 	}, 5*time.Second, 20*time.Millisecond)
 	err, _ := observedErr.Load().(error)
 	require.ErrorIs(t, err, context.Canceled,

@@ -91,12 +91,12 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 * `invite.go` — durable **`Check`** / **`CheckAndConsume`** over storage `pending_invites`; join validates first, consumes atomically before `SignCSR`, and restores durably on recoverable signing/CA-read failure.
 * `catalog_kinds.go` — `catalogKinds` (`Kind` + `entityFrom` + `current` + `syncOnJoin` + `deliver`) / `catalogKindFor` / `syncCatalogToPeer` / lookupCachedServiceSchema / resolveServiceBidTarget; payload builders **`serviceNotification` / `pipelineNotification` / `vfsNotification`** (wire-shape change = 1 zone per kind); eager and retry outbox paths both deliver through the table.
 * `outbox.go` — `enqueueOutbox` (L1) + **`notifyWithOutbox`** (L2); **`commitCatalogMutation`** (stage→apply→reconcile SSOT for `Local*` mutations) / **`outboxEntity`** (legacy entity fallback) / **`deliverOutboxTracked`** (every delivery is `lifetimeCtx`-bound + `goOwned`; flush and async fan-out share it); extracción, reconciliación y entrega consultan la tabla, sin switch por kind.
-* `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startDirectQUIC` / `detectPublicReachability` / `applySponsorStatus`.
+* `nat.go` — `determineSponsorAndNATStatus` orchestrates `openUDPEndpoint` / `mapPortsWithUPnP` / `startQUIC` / `detectPublicReachability` / `applySponsorStatus`.
 * `sponsor.go` — **SSOT de selección de sponsor**: `SponsorSelector` interface + `FirstOnlineSponsorSelector` (orden estable por peer ID, online primero, nunca devuelve el actual); `Server.sponsorCandidates` alimenta desde `PeerRegistry.GetSponsorPeers` (flag `IsSponsor` sticky anti-gossip) + `IsPeerOnline`. Usado por el failover de `StartRelayPolling`, la adopción al arranque sin `bootstrap_node`, y `reconcileSponsor` (llamado tras cada announce-sync: adopta si falta, reselecciona si el actual perdió `IsSponsor`; nunca desplaza a un sponsor sano). `announceAndSync` anuncia al sponsor actual (`CurrentSponsorAddress`) con fallback al bootstrap.
 * `relay.go` — **`rejectOversizedRelay`**; `tls_rotation.go` / `cluster_handlers.go` — **`protocol.RotateTLSPayload`** (key never travels).
 * `service_catalog.go` — Detail/Discover/Add/Remove, **`applyServiceAction`**, `NotifyService*`.
 * `service_exec.go` — Run/Stream + ingest (`ResultLocalPath`); **`submitTrackedTask`**.
-* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`errPeerSkipped`** (no liveness update) + **`gossipToPeer` / `gossipAll`** + `PeerRPC*`; `forEachPeerOpts.Context` binds fan-out to its owner.
+* `applyPipelineAction` / `NotifySchema*`; `ValidatePipelineSchema` → `protocol.ValidatePipelineSchema` / `PipelineHasCycle`; `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` + **`errPeerSkipped`** (no liveness update) + **`gossipToPeer`** + `PeerRPC*`; `forEachPeerOpts.Context` binds fan-out to its owner.
 * `peerCNFromRequest` / `requirePeerCNMatchesBodyID`; **`HandleAddPeer`** requires CN (owner sticky IsSponsor only; gossip cannot elevate); schema/hole-punch CN-bound like services; HTTP mounts use **`protocol.Path*`**.
 * Invites/rotate: **`hasCAKey`** gates mint; join **`CheckAndConsume`**; rotate requires peer push acks before local TLS reload.
 * `vfs_sync.downloadWorker` — fallback skips source peer; **`ErrBlobDiscarded`** → debug only (callPeer keeps peer online).
@@ -148,7 +148,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Invite TTL | `protocol.DefaultInviteMinutes` |
 | Result path | `ResultLocalPath` / `OutputHashFromOutputs` / bind `ResolveTaskResultPath` |
 | Peer fan-out | `callPeer` / `forEachPeer` / `mapEachPeer` / `firstPeer` |
-| Gossip | `gossipToPeer` / `gossipAll` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
+| Gossip | `gossipToPeer` / `syncCatalogToPeer` / `catalogKinds` / `catalogKindFor` |
 | Notify outbox | `notifyWithOutbox` / `prepareOutboxMutation` / `commitCatalogMutation` / `enqueueOutbox` / `flushOutbox` / `deliverOutboxTracked` (lifetime-bound) / `OutboxPendingCount` (v2 entries + generations + reservations; legacy reconciled) |
 | Gossip payload shapes | `serviceNotification` / `pipelineNotification` / `vfsNotification` (builders junto a `catalogKinds`) |
 | Inter-node body decode + CN gate | `server.decodePeerBody[T]` (validate hook keeps announce 400-first) |

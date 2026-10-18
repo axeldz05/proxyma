@@ -222,7 +222,7 @@ func TestRelayFailoverDeterministic(t *testing.T) {
 
 	srv := newSponsorTestServer(t)
 	tracker := &sponsorTrackingClient{MockPeerClient: &testutil.MockPeerClient{}}
-	tracker.MockPeerClient.OnPollRelay = func(context.Context, string, string) (protocol.RelayRequest, error) {
+	tracker.OnPollRelay = func(context.Context, string, string) (protocol.RelayRequest, error) {
 		return protocol.RelayRequest{}, context.DeadlineExceeded
 	}
 	tracker.UpdateSponsorAddress(dead.URL)

@@ -150,8 +150,8 @@ func TestMissingRequired(t *testing.T) {
 	t.Parallel()
 	schema := protocol.ServiceSchema{
 		Parameters: map[string]protocol.ServiceParameter{
-			"file":   {Type: protocol.ParamTypeFile, Required: true},
-			"mode":   {Type: protocol.ParamTypeString, Required: true},
+			"file":     {Type: protocol.ParamTypeFile, Required: true},
+			"mode":     {Type: protocol.ParamTypeString, Required: true},
 			"optional": {Type: protocol.ParamTypeString, Required: false},
 		},
 	}

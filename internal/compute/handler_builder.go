@@ -66,7 +66,7 @@ func BuildUnaryHandler(fn func(ctx context.Context, payload map[string]any) (map
 	}
 }
 
-// Handler generator for external scripts
+// BuildScriptHandler generates an execution handler for external scripts.
 func BuildScriptHandler(executablePath string) ServiceHandler {
 	return func(ctx context.Context, in <-chan map[string]any, out chan<- map[string]any, payload map[string]any) (map[string]any, error) {
 		if in != nil && out != nil {
@@ -165,7 +165,7 @@ func BuildScriptHandler(executablePath string) ServiceHandler {
 					return nil, fmt.Errorf("%s", errMsg)
 				}
 			}
-			return nil, fmt.Errorf("external script failed: %v, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
+			return nil, fmt.Errorf("external script failed: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 		}
 
 		var result map[string]any

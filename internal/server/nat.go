@@ -374,12 +374,6 @@ func (s *Server) discardNATMapper(mapper *p2p.NATMapper) {
 	mapper.Stop()
 }
 
-// startDirectQUIC reuses the discovery socket as the QUIC transport with a
-// known public endpoint (published for hole punching and announcements).
-func (s *Server) startDirectQUIC(ctx context.Context, endpoint publicEndpoint) {
-	s.startQUIC(ctx, endpoint, true)
-}
-
 // startQUIC reuses the discovery socket as the QUIC transport. With a known
 // public endpoint its address is published; without one (STUN and UPnP both
 // failed) the listener still serves outbound QUIC dials and TURN relays, it

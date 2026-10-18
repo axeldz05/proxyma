@@ -163,7 +163,7 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
 	if err != nil {
 		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
-		return fmt.Errorf("there was an error trying to connect to the cluster: %v", err)
+		return fmt.Errorf("there was an error trying to connect to the cluster: %w", err)
 	}
 	s.Config.Logger.Info("AnnounceResp received without errors", "resp", announceResp)
 	for id, addrRec := range announceResp {

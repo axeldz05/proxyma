@@ -68,13 +68,13 @@ func lockServicesFileMode(storagePath string, exclusive, nonblocking bool) (bool
 	}
 	for {
 		err = unix.Flock(int(file.Fd()), mode)
-		if err != unix.EINTR {
+		if !errors.Is(err, unix.EINTR) {
 			break
 		}
 	}
 	if err != nil {
 		_ = file.Close()
-		if nonblocking && (err == unix.EWOULDBLOCK || err == unix.EAGAIN) {
+		if nonblocking && (errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN)) {
 			return false, nil, nil
 		}
 		return false, nil, err

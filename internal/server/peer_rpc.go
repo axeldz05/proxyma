@@ -152,8 +152,3 @@ func (s *Server) gossipToPeer(peerID string, fn func(ctx context.Context, peerID
 	defer cancel()
 	_ = s.callPeer(ctx, peerID, fn)
 }
-
-// gossipAll fans out fn to all peers in parallel with PeerRPCDefault (L2).
-func (s *Server) gossipAll(fn func(ctx context.Context, peerID string) error) {
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true}, fn)
-}

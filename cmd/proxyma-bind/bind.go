@@ -405,14 +405,14 @@ func startNode(storagePath string, debug bool) string {
 			nid := utils.GenerateDefaultNodeID()
 			localAddr := protocol.HTTPSAddr("127.0.0.1", protocol.DefaultTCPPort)
 			if err := p2p.SetupNewNode(configStorage, nid, localAddr); err != nil {
-				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %v", err))
+				return BindErrorJSON(fmt.Errorf("failed to setup initial node: %w", err))
 			}
 			cfg, err = protocol.LoadConfig(configStorage)
 			if err != nil {
-				return BindErrorJSON(fmt.Errorf("failed to load initial config: %v", err))
+				return BindErrorJSON(fmt.Errorf("failed to load initial config: %w", err))
 			}
 		} else {
-			return BindErrorJSON(fmt.Errorf("failed to load config: %v", err))
+			return BindErrorJSON(fmt.Errorf("failed to load config: %w", err))
 		}
 	}
 	cfg.StoragePath = configStorage
@@ -424,7 +424,7 @@ func startNode(storagePath string, debug bool) string {
 
 	stls, ctls, err := p2p.LoadNodeTLS(cfg.CAPath, nodeCertFile, nodeKeyFile)
 	if err != nil {
-		return BindErrorJSON(fmt.Errorf("failed to load mTLS certs: %v", err))
+		return BindErrorJSON(fmt.Errorf("failed to load mTLS certs: %w", err))
 	}
 
 	baseTransport := &http.Transport{TLSClientConfig: ctls}
@@ -433,7 +433,7 @@ func startNode(storagePath string, debug bool) string {
 
 	startedServer, err := server.New(cfg, peerClient)
 	if err != nil {
-		return BindErrorJSON(fmt.Errorf("failed to start node: %v", err))
+		return BindErrorJSON(fmt.Errorf("failed to start node: %w", err))
 	}
 	startedServer.SetTLSConfigs(stls, ctls)
 	wrappedTransport.Recorder = startedServer

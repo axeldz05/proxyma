@@ -105,7 +105,7 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	err := s.physical.ReadBlob(requestedHash, w)
 	if err != nil {
-		if err == storage.ErrFileDoesNotExist {
+		if errors.Is(err, storage.ErrFileDoesNotExist) {
 			s.logger.Warn("Tried to download a blob that does not exist", "hash", requestedHash)
 			utils.RespondError(w, http.StatusNotFound, "Blob not found")
 			return

@@ -119,10 +119,10 @@ func handleConn(conn net.Conn) {
 			currentDoc.mu.Unlock()
 
 			currentDoc.broadcast(Message{
-				Type:     "user_left",
-				DocID:    currentDoc.ID,
-				UserID:   currentUserID,
-				Users:    currentDoc.Users,
+				Type:   "user_left",
+				DocID:  currentDoc.ID,
+				UserID: currentUserID,
+				Users:  currentDoc.Users,
 			}, nil)
 		}
 	}()

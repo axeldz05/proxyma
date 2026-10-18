@@ -266,7 +266,7 @@ func (s *Server) announceAndSync() error {
 			s.Config.Logger.Warn("Announce before sync failed", "sponsor", target, "error", err)
 			syncErr := s.ExecuteSync()
 			if syncErr != nil {
-				return fmt.Errorf("announce failed: %v; sync failed: %w", err, syncErr)
+				return fmt.Errorf("announce failed: %w; sync failed: %w", err, syncErr)
 			}
 			return fmt.Errorf("announce failed: %w", err)
 		}

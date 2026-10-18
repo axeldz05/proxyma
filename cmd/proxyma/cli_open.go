@@ -47,7 +47,7 @@ func launchEditor(pipelineID string, fileToOpen string) string {
 
 	err = cmd.Run()
 	if err != nil {
-		return proxyma_bind.BindErrorJSON(fmt.Errorf("failed to run editor: %v", err))
+		return proxyma_bind.BindErrorJSON(fmt.Errorf("failed to run editor: %w", err))
 	}
 	return proxyma_bind.BindMessageJSON("Editor closed")
 }

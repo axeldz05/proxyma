@@ -192,7 +192,7 @@ func TestSubmitTaskDuringCloseReturnsStableClosedError(t *testing.T) {
 	close(errs)
 
 	for err := range errs {
-		if err != ErrClosed {
+		if !errors.Is(err, ErrClosed) {
 			t.Errorf("SubmitTask during Close returned %v, want stable ErrClosed", err)
 		}
 	}

@@ -91,7 +91,10 @@ func ValidateAndPrintServiceHelp(storagePath string, serviceName string, payload
 	}
 
 	schema, err := lookupServiceSchema(storagePath, serviceName)
-	if err != nil || schema == nil {
+	if err != nil {
+		return false, fmt.Errorf("lookup service schema %q: %w", serviceName, err)
+	}
+	if schema == nil {
 		return false, nil
 	}
 

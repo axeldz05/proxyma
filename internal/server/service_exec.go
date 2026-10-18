@@ -315,8 +315,11 @@ func (s *Server) localServiceStreamRun(
 	handler, exists := s.Compute.GetHandler(serviceName)
 	if !exists {
 		targetPeerID, err := s.resolveServiceBidTarget(serviceName, "")
-		if err != nil || targetPeerID == "" {
-			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster: %v", serviceName, err)
+		if err != nil {
+			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster: %w", serviceName, err)
+		}
+		if targetPeerID == "" {
+			return fmt.Errorf("streaming service '%s' is not registered on this node or cluster", serviceName)
 		}
 		if targetPeerID == s.Config.ID {
 			return fmt.Errorf("streaming service '%s' is not registered on this node", serviceName)

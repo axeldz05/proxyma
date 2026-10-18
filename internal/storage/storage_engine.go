@@ -1047,8 +1047,11 @@ func migrateOutboxNamespaces(tx *bbolt.Tx) error {
 			removeLegacy = append(removeLegacy, bytes.Clone(key))
 		case bytes.HasPrefix(key, []byte(downloadIntentPrefix)):
 			var intent downloadIntent
-			if json.Unmarshal(value, &intent) != nil || intent.File.Name == "" {
-				return nil
+			if err := json.Unmarshal(value, &intent); err != nil {
+				return fmt.Errorf("corrupt legacy download intent %q: %w", string(key), err)
+			}
+			if intent.File.Name == "" {
+				return fmt.Errorf("invalid legacy download intent %q: empty file name", string(key))
 			}
 			if err := intents.Put([]byte(downloadIntentStorageKey(intent.File.Name)), value); err != nil {
 				return err
