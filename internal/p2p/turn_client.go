@@ -310,10 +310,7 @@ func (tm *TURNManager) applyDesiredPermissionsLocked() {
 }
 
 func sameFamily(ip net.IP, network string) bool {
-	if network == "udp6" {
-		return ip.To4() == nil
-	}
-	return ip.To4() != nil
+	return utils.SameIPFamily(ip, network)
 }
 
 // createPermissions sends CreatePermission for every IP and records them as

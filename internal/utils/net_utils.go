@@ -1,12 +1,14 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -133,4 +135,64 @@ func IsLoopbackHost(addr string) bool {
 		return true
 	}
 	return host == "localhost" || host == "127.0.0.1" || host == "::1" || !strings.Contains(host, ".")
+}
+
+// SameIPFamily reports whether ip belongs to network's IP family ("udp4"/"tcp4" vs "udp6"/"tcp6").
+func SameIPFamily(ip net.IP, network string) bool {
+	if strings.HasSuffix(network, "6") {
+		return ip.To4() == nil
+	}
+	return ip.To4() != nil
+}
+
+// ResolveUDPAddrContext resolves a UDP address with context cancellation.
+// When network is "udp", IPv4 is preferred if available.
+func ResolveUDPAddrContext(ctx context.Context, network, address string) (*net.UDPAddr, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse UDP address: %w", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		port, err = net.DefaultResolver.LookupPort(ctx, network, portStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve UDP port: %w", err)
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return &net.UDPAddr{IP: ip, Port: port}, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve address: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("address %q did not resolve to an IP", address)
+	}
+	var selectedIP net.IP
+	if network == "udp4" || network == "udp6" {
+		for _, ip := range ips {
+			if SameIPFamily(ip.IP, network) {
+				selectedIP = ip.IP
+				break
+			}
+		}
+	} else {
+		for _, ip := range ips {
+			if SameIPFamily(ip.IP, "udp4") {
+				selectedIP = ip.IP
+				break
+			}
+		}
+		if selectedIP == nil && len(ips) > 0 {
+			selectedIP = ips[0].IP
+		}
+	}
+	if selectedIP == nil {
+		return nil, fmt.Errorf("address %q did not resolve to a compatible IP", address)
+	}
+	return &net.UDPAddr{IP: selectedIP, Port: port}, nil
 }

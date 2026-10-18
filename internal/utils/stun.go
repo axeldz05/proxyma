@@ -174,8 +174,17 @@ func GetExternalUDPListenerContext(ctx context.Context, stunServer string, timeo
 	if err := ctx.Err(); err != nil {
 		return "", 0, nil, err
 	}
-	addr, err := net.ResolveUDPAddr("udp", stunServer)
+	resolveCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		resolveCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	addr, err := ResolveUDPAddrContext(resolveCtx, "udp", stunServer)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", 0, nil, ctxErr
+		}
 		return "", 0, nil, fmt.Errorf("failed to resolve STUN address: %w", err)
 	}
 	if addr.IP == nil {

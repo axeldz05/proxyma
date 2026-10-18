@@ -523,10 +523,10 @@ func ensureNodeFinalizer(
 		if cancel != nil {
 			cancel()
 		}
+		shutdownErr := startedServer.Shutdown(context.Background())
 		if backgroundWork != nil {
 			backgroundWork.Wait()
 		}
-		shutdownErr := startedServer.Shutdown(context.Background())
 
 		srvMutex.Lock()
 		finalizer.err = shutdownErr

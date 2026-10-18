@@ -1,6 +1,8 @@
 package utils_test
 
 import (
+	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"proxyma/internal/utils"
@@ -74,4 +76,34 @@ func TestGetLocalIPs(t *testing.T) {
 	routable, err := utils.GetRoutableLocalIPs()
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(routable), len(ips))
+}
+
+func TestSameIPFamily(t *testing.T) {
+	t.Parallel()
+	require.True(t, utils.SameIPFamily(net.IPv4(127, 0, 0, 1), "udp4"))
+	require.False(t, utils.SameIPFamily(net.ParseIP("::1"), "udp4"))
+	require.True(t, utils.SameIPFamily(net.ParseIP("::1"), "udp6"))
+	require.False(t, utils.SameIPFamily(net.IPv4(127, 0, 0, 1), "udp6"))
+}
+
+func TestResolveUDPAddrContext(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves IP literal", func(t *testing.T) {
+		addr, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "127.0.0.1:8080")
+		require.NoError(t, err)
+		require.Equal(t, "127.0.0.1:8080", addr.String())
+	})
+
+	t.Run("aborts on cancelled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := utils.ResolveUDPAddrContext(ctx, "udp", "localhost:8080")
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("invalid address format", func(t *testing.T) {
+		_, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "not-a-valid-addr")
+		require.Error(t, err)
+	})
 }

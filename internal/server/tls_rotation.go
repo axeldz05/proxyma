@@ -152,6 +152,9 @@ func (s *Server) ReloadTLSConfig(caPath, certPath, keyPath string) error {
 }
 
 func (s *Server) RotateCAAndResignPeers() {
+	if s.lifetimeCtx.Err() != nil {
+		return
+	}
 	caKeyPath := p2p.CAKeyPath(s.Config.CAPath)
 	if _, err := os.Stat(caKeyPath); err != nil {
 		s.Config.Logger.Debug("We are not the CA authority node, skipping CA rotation")
@@ -188,7 +191,7 @@ func (s *Server) RotateCAAndResignPeers() {
 		pushMu   sync.Mutex
 		pushFail int
 	)
-	s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCSync, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
+	s.forEachPeer(forEachPeerOpts{Context: s.lifetimeCtx, Timeout: PeerRPCSync, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 		cert, hasCert := s.Peers.GetPeerCertificate(peerID)
 		if !hasCert {
 			s.Config.Logger.Error("No client certificate cached for peer; aborting local TLS reload", "peerID", peerID)
