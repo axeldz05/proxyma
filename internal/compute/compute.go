@@ -478,11 +478,12 @@ func (c *ComputeEngine) serviceWorker(maxWorkers int) {
 	}
 }
 
-// TODO: what would happen if a pipeline is changed while a task is being process
-// in the middle of a pipeline?
-// TODO: should the state of the tasks be shared using a consensus or backup-ish approach
-// similar to PostgreSQL with log? Concerns about having a node suddenly going offline and is in
-// the pipeline. it needs to have a self-healing process if possible
+// processTask executes or advances a singular task or a multi-step pipeline.
+// Dynamic schema evolution is supported: if a pipeline definition is updated while
+// in-flight, prefix-preserving revisions are validated and adopted via tryDynamicSchemaMigration,
+// while breaking changes safely fall back to the pipeline snapshot pinned at task start.
+// Distributed state durability and crash recovery are backed by the Task Journal WAL
+// (bucketTasksJournal) and coordinator escrow supervisor failover (/services/escrow).
 func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 	c.activeWorkers.Add(1)
 	defer c.activeWorkers.Add(-1)
@@ -753,7 +754,6 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 			c.sendPipelineError(t, fmt.Errorf("step '%s' failed staging outputs: %w", currentStep.ID, err))
 			return
 		}
-		// TODO: use context to clean unused outputs when pipeline is finished
 		pipelineState.Outputs[currentStep.ID] = outputs
 		pipelineState.OutputProducers[currentStep.ID] = c.nodeID
 		pipelineState.CurrentStep++
