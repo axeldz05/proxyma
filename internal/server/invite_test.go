@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -220,9 +221,5 @@ func (s *fakeInviteStore) snapshot() map[string]time.Time {
 }
 
 func cloneInvites(source map[string]time.Time) map[string]time.Time {
-	cloned := make(map[string]time.Time, len(source))
-	for secret, expiration := range source {
-		cloned[secret] = expiration
-	}
-	return cloned
+	return maps.Clone(source)
 }

@@ -203,7 +203,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | HTTP client | `NewHTTPClient` / `PostJSONAbsolute` |
 | Hole-punch | `BurstPings` / `HolePunchPingPayload` / `ParseHolePunchPing` / `RespondToHolePunch` / `QUICManager.ReloadTLS` |
 | JSON files | `ReadJSONFile` / `WriteJSONFile` |
-| Map cloning / set populating / merging | `utils.CloneJSONMap` / `utils.CloneMap` / `utils.PopulateMap` / `utils.PopulateMapIf` / `utils.CopyMapIf` / `utils.MergeMap` / `protocol.ClonePipelineExecutionState` |
+| Map utilities (clone/populate/merge) | `utils.CloneJSONMap` / `utils.CloneMap` / `utils.PopulateMap` / `utils.PopulateMapIf` / `utils.CopyMapIf` / `utils.MergeMap` / `protocol.ClonePipelineExecutionState` |
 | Service bid cost | `Compute.EstimateTaskCost` / `BuildServiceBid` / `selectBestServiceBid` (`CostUnits` / `PowerScore`) |
 | HTTP stream handlers | `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler` via `BuildHandler` |
 | WebRTC DataChannel | `BuildWebRTCHandler` / `BuildWebRTCHandlerWithClient` / `AcceptWebRTCOfferEcho` (`Type=webrtc`) |

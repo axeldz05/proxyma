@@ -10,6 +10,7 @@ import (
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
 	"proxyma/internal/telemetry"
+	"proxyma/internal/utils"
 	"reflect"
 	"runtime"
 	"sort"
@@ -1166,9 +1167,7 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 		if metadata.delegatedProducers == nil {
 			metadata.delegatedProducers = make(map[string]struct{})
 		}
-		for p := range delegatedProducers {
-			metadata.delegatedProducers[p] = struct{}{}
-		}
+		utils.MergeMap(metadata.delegatedProducers, delegatedProducers, true)
 		if req.ExpectedProducerNodeID != "" {
 			metadata.expectedProducer = req.ExpectedProducerNodeID
 			metadata.delegatedProducers[req.ExpectedProducerNodeID] = struct{}{}

@@ -139,3 +139,4 @@ func TestMergeMap(t *testing.T) {
 		}, dst)
 	})
 }
+

@@ -9,6 +9,7 @@ import (
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/storage"
+	"proxyma/internal/utils"
 )
 
 func coordinatorNodeID(t protocol.TaskRequest) string {
@@ -380,11 +381,7 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 	if taskReq.PipelineState.Outputs == nil {
 		taskReq.PipelineState.Outputs = make(map[string]map[string]any)
 	}
-	for k, v := range task.Outputs {
-		if _, exists := taskReq.PipelineState.Outputs[k]; !exists {
-			taskReq.PipelineState.Outputs[k] = protocol.CloneJSONMap(v)
-		}
-	}
+	utils.MergeMap(taskReq.PipelineState.Outputs, utils.CloneMap(task.Outputs, utils.CloneJSONMap), false)
 	if taskReq.PipelineState.OutputProducers == nil {
 		taskReq.PipelineState.OutputProducers = make(map[string]string)
 	}

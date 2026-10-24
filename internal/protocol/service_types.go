@@ -57,9 +57,7 @@ func buildServiceTypeIndex() map[ServiceType]serviceTypeSpec {
 	index := make(map[ServiceType]serviceTypeSpec, len(serviceTypeSpecs)*2)
 	for _, spec := range serviceTypeSpecs {
 		index[spec.Canonical] = spec
-		for _, alias := range spec.Aliases {
-			index[alias] = spec
-		}
+		PopulateMap(index, spec.Aliases, spec)
 	}
 	return index
 }

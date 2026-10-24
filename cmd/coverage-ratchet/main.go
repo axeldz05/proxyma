@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 
 	"proxyma/internal/covermerge"
@@ -94,9 +95,7 @@ func runUpdate(args []string, stdout, stderr io.Writer) error {
 	exclusions := make(map[string]string)
 	existing, err := covermerge.ReadBaselineFile(baselinePath)
 	if err == nil {
-		for packagePath, reason := range existing.Exclusions {
-			exclusions[packagePath] = reason
-		}
+		maps.Copy(exclusions, existing.Exclusions)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

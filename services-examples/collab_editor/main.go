@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -171,10 +172,7 @@ func handleConn(conn net.Conn) {
 				Pos:      msg.Pos,
 			}
 			snapshotContent := doc.Content
-			activeUsers := make(map[string]UserInfo, len(doc.Users))
-			for k, v := range doc.Users {
-				activeUsers[k] = v
-			}
+			activeUsers := maps.Clone(doc.Users)
 			doc.mu.Unlock()
 
 			// Send snapshot to joining client

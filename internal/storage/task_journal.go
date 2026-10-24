@@ -153,12 +153,11 @@ func (t *TaskRecord) applyJournalRecord(record TaskJournalRecord) {
 		t.CurrentStep = record.StepIndex
 	}
 	if record.PipelineState != nil && record.PipelineState.Outputs != nil {
+		clonedOutputs := protocol.CloneMap(record.PipelineState.Outputs, protocol.CloneJSONMap)
 		if t.Outputs == nil {
-			t.Outputs = protocol.CloneMap(record.PipelineState.Outputs, protocol.CloneJSONMap)
+			t.Outputs = clonedOutputs
 		} else {
-			for k, v := range record.PipelineState.Outputs {
-				t.Outputs[k] = protocol.CloneJSONMap(v)
-			}
+			protocol.MergeMap(t.Outputs, clonedOutputs, true)
 		}
 	}
 	if record.Outputs != nil {

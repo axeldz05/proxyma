@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path"
@@ -335,11 +336,7 @@ func validPercentage(value float64) bool {
 }
 
 func cloneExclusions(exclusions map[string]string) map[string]string {
-	cloned := make(map[string]string, len(exclusions))
-	for packagePath, reason := range exclusions {
-		cloned[packagePath] = reason
-	}
-	return cloned
+	return maps.Clone(exclusions)
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

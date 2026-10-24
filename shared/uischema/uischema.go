@@ -3,6 +3,7 @@ package uischema
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -558,9 +559,7 @@ func ApplyDefaults(action ActionDetail, args map[string]string) map[string]strin
 		args = make(map[string]string)
 	}
 	out := make(map[string]string, len(args)+len(action.Parameters))
-	for k, v := range args {
-		out[k] = v
-	}
+	maps.Copy(out, args)
 	for _, p := range action.Parameters {
 		if out[p.Name] == "" && p.DefaultValue != "" {
 			out[p.Name] = p.DefaultValue
@@ -603,9 +602,7 @@ func ValidateActionArgs(action ActionDetail, args map[string]string) (map[string
 // NormalizeActionArgs maps surface aliases to the transport-neutral daemon contract.
 func NormalizeActionArgs(domain, action string, args map[string]string) (map[string]string, error) {
 	out := make(map[string]string, len(args)+2)
-	for key, value := range args {
-		out[key] = value
-	}
+	maps.Copy(out, args)
 	switch domain + "." + action {
 	case "storage.upload":
 		if out["name"] == "" && out["path"] != "" {
