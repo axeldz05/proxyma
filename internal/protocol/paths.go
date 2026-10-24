@@ -17,6 +17,7 @@ const (
 	PathServicesSubmit   = "/services/submit"
 	PathServicesStream   = "/services/stream"
 	PathServicesCallback = "/services/callback"
+	PathServicesEscrow   = "/services/escrow"
 	PathServicesNotify   = "/services/notify"
 	PathServices         = "/services"
 	PathSchemasNotify    = "/schemas/notify"

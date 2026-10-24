@@ -46,6 +46,17 @@ func boltGetJSON[T any](tx *bbolt.Tx, bucket, key string) (T, bool, error) {
 	return item, true, nil
 }
 
+func boltViewGetJSON[T any](db *bbolt.DB, bucket, key string) (T, bool, error) {
+	var out T
+	var exists bool
+	err := db.View(func(tx *bbolt.Tx) error {
+		var err error
+		out, exists, err = boltGetJSON[T](tx, bucket, key)
+		return err
+	})
+	return out, exists, err
+}
+
 func boltDelete(tx *bbolt.Tx, bucket, key string) error {
 	b, err := boltBucket(tx, bucket)
 	if err != nil {

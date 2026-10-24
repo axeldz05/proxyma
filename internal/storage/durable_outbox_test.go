@@ -193,7 +193,9 @@ func TestOutboxNamespaceMigrationPreservesIntentsAndReclaimsReservations(t *test
 	generation, err := reopened.ReserveOutboxGeneration("new-key")
 	require.NoError(t, err)
 	require.Greater(t, generation, legacyGeneration)
-	require.Equal(t, 1, reopened.CountDownloadIntents())
+	count, err := reopened.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
 }
 
 func TestTombstonePersistenceFailureReturnsServerError(t *testing.T) {
@@ -248,7 +250,9 @@ func TestAcceptedDownloadIntentSurvivesRestartUntilBlobStored(t *testing.T) {
 	first.HandleNotification(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code)
 	require.Equal(t, 1, firstAttempts)
-	require.Equal(t, 1, first.CountDownloadIntents())
+	firstCount, err := first.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, firstCount)
 	outboxCount, err := first.CountOutboxEntries()
 	require.NoError(t, err)
 	require.Zero(t, outboxCount, "download intents must not appear as peer notification outbox rows")
@@ -268,7 +272,9 @@ func TestAcceptedDownloadIntentSurvivesRestartUntilBlobStored(t *testing.T) {
 	require.NoError(t, restarted.ReconcileDownloadIntents())
 	require.Equal(t, 1, restartedAttempts, "startup reconciliation must re-enqueue accepted volatile work")
 	require.NoError(t, restarted.StoreRemoteBlob(entry, bytes.NewReader(content)))
-	require.Zero(t, restarted.CountDownloadIntents())
+	restartedCount, err := restarted.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Zero(t, restartedCount)
 	require.NoError(t, restarted.Close())
 
 	afterCompletionAttempts := 0
@@ -335,7 +341,9 @@ func TestManifestContinuesAfterFirstEnqueueFailure(t *testing.T) {
 	require.ErrorIs(t, err, firstErr)
 	require.Equal(t, []protocol.IndexEntry{first, second, third}, missing)
 	require.Equal(t, []string{first.Name, second.Name, third.Name}, attempted)
-	require.Equal(t, 3, engine.CountDownloadIntents(), "every missing entry must retain a durable intent")
+	intentsCount, err := engine.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 3, intentsCount, "every missing entry must retain a durable intent")
 
 	for _, entry := range []protocol.IndexEntry{first, second, third} {
 		current, exists, readErr := engine.GetFileMetaE(entry.Name)
@@ -444,7 +452,9 @@ func TestTerminalDownloadFailureReleasesOnlyActiveReservation(t *testing.T) {
 	require.Equal(t, 1, attempts)
 
 	engine.ReleaseDownloadAttempt(entry)
-	require.Equal(t, 1, engine.CountDownloadIntents(),
+	releaseCount, err := engine.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, releaseCount,
 		"network failure must retain durable intent")
 	require.NoError(t, engine.ReconcileDownloadIntents())
 	require.Equal(t, 2, attempts, "released attempt must be retryable without restart")
@@ -469,7 +479,9 @@ func TestManifestMissingBlobPersistsIntentBeforeEnqueue(t *testing.T) {
 	}, "peer-b")
 	require.NoError(t, err)
 	require.Equal(t, []protocol.IndexEntry{entry}, missing)
-	require.Equal(t, 1, engine.CountDownloadIntents())
+	manifestCount, err := engine.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, manifestCount)
 	require.Equal(t, 1, enqueued)
 }
 
@@ -495,9 +507,13 @@ func TestCorruptDownloadQuarantineSurvivesRestartAndAllowsNewSource(t *testing.T
 
 	err = engine.StoreRemoteBlob(entry, bytes.NewReader([]byte("corrupt")))
 	require.ErrorIs(t, err, ErrBlobIntegrity)
-	require.Equal(t, 1, engine.CountDownloadIntents())
+	corruptCount, err := engine.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, corruptCount)
 	require.NoError(t, engine.QuarantineCorruptDownload(entry))
-	require.Zero(t, engine.CountDownloadIntents())
+	quarantineCount, err := engine.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Zero(t, quarantineCount)
 	require.NoError(t, engine.Close())
 
 	restartedAttempts := 0
@@ -513,7 +529,9 @@ func TestCorruptDownloadQuarantineSurvivesRestartAndAllowsNewSource(t *testing.T
 
 	require.NoError(t, restarted.requestRemoteDownload(entry, "peer-new"))
 	require.Equal(t, 1, restartedAttempts, "a future source must be allowed to retry")
-	require.Equal(t, 1, restarted.CountDownloadIntents())
+	retryCount, err := restarted.CountDownloadIntents()
+	require.NoError(t, err)
+	require.Equal(t, 1, retryCount)
 }
 
 func TestLoadPipelineSchemasDurablyNormalizesLegacyZeroVersion(t *testing.T) {

@@ -14,6 +14,9 @@ const (
 	bucketPipelineSchemas            = "pipeline_schemas"
 	bucketPendingBlobGC              = "pending_blob_gc"
 	vfsIndexBucket                   = "vfs_index"
+	bucketTasksJournal               = "tasks_journal"
+	bucketTasksActive                = "tasks_active"
+	bucketTasksHistory               = "tasks_history"
 )
 
 var allBuckets = []string{
@@ -29,4 +32,7 @@ var allBuckets = []string{
 	bucketPipelineSchemas,
 	bucketPendingBlobGC,
 	vfsIndexBucket,
+	bucketTasksJournal,
+	bucketTasksActive,
+	bucketTasksHistory,
 }

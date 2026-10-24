@@ -676,7 +676,8 @@ func TestCorruptDownloadDoesNotHotLoopDurableIntent(t *testing.T) {
 	require.NoError(t, err)
 	waitForOutboxSignal(t, firstAttempt, "corrupt download did not start")
 	require.Eventually(t, func() bool {
-		return s.Storage.CountDownloadIntents() == 0
+		count, err := s.Storage.CountDownloadIntents()
+		return err == nil && count == 0
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Stop and join the sole worker so any retry already queued by the periodic

@@ -18,6 +18,7 @@ type MockPeerClient struct {
 	OnSubmitTask           func(ctx context.Context, addr string, req protocol.TaskRequest) error
 	OnFetchServiceBid      func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error)
 	OnSendTaskResponse     func(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	OnSendTaskEscrow       func(ctx context.Context, peerID string, req protocol.TaskEscrowRequest) error
 	OnPollRelay            func(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
 	OnReplyRelay           func(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
 	OnLeave                func(ctx context.Context, peerID string, leaveReq protocol.PeerIDRequest) error
@@ -93,6 +94,13 @@ func (m *MockPeerClient) FetchServiceBid(ctx context.Context, addr string, q pro
 func (m *MockPeerClient) SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error {
 	if m.OnSendTaskResponse != nil {
 		return m.OnSendTaskResponse(ctx, url, resp)
+	}
+	return nil
+}
+
+func (m *MockPeerClient) SendTaskEscrow(ctx context.Context, peerID string, req protocol.TaskEscrowRequest) error {
+	if m.OnSendTaskEscrow != nil {
+		return m.OnSendTaskEscrow(ctx, peerID, req)
 	}
 	return nil
 }

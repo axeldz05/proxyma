@@ -14,6 +14,7 @@ import (
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -732,6 +733,28 @@ func (se *StorageEngine) compensatePhysicalBlob(hash string, created bool) error
 		return nil
 	}
 	return se.physical.DeleteBlob(hash)
+}
+
+// deleteStagedVFSIndexEntriesLocked removes transient stage/<hash>/... index entries for given hashes.
+func (se *StorageEngine) deleteStagedVFSIndexEntriesLocked(tx *bbolt.Tx, hashes map[string]bool) error {
+	vfsBucket, err := boltBucket(tx, vfsIndexBucket)
+	if err != nil {
+		return err
+	}
+	var stageKeysToDelete [][]byte
+	cIndex := vfsBucket.Cursor()
+	for k, v := cIndex.First(); k != nil; k, v = cIndex.Next() {
+		var entry protocol.IndexEntry
+		if err := json.Unmarshal(v, &entry); err == nil {
+			if hashes[entry.Hash] && strings.HasPrefix(entry.Name, "stage/") {
+				stageKeysToDelete = append(stageKeysToDelete, bytes.Clone(k))
+			}
+		}
+	}
+	for _, k := range stageKeysToDelete {
+		_ = vfsBucket.Delete(k)
+	}
+	return nil
 }
 
 // StageAndRewrite stages local file paths in m and rewrites them to vfs:// URIs (L2).
@@ -1544,21 +1567,18 @@ func (se *StorageEngine) ReconcileDownloadIntents() error {
 	return firstErr
 }
 
-func (se *StorageEngine) CountDownloadIntents() int {
-	count, err := se.CountDownloadIntentsE()
-	if err != nil {
-		se.logger.Error("Failed to count durable download intents", "error", err)
-		return 0
-	}
-	return count
-}
-
-func (se *StorageEngine) CountDownloadIntentsE() (int, error) {
-	intents, err := se.listDownloadIntents()
-	if err != nil {
-		return 0, err
-	}
-	return len(intents), nil
+// CountDownloadIntents returns the number of durable download intents in bbolt (O(1)).
+func (se *StorageEngine) CountDownloadIntents() (int, error) {
+	var n int
+	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
+		b, err := boltBucket(tx, bucketDownloadIntents)
+		if err != nil {
+			return err
+		}
+		n = b.Stats().KeyN
+		return nil
+	})
+	return n, err
 }
 
 func (se *StorageEngine) releaseDownloadIntent(file protocol.IndexEntry) {

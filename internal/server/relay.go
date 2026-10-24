@@ -468,7 +468,7 @@ func (s *Server) processRelayRequestContext(ctx context.Context, sponsorAddr str
 		s.sendRelayResponseContext(ctx, sponsorAddr, protocol.RelayResponse{
 			ReqID:      relayReq.ReqID,
 			StatusCode: http.StatusRequestEntityTooLarge,
-			Body:       []byte(fmt.Sprintf(`{"error":%q}`, relayCapMessage("relay payload"))),
+			Body:       fmt.Appendf(nil, `{"error":%q}`, relayCapMessage("relay payload")),
 		})
 		return
 	}
@@ -514,7 +514,7 @@ func (s *Server) processRelayRequestContext(ctx context.Context, sponsorAddr str
 	if w.exceeded {
 		s.Config.Logger.Warn("Relay response body exceeds cap; replacing with error", "reqID", relayReq.ReqID)
 		relayRes.StatusCode = http.StatusRequestEntityTooLarge
-		relayRes.Body = []byte(fmt.Sprintf(`{"error":%q}`, relayCapMessage("relay response")))
+		relayRes.Body = fmt.Appendf(nil, `{"error":%q}`, relayCapMessage("relay response"))
 	} else {
 		relayRes.Body = bodyBytes
 	}

@@ -101,6 +101,11 @@ func (s *Server) ingestTaskOutputsContext(
 	if resp.Status != "completed" {
 		return
 	}
+	defer func() {
+		if resp.Status == "completed" && s.Storage != nil {
+			_ = s.Storage.PruneIntermediateTaskData(resp.TaskID)
+		}
+	}()
 	if resp.Outputs == nil {
 		s.Compute.RecordTaskResponse(*resp)
 		return

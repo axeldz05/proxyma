@@ -38,6 +38,40 @@ func TestRequestServiceToClusterIgnoresFailedPeerBids(t *testing.T) {
 	require.Contains(t, err.Error(), "no nodes available")
 }
 
+func TestRequestServiceToCluster_ExcludesSpecifiedPeers(t *testing.T) {
+	t.Parallel()
+	var queriedPeers []string
+	var mu sync.Mutex
+	mock := &testutil.MockPeerClient{
+		OnFetchServiceBid: func(ctx context.Context, addr string, q protocol.DiscoveryQuery) (protocol.ServiceBid, error) {
+			mu.Lock()
+			queriedPeers = append(queriedPeers, addr)
+			mu.Unlock()
+			return protocol.ServiceBid{
+				NodeID:    addr,
+				NodeAddr:  "https://" + addr + ".invalid",
+				CanAccept: true,
+			}, nil
+		},
+	}
+	sv := NewServer(t, testutil.DefaultConfig(t, "local-node"), mock)
+	sv.AddPeer("peer-1", protocol.AddressRecord{Addresses: []string{"https://peer1.invalid"}})
+	sv.AddPeer("peer-2", protocol.AddressRecord{Addresses: []string{"https://peer2.invalid"}})
+
+	// When peer-1 is excluded, only peer-2 should be selected
+	nodeID, _, _, err := sv.RequestServiceToCluster(protocol.DiscoveryQuery{
+		Service:       "ocr",
+		ExcludedPeers: []string{"peer-1", "local-node"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "peer-2", nodeID)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotContains(t, queriedPeers, "peer-1")
+	require.Contains(t, queriedPeers, "peer-2")
+}
+
 func TestDispatchTaskMarksFailedWhenSubmitErrors(t *testing.T) {
 	t.Parallel()
 	mock := &testutil.MockPeerClient{

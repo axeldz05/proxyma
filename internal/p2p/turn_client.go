@@ -114,6 +114,9 @@ func (tm *TURNManager) EnsureAllocation(ctx context.Context) (string, error) {
 }
 
 func (tm *TURNManager) allocateLocked(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	network, serverAddr, family, err := tm.allocateFamilyLocked()
 	if err != nil {
 		return "", err

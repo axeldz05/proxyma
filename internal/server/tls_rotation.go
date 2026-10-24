@@ -30,13 +30,11 @@ func allowedServerALPN(offered []string) []string {
 		return nil
 	}
 	offeredSet := make(map[string]struct{}, len(offered))
-	for _, protocol := range offered {
-		offeredSet[protocol] = struct{}{}
-	}
+	protocol.PopulateMap(offeredSet, offered, struct{}{})
 	allowed := make([]string, 0, len(serverALPNAllowlist))
-	for _, protocol := range serverALPNAllowlist {
-		if _, ok := offeredSet[protocol]; ok {
-			allowed = append(allowed, protocol)
+	for _, proto := range serverALPNAllowlist {
+		if _, ok := offeredSet[proto]; ok {
+			allowed = append(allowed, proto)
 		}
 	}
 	return allowed

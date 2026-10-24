@@ -13,6 +13,9 @@ type TestLogWriter struct {
 }
 
 func (w TestLogWriter) Write(p []byte) (n int, err error) {
+	if w.T != nil && w.T.Context().Err() != nil {
+		return len(p), nil
+	}
 	w.T.Log(strings.TrimSpace(string(p)))
 	return len(p), nil
 }

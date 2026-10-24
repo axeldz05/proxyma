@@ -345,7 +345,8 @@ func TestLocalStreamReturnsHandlerErrorWithoutRequiringOutputClose(t *testing.T)
 		}
 	case <-time.After(serverLifecycleTestTimeout):
 		srv.cancelLife()
-		<-done
+		doneErr := <-done
+		_ = doneErr
 		t.Fatal("stream waited for output close after handler returned an error")
 	}
 }
@@ -637,7 +638,8 @@ func TestLocalStreamHonorsServerShutdownCancellation(t *testing.T) {
 	case <-canceled:
 	case <-time.After(serverLifecycleTestTimeout):
 		releaseOnce.Do(func() { close(release) })
-		<-done
+		doneErr := <-done
+		_ = doneErr
 		t.Fatal("server lifetime cancellation did not reach local stream")
 	}
 	select {

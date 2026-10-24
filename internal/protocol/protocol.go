@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"proxyma/internal/utils"
 )
 
 // NewLogger creates the centralized logger for the Proxyma node.
@@ -114,39 +118,41 @@ type PipelineExecutionState struct {
 	Outputs         map[string]map[string]any `json:"outputs,omitempty"`
 	OutputProducers map[string]string         `json:"output_producers,omitempty"`
 	SelectedTargets map[string]string         `json:"selected_targets,omitempty"`
+	Snapshot        *PipelineSchema           `json:"snapshot,omitempty"`
 }
 
 // CloneJSONMap recursively copies JSON-shaped maps and slices.
 func CloneJSONMap(input map[string]any) map[string]any {
-	if input == nil {
-		return nil
-	}
-	cloned := make(map[string]any, len(input))
-	for key, value := range input {
-		cloned[key] = cloneJSONValue(value)
-	}
-	return cloned
+	return utils.CloneJSONMap(input)
 }
 
-func cloneJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return CloneJSONMap(typed)
-	case map[string]map[string]any:
-		cloned := make(map[string]map[string]any, len(typed))
-		for key, nested := range typed {
-			cloned[key] = CloneJSONMap(nested)
-		}
-		return cloned
-	case []any:
-		cloned := make([]any, len(typed))
-		for index, item := range typed {
-			cloned[index] = cloneJSONValue(item)
-		}
-		return cloned
-	default:
-		return typed
-	}
+// CloneMap returns a copy of m, optionally applying cloneValue to each element.
+// If cloneValue is nil, it delegates to maps.Clone for a standard shallow copy.
+func CloneMap[K comparable, V any](m map[K]V, cloneValue func(V) V) map[K]V {
+	return utils.CloneMap(m, cloneValue)
+}
+
+// PopulateMapIf inserts elements from keys into dst with val if predicate is nil or evaluates to true.
+func PopulateMapIf[K comparable, V any](dst map[K]V, keys []K, val V, predicate func(K) bool) {
+	utils.PopulateMapIf(dst, keys, val, predicate)
+}
+
+// PopulateMap unconditionally inserts elements from keys into dst with val.
+func PopulateMap[K comparable, V any](dst map[K]V, keys []K, val V) {
+	utils.PopulateMap(dst, keys, val)
+}
+
+// CopyMapIf copies entries from src to dst for which predicate evaluates to true.
+// If predicate is nil, all entries are copied unconditionally.
+func CopyMapIf[K comparable, V any](dst, src map[K]V, predicate func(k K, v V) bool) {
+	utils.CopyMapIf(dst, src, predicate)
+}
+
+// MergeMap copies entries from src to dst.
+// If overwrite is true, existing keys in dst are overwritten;
+// if overwrite is false, existing keys in dst are preserved.
+func MergeMap[K comparable, V any](dst, src map[K]V, overwrite bool) {
+	utils.MergeMap(dst, src, overwrite)
 }
 
 // ClonePipelineExecutionState recursively isolates execution output maps.
@@ -156,22 +162,17 @@ func ClonePipelineExecutionState(state *PipelineExecutionState) *PipelineExecuti
 	}
 	cloned := *state
 	if state.Outputs != nil {
-		cloned.Outputs = make(map[string]map[string]any, len(state.Outputs))
-		for stepID, outputs := range state.Outputs {
-			cloned.Outputs[stepID] = CloneJSONMap(outputs)
-		}
+		cloned.Outputs = CloneMap(state.Outputs, CloneJSONMap)
 	}
 	if state.OutputProducers != nil {
-		cloned.OutputProducers = make(map[string]string, len(state.OutputProducers))
-		for stepID, producer := range state.OutputProducers {
-			cloned.OutputProducers[stepID] = producer
-		}
+		cloned.OutputProducers = maps.Clone(state.OutputProducers)
 	}
 	if state.SelectedTargets != nil {
-		cloned.SelectedTargets = make(map[string]string, len(state.SelectedTargets))
-		for stepID, target := range state.SelectedTargets {
-			cloned.SelectedTargets[stepID] = target
-		}
+		cloned.SelectedTargets = maps.Clone(state.SelectedTargets)
+	}
+	if state.Snapshot != nil {
+		clonedSnapshot := ClonePipelineSchema(*state.Snapshot)
+		cloned.Snapshot = &clonedSnapshot
 	}
 	return &cloned
 }
@@ -189,6 +190,7 @@ type DiscoveryQuery struct {
 	RequiredCapabilities map[string]int `json:"required_capabilities,omitempty"`
 	SortStrategy         string         `json:"sort_strategy"`
 	PayloadSizeBytes     int64          `json:"payload_size_bytes"`
+	ExcludedPeers        []string       `json:"excluded_peers,omitempty"`
 }
 
 type ServiceTaskResponse struct {
@@ -200,7 +202,44 @@ type ServiceTaskResponse struct {
 	ProducerNodeID string         `json:"producer_node_id,omitempty"`
 }
 
-const TaskStatusIngesting = "ingesting"
+const (
+	TaskStatusIngesting      = "ingesting"
+	TaskStatusEscrow         = "escrow"
+	TaskEventSchemaMigrated  = "schema_migrated"
+)
+
+// TaskEscrowRequest encapsulates the suspended state of an in-flight pipeline
+// when all target candidates for the next step are exhausted.
+type TaskEscrowRequest struct {
+	TaskID          string                    `json:"task_id"`
+	Service         string                    `json:"service"`
+	RequesterNodeID string                    `json:"requester_node_id"`
+	ReplyTo         string                    `json:"reply_to,omitempty"`
+	StepID          string                    `json:"step_id"`
+	StepIndex       int                       `json:"step_index"`
+	Status          string                    `json:"status,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	Payload         map[string]any            `json:"payload,omitempty"`
+	Outputs         map[string]map[string]any `json:"outputs,omitempty"`
+	PipelineState   *PipelineExecutionState   `json:"pipeline_state,omitempty"`
+	ProducerNodeID  string                    `json:"producer_node_id,omitempty"`
+	Timestamp       time.Time                 `json:"timestamp"`
+}
+
+// CloneTaskEscrowRequest creates a deep copy of an escrow request.
+func CloneTaskEscrowRequest(req TaskEscrowRequest) TaskEscrowRequest {
+	cloned := req
+	if req.Payload != nil {
+		cloned.Payload = CloneJSONMap(req.Payload)
+	}
+	if req.Outputs != nil {
+		cloned.Outputs = CloneMap(req.Outputs, CloneJSONMap)
+	}
+	if req.PipelineState != nil {
+		cloned.PipelineState = ClonePipelineExecutionState(req.PipelineState)
+	}
+	return cloned
+}
 
 // CloneServiceTaskResponse isolates nested outputs at status boundaries.
 func CloneServiceTaskResponse(response ServiceTaskResponse) ServiceTaskResponse {
@@ -480,10 +519,8 @@ func (p ServiceParameter) ValidateValue(paramName string, value any) error {
 		if !ok {
 			s = fmt.Sprint(value)
 		}
-		for _, o := range p.Options {
-			if o == s {
-				return nil
-			}
+		if slices.Contains(p.Options, s) {
+			return nil
 		}
 		return ParamOptionError(paramName, s, p.Options)
 	}
@@ -704,12 +741,11 @@ func MatchServicePattern(pattern, serviceName string) bool {
 	if pattern == "*" || pattern == serviceName {
 		return true
 	}
-	if strings.HasSuffix(pattern, ".*") {
-		prefix := strings.TrimSuffix(pattern, ".*")
+	if prefix, ok := strings.CutSuffix(pattern, ".*"); ok {
 		return serviceName == prefix || strings.HasPrefix(serviceName, prefix+".")
 	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(serviceName, strings.TrimSuffix(pattern, "*"))
+	if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
+		return strings.HasPrefix(serviceName, prefix)
 	}
 	return false
 }

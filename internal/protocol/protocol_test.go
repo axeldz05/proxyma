@@ -311,3 +311,49 @@ func TestRPCTimeouts(t *testing.T) {
 	require.Equal(t, 10*time.Second, protocol.HandlerDialUnary)
 	require.Equal(t, 30*time.Second, protocol.HandlerDialStream)
 }
+
+func TestPopulateMapHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil destination map is safe", func(t *testing.T) {
+		var m map[string]bool
+		protocol.PopulateMap(m, []string{"a", "b"}, true)
+		require.Nil(t, m)
+
+		protocol.PopulateMapIf(m, []string{"a", "b"}, true, func(k string) bool { return true })
+		require.Nil(t, m)
+	})
+
+	t.Run("PopulateMap unconditional", func(t *testing.T) {
+		m := make(map[string]int)
+		protocol.PopulateMap(m, []string{"x", "y", "z"}, 42)
+		require.Equal(t, map[string]int{"x": 42, "y": 42, "z": 42}, m)
+	})
+
+	t.Run("PopulateMapIf with predicate", func(t *testing.T) {
+		m := make(map[string]bool)
+		keys := []string{"keep-1", "skip-1", "keep-2", "skip-2"}
+		protocol.PopulateMapIf(m, keys, true, func(k string) bool {
+			return len(k) > 4 && k[:4] == "keep"
+		})
+		require.Equal(t, map[string]bool{
+			"keep-1": true,
+			"keep-2": true,
+		}, m)
+	})
+
+	t.Run("PopulateMapIf with nil predicate delegates unconditionally", func(t *testing.T) {
+		m := make(map[string]bool)
+		keys := []string{"a", "b"}
+		protocol.PopulateMapIf(m, keys, true, nil)
+		require.Equal(t, map[string]bool{"a": true, "b": true}, m)
+	})
+
+	t.Run("MergeMap delegates to utils", func(t *testing.T) {
+		dst := map[string]string{"k1": "orig"}
+		src := map[string]string{"k1": "new", "k2": "added"}
+		protocol.MergeMap(dst, src, true)
+		require.Equal(t, map[string]string{"k1": "new", "k2": "added"}, dst)
+	})
+}
+

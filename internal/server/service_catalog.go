@@ -47,9 +47,7 @@ func (s *Server) LocalServiceDiscover() ([]string, error) {
 
 func (s *Server) LocalServiceDiscoverContext(ctx context.Context) ([]string, error) {
 	names := make(map[string]bool)
-	for _, name := range s.Compute.ListServices() {
-		names[name] = true
-	}
+	protocol.PopulateMap(names, s.Compute.ListServices(), true)
 	peerLists := mapEachPeer(s, forEachPeerOpts{Context: ctx, Timeout: PeerRPCDiscover, Parallel: true}, func(ctx context.Context, peerID string) ([]string, error) {
 		peerSvc, err := s.DiscoverServices(ctx, peerID)
 		if err != nil {
@@ -59,9 +57,7 @@ func (s *Server) LocalServiceDiscoverContext(ctx context.Context) ([]string, err
 		return peerSvc, nil
 	})
 	for _, peerSvc := range peerLists {
-		for _, name := range peerSvc {
-			names[name] = true
-		}
+		protocol.PopulateMap(names, peerSvc, true)
 	}
 	result := make([]string, 0, len(names))
 	for name := range names {
@@ -138,6 +134,7 @@ func (s *Server) LocalServiceAdd(name, serviceType, exec, desc, param, noRequire
 	}); err != nil {
 		return nil, err
 	}
+	s.goOwned(func() { s.Compute.WakeupEscrowTasks() })
 	return protocol.APIMessage{Message: fmt.Sprintf("Service '%s' added successfully.", serviceName)}, nil
 }
 

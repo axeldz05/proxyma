@@ -212,6 +212,8 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	// Configure compute callbacks
 	s.Compute.SetServiceFinder(s.RequestServiceToCluster)
 	s.Compute.SetTaskDispatcher(s.DispatchTask)
+	s.Compute.SetTaskEscrowDispatcher(s.DispatchEscrowTask)
+	s.Compute.SetTaskJournal(s.Storage)
 	s.Compute.SetVFSBlobResolver(func(ctx context.Context, requesterNodeID, hash string) (string, error) {
 		hasLocal, _ := s.Storage.HasPhysicalBlob(hash)
 		if !hasLocal {
@@ -247,6 +249,18 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 	} else {
 		cfg.Logger.Error("Failed to load persisted pipeline schemas", "error", err)
 	}
+
+	// Restore persisted escrow tasks
+	if activeTasks, err := s.Storage.LoadActiveTasks(); err == nil {
+		for _, task := range activeTasks {
+			if task.Status == protocol.TaskStatusEscrow {
+				s.Compute.RestoreEscrowTask(task)
+			}
+		}
+	} else {
+		cfg.Logger.Error("Failed to load active tasks for escrow recovery", "error", err)
+	}
+	s.Compute.StartEscrowSupervisor(2 * time.Second)
 
 	s.handler = s.trackHTTPHandler(s.MountHandlers())
 

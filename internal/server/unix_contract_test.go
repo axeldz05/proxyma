@@ -166,7 +166,8 @@ func sendRawUnixContractBytes(t *testing.T, srv *Server, raw []byte) protocol.Un
 		t.Fatal(err)
 	}
 	_ = client.Close()
-	<-writeDone
+	writeErr := <-writeDone
+	_ = writeErr
 	<-done
 	return resp
 }

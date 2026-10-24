@@ -27,6 +27,7 @@ func (s *Server) HandleServiceNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Peers.UpdatePeerService(req.NodeID, req.Action, req.Schema)
+	s.goOwned(func() { s.Compute.WakeupEscrowTasks() })
 	w.WriteHeader(http.StatusOK)
 }
 

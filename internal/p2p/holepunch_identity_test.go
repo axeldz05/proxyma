@@ -147,7 +147,8 @@ func TestNewHolePunchGenerationRetriesCanceledPredecessor(t *testing.T) {
 	}()
 	cancelFirst()
 	select {
-	case <-firstDone:
+	case err := <-firstDone:
+		_ = err
 	case <-time.After(time.Second):
 		t.Fatal("canceled predecessor did not finish")
 	}
@@ -160,7 +161,8 @@ func TestNewHolePunchGenerationRetriesCanceledPredecessor(t *testing.T) {
 	}
 	cancelSecond()
 	select {
-	case <-secondDone:
+	case err := <-secondDone:
+		_ = err
 	case <-time.After(time.Second):
 		t.Fatal("replacement generation did not honor cancellation")
 	}

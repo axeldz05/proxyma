@@ -11,14 +11,28 @@ import (
 func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error) {
 	var bids []protocol.ServiceBid
 
-	if schema, ok := s.Compute.GetService(query.Service); ok {
-		if bid, canAccept := s.Compute.BuildServiceBid(query); canAccept {
-			bid.Schema = schema
-			bids = append(bids, bid)
+	isExcluded := func(peerID string) bool {
+		for _, excluded := range query.ExcludedPeers {
+			if peerID == excluded {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !isExcluded(s.Config.ID) {
+		if schema, ok := s.Compute.GetService(query.Service); ok {
+			if bid, canAccept := s.Compute.BuildServiceBid(query); canAccept {
+				bid.Schema = schema
+				bids = append(bids, bid)
+			}
 		}
 	}
 
 	peerBids := mapEachPeer(s, forEachPeerOpts{Timeout: PeerRPCShort, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) (protocol.ServiceBid, error) {
+		if isExcluded(peerID) {
+			return protocol.ServiceBid{}, errPeerSkipped
+		}
 		bid, err := s.peerClient.FetchServiceBid(ctx, peerID, query)
 		if err != nil {
 			s.Config.Logger.Error("FetchServiceBid failed", "peerID", peerID, "err", err)
@@ -103,6 +117,10 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 	defer cancel()
 	if req.PipelineState != nil && req.PipelineState.CurrentStep > 0 {
 		schema, exists := s.Compute.GetPipeline(req.Service)
+		if !exists && req.PipelineState.Snapshot != nil {
+			schema = *req.PipelineState.Snapshot
+			exists = true
+		}
 		if !exists || req.PipelineState.CurrentStep >= len(schema.Steps) {
 			return fmt.Errorf("cannot validate pipeline continuation capability for step %d", req.PipelineState.CurrentStep)
 		}
@@ -136,6 +154,14 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 		return submit(req)
 	}
 	return s.submitTrackedTask(req, submit)
+}
+
+func (s *Server) DispatchEscrowTask(coordinatorPeerID string, req protocol.TaskEscrowRequest) error {
+	ctx, cancel := context.WithTimeout(s.lifetimeCtx, PeerRPCDefault)
+	defer cancel()
+	return s.callPeer(ctx, coordinatorPeerID, func(ctx context.Context, peerID string) error {
+		return s.peerClient.SendTaskEscrow(ctx, peerID, req)
+	})
 }
 
 func (s *Server) ensureQUICSession(peerID string) {

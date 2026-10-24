@@ -43,13 +43,11 @@ func (s *Server) announceOffline(ctx context.Context) {
 		if peerID == s.Config.ID {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			callCtx, cancel := context.WithTimeout(ctx, shutdownOfflineTimeout)
 			defer cancel()
 			_ = s.peerClient.Offline(callCtx, peerID, payload)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -86,6 +84,7 @@ func (s *Server) AddPeer(peerID string, addressRecord protocol.AddressRecord) {
 			s.peerClient.UpdatePeerRoute(peerID, addressRecord)
 		}
 		s.goOwned(func() { s.syncCatalogToPeer(peerID) })
+		s.goOwned(func() { s.Compute.WakeupEscrowTasks() })
 	}
 }
 

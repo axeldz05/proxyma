@@ -106,7 +106,8 @@ func TestShutdownCancelsPipelineBeforeWaitingForHTTP(t *testing.T) {
 	case <-time.After(serverLifecycleTestTimeout):
 		srv.Compute.Close()
 		select {
-		case <-shutdownDone:
+		case err := <-shutdownDone:
+			_ = err
 		case <-time.After(serverLifecycleTestTimeout):
 			t.Fatal("Shutdown remained deadlocked after compute cleanup")
 		}

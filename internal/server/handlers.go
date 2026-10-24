@@ -45,6 +45,7 @@ func (s *Server) httpRoutes() []httpRoute {
 		{Method: http.MethodPost, Path: protocol.PathServicesSubmit, Handler: s.Compute.HandleServiceSubmit},
 		{Method: http.MethodPost, Path: protocol.PathServicesStream, Handler: s.HandleServicesStream},
 		{Method: http.MethodPost, Path: protocol.PathServicesCallback, Handler: s.Compute.HandleServiceCallback},
+		{Method: http.MethodPost, Path: protocol.PathServicesEscrow, Handler: s.Compute.HandleServiceEscrow},
 		{Method: http.MethodPost, Path: protocol.PathServicesNotify, Handler: s.HandleServiceNotify},
 		{Method: http.MethodGet, Path: protocol.PathServices, Handler: s.HandleGetServices},
 		{Method: http.MethodPost, Path: protocol.PathSchemasNotify, Handler: s.HandleSchemaNotify},

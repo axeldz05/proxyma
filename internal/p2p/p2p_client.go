@@ -21,6 +21,7 @@ type PeerClient interface {
 	DiscoverServices(ctx context.Context, peerID string) ([]string, error)
 	SubmitTask(ctx context.Context, peerID string, req protocol.TaskRequest) error
 	SendTaskResponse(ctx context.Context, url string, resp protocol.ServiceTaskResponse) error
+	SendTaskEscrow(ctx context.Context, peerID string, req protocol.TaskEscrowRequest) error
 	FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error)
 	PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error)
 	ReplyRelay(ctx context.Context, sponsorAddr string, resp protocol.RelayResponse) error
@@ -178,6 +179,10 @@ func (c *HTTPPeerClient) SubmitTask(ctx context.Context, peerID string, req prot
 
 func (c *HTTPPeerClient) SendTaskResponse(ctx context.Context, urlStr string, resp protocol.ServiceTaskResponse) error {
 	return doVoid(ctx, c, "POST", protocol.WithServiceQuery(urlStr, resp.Service), "", resp, 0)
+}
+
+func (c *HTTPPeerClient) SendTaskEscrow(ctx context.Context, peerID string, req protocol.TaskEscrowRequest) error {
+	return doVoid(ctx, c, "POST", peerID, protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesEscrow), req.Service), req, 0)
 }
 
 func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, query protocol.DiscoveryQuery) (protocol.ServiceBid, error) {

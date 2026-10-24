@@ -239,7 +239,13 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.mu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("unknown peer ID in routing: %s", peerID)
+		if nodeID != "" && peerID == nodeID && ownAddress != "" {
+			record = protocol.AddressRecord{
+				Addresses: []string{ownAddress},
+			}
+		} else {
+			return nil, fmt.Errorf("unknown peer ID in routing: %s", peerID)
+		}
 	}
 
 	// Clone the request so we don't modify the original. Buffer the body once so

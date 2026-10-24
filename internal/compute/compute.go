@@ -8,14 +8,66 @@ import (
 	"maps"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/storage"
 	"proxyma/internal/telemetry"
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// TaskJournal defines the storage WAL interface for recording task checkpoints and intermediate outputs.
+type TaskJournal interface {
+	AppendTaskCheckpoint(record storage.TaskJournalRecord) error
+	SaveIntermediateOutput(taskID string, stepID string, outputs map[string]any) error
+	PruneIntermediateTaskData(taskID string) error
+}
+
+func (c *ComputeEngine) recordCheckpoint(record storage.TaskJournalRecord) error {
+	if c.taskJournal == nil {
+		return nil
+	}
+	return c.taskJournal.AppendTaskCheckpoint(record)
+}
+
+func (c *ComputeEngine) checkpointFromTask(t protocol.TaskRequest, status string) storage.TaskJournalRecord {
+	return storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:          t.TaskID,
+			Service:         t.Service,
+			RequesterNodeID: t.RequesterNodeID,
+			ReplyTo:         t.ReplyTo,
+			Status:          status,
+			NodeID:          c.nodeID,
+			Payload:         protocol.CloneJSONMap(t.Payload),
+			PipelineState:   protocol.ClonePipelineExecutionState(t.PipelineState),
+		},
+		Timestamp: time.Now().UTC(),
+	}
+}
+
+func (c *ComputeEngine) recordTerminalResponseCheckpoint(response protocol.ServiceTaskResponse, producerNodeID string) {
+	if !isTerminalTaskStatus(response.Status) {
+		return
+	}
+	if producerNodeID == "" {
+		producerNodeID = response.ProducerNodeID
+	}
+	_ = c.recordCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  response.TaskID,
+			Service: response.Service,
+			Status:  response.Status,
+			Error:   response.Error,
+			NodeID:  producerNodeID,
+		},
+		Outputs:   protocol.CloneJSONMap(response.Outputs),
+		Timestamp: time.Now().UTC(),
+	})
+}
 
 // ErrClosed is returned when work is submitted after ComputeEngine shutdown begins.
 var ErrClosed = errors.New("compute engine closed")
@@ -25,6 +77,7 @@ var (
 	ErrTaskTerminal  = errors.New("task already terminal")
 	ErrTaskDuplicate = errors.New("duplicate task ID")
 	ErrTaskProducer  = errors.New("unexpected task producer")
+	ErrTaskEscrowed  = errors.New("task escalated to escrow")
 )
 
 const (
@@ -66,8 +119,13 @@ type ComputeEngine struct {
 	pipelinesMu           sync.RWMutex
 	serviceFinder         ServiceFinder
 	taskDispatcher        TaskDispatcher
+	taskJournal           TaskJournal
 	vfsBlobResolver       VFSBlobResolver
 	vfsBlobStager         VFSBlobStager
+	escrowTasksMu         sync.RWMutex
+	escrowTasks           map[string]protocol.TaskEscrowRequest
+	taskEscrowDispatcher  TaskEscrowDispatcher
+	escrowSupervisorOnce  sync.Once
 	lifetimeCtx           context.Context
 	cancelLifetime        context.CancelFunc
 	lifecycleMu           sync.RWMutex
@@ -79,6 +137,7 @@ type VFSBlobStager func(path string) (string, int64, error)
 type VFSBlobResolver func(ctx context.Context, sourceNodeID, hash string) (string, error)
 type ServiceFinder func(query protocol.DiscoveryQuery) (string, string, protocol.ServiceSchema, error)
 type TaskDispatcher func(targetPeerID string, req protocol.TaskRequest) error
+type TaskEscrowDispatcher func(coordinatorPeerID string, req protocol.TaskEscrowRequest) error
 
 type registeredService struct {
 	schema  protocol.ServiceSchema
@@ -128,6 +187,7 @@ func NewComputeEngine(parent context.Context, logger *slog.Logger, pc p2p.PeerCl
 		nodeID:                id,
 		pipelines:             make(map[string]protocol.PipelineSchema),
 		pipelineRevisions:     make(map[string]protocol.PipelineSchema),
+		escrowTasks:           make(map[string]protocol.TaskEscrowRequest),
 		lifetimeCtx:           lifetimeCtx,
 		cancelLifetime:        cancelLifetime,
 	}
@@ -238,6 +298,14 @@ func (c *ComputeEngine) SetTaskDispatcher(dispatcher TaskDispatcher) {
 	c.taskDispatcher = dispatcher
 }
 
+func (c *ComputeEngine) SetTaskEscrowDispatcher(dispatcher TaskEscrowDispatcher) {
+	c.taskEscrowDispatcher = dispatcher
+}
+
+func (c *ComputeEngine) SetTaskJournal(journal TaskJournal) {
+	c.taskJournal = journal
+}
+
 func (c *ComputeEngine) SetVFSBlobResolver(resolver VFSBlobResolver) {
 	c.vfsBlobResolver = resolver
 }
@@ -255,7 +323,8 @@ func (c *ComputeEngine) BindPipelineTask(req *protocol.TaskRequest) error {
 	if !exists {
 		return nil
 	}
-	return bindPipelineState(req, schema)
+	_, err := c.bindPipelineState(req, schema)
+	return err
 }
 
 // PreparePipelineTargets resolves every dynamic step once at the originating
@@ -280,6 +349,9 @@ func (c *ComputeEngine) PreparePipelineTargets(req *protocol.TaskRequest) error 
 		}
 		targetPeer, err := c.selectPipelineStepTarget(step, stepIndex)
 		if err != nil {
+			if stepIndex > 0 {
+				continue
+			}
 			return fmt.Errorf("select target for pipeline step '%s': %w", step.ID, err)
 		}
 		req.PipelineState.SelectedTargets[step.ID] = targetPeer
@@ -294,6 +366,10 @@ func (c *ComputeEngine) BindPipelineStepTarget(req *protocol.TaskRequest, target
 		return nil
 	}
 	schema, exists := c.GetPipeline(req.Service)
+	if !exists && req.PipelineState.Snapshot != nil {
+		schema = *req.PipelineState.Snapshot
+		exists = true
+	}
 	if !exists {
 		return nil
 	}
@@ -376,15 +452,17 @@ func (c *ComputeEngine) serviceWorker(maxWorkers int) {
 			return
 		}
 		var task protocol.TaskRequest
+		// Wait for a task
 		select {
 		case <-c.lifetimeCtx.Done():
 			return
 		case task = <-c.taskQueue:
 		}
+		// Semaphore permit
 		select {
 		case <-c.lifetimeCtx.Done():
 			return
-		case sem <- struct{}{}:
+		case sem <- struct{}{}: // blocks until activeWorkers < maxWorkers
 		}
 		if c.lifetimeCtx.Err() != nil {
 			<-sem
@@ -399,6 +477,11 @@ func (c *ComputeEngine) serviceWorker(maxWorkers int) {
 	}
 }
 
+// TODO: what would happen if a pipeline is changed while a task is being process
+// in the middle of a pipeline?
+// TODO: should the state of the tasks be shared using a consensus or backup-ish approach
+// similar to PostgreSQL with log? Concerns about having a node suddenly going offline and is in
+// the pipeline. it needs to have a self-healing process if possible
 func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 	c.activeWorkers.Add(1)
 	defer c.activeWorkers.Add(-1)
@@ -426,42 +509,121 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 		}
 	}
 
-	if err := bindPipelineState(&t, pipelineSchema); err != nil {
+	execSchema, err := c.bindPipelineState(&t, pipelineSchema)
+	if err != nil {
 		c.sendPipelineError(t, err)
 		return
 	}
-	c.executePipelineStep(t, pipelineSchema)
+	c.executePipelineStep(t, execSchema)
 }
 
-func bindPipelineState(t *protocol.TaskRequest, schema protocol.PipelineSchema) error {
-	schemaHash := protocol.PipelineSchemaHash(schema)
+// tryDynamicSchemaMigration attempts to migrate an in-flight pipeline state to targetSchema
+// if targetSchema is a newer revision and satisfies prefix preservation invariants.
+// Returns the migrated schema if successful, or currentSchema if migration is rejected or unnecessary.
+func (c *ComputeEngine) tryDynamicSchemaMigration(t protocol.TaskRequest, state *protocol.PipelineExecutionState, currentSchema, targetSchema protocol.PipelineSchema) protocol.PipelineSchema {
+	if state == nil || currentSchema.ID != targetSchema.ID || len(targetSchema.Steps) == 0 {
+		return currentSchema
+	}
+
+	targetHash := protocol.PipelineSchemaHash(targetSchema)
+	isUpdated := targetSchema.Version > state.PipelineVersion ||
+		(targetSchema.Version == state.PipelineVersion && targetHash != state.SchemaHash)
+	if !isUpdated {
+		return currentSchema
+	}
+
+	completedSteps := make([]string, 0, state.CurrentStep)
+	for i := 0; i < state.CurrentStep && i < len(currentSchema.Steps); i++ {
+		completedSteps = append(completedSteps, currentSchema.Steps[i].ID)
+	}
+
+	migrationErr := protocol.ValidatePrefixMigration(completedSteps, state.Outputs, currentSchema, targetSchema)
+	if migrationErr != nil {
+		c.logger.Info("Dynamic schema migration rejected, falling back to snapshot",
+			"pipelineID", state.PipelineID,
+			"reason", migrationErr,
+		)
+		return currentSchema
+	}
+
+	c.logger.Info("Dynamic schema migration accepted for pipeline",
+		"pipelineID", state.PipelineID,
+		"fromVersion", state.PipelineVersion,
+		"toVersion", targetSchema.Version,
+	)
+	fromVersion := state.PipelineVersion
+	state.PipelineVersion = targetSchema.Version
+	state.SchemaHash = targetHash
+	cloned := protocol.ClonePipelineSchema(targetSchema)
+	state.Snapshot = &cloned
+
+	rec := c.checkpointFromTask(t, protocol.TaskEventSchemaMigrated)
+	rec.StepIndex = state.CurrentStep
+	rec.PipelineState = protocol.ClonePipelineExecutionState(state)
+	rec.Metadata = map[string]string{
+		"from_version": strconv.Itoa(fromVersion),
+		"to_version":   strconv.Itoa(targetSchema.Version),
+	}
+	_ = c.recordCheckpoint(rec)
+
+	return targetSchema
+}
+
+func (c *ComputeEngine) bindPipelineState(t *protocol.TaskRequest, localSchema protocol.PipelineSchema) (protocol.PipelineSchema, error) {
+	schemaHash := protocol.PipelineSchemaHash(localSchema)
 	if t.PipelineState == nil {
+		clonedSnapshot := protocol.ClonePipelineSchema(localSchema)
 		t.PipelineState = &protocol.PipelineExecutionState{
-			PipelineID:      schema.ID,
-			PipelineVersion: schema.Version,
+			PipelineID:      localSchema.ID,
+			PipelineVersion: localSchema.Version,
 			SchemaHash:      schemaHash,
+			Snapshot:        &clonedSnapshot,
 			Outputs:         make(map[string]map[string]any),
 			OutputProducers: map[string]string{"$initial": t.RequesterNodeID},
 		}
-		return nil
+		return localSchema, nil
 	}
 
 	incoming := t.PipelineState
-	if incoming.PipelineID != schema.ID ||
-		incoming.PipelineVersion != schema.Version ||
-		incoming.SchemaHash != schemaHash {
-		return fmt.Errorf(
+	if incoming.PipelineID != localSchema.ID {
+		return localSchema, fmt.Errorf("pipeline schema ID mismatch: task is bound to %q, local is %q",
+			incoming.PipelineID, localSchema.ID)
+	}
+
+	// Resolve the task's starting snapshot
+	var currentSchema protocol.PipelineSchema
+	var hasSnapshot bool
+	if incoming.Snapshot != nil {
+		currentSchema = protocol.ClonePipelineSchema(*incoming.Snapshot)
+		hasSnapshot = true
+	} else if rev, exists := c.GetPipelineRevision(incoming.PipelineID); exists && protocol.PipelineSchemaHash(rev) == incoming.SchemaHash {
+		currentSchema = rev
+		cloned := protocol.ClonePipelineSchema(rev)
+		incoming.Snapshot = &cloned
+		hasSnapshot = true
+	} else if schemaHash == incoming.SchemaHash {
+		currentSchema = protocol.ClonePipelineSchema(localSchema)
+		cloned := protocol.ClonePipelineSchema(localSchema)
+		incoming.Snapshot = &cloned
+		hasSnapshot = true
+	}
+
+	if !hasSnapshot {
+		return localSchema, fmt.Errorf(
 			"pipeline schema mismatch for '%s': task is bound to version %d hash %s, local schema is version %d hash %s",
-			schema.ID, incoming.PipelineVersion, incoming.SchemaHash, schema.Version, schemaHash,
+			localSchema.ID, incoming.PipelineVersion, incoming.SchemaHash, localSchema.Version, schemaHash,
 		)
 	}
-	if incoming.CurrentStep > len(schema.Steps) {
-		return fmt.Errorf("step index %d out of bounds", incoming.CurrentStep)
+
+	execSchema := c.tryDynamicSchemaMigration(*t, incoming, currentSchema, localSchema)
+
+	if incoming.CurrentStep > len(execSchema.Steps) {
+		return execSchema, fmt.Errorf("step index %d out of bounds", incoming.CurrentStep)
 	}
-	if incoming.CurrentStep > 0 {
-		previousStepID := schema.Steps[incoming.CurrentStep-1].ID
+	if incoming.CurrentStep > 0 && len(execSchema.Steps) > 0 {
+		previousStepID := execSchema.Steps[incoming.CurrentStep-1].ID
 		if incoming.OutputProducers[previousStepID] == "" {
-			return fmt.Errorf("pipeline provenance missing for completed step '%s'", previousStepID)
+			return execSchema, fmt.Errorf("pipeline provenance missing for completed step '%s'", previousStepID)
 		}
 	}
 	t.PipelineState = protocol.ClonePipelineExecutionState(incoming)
@@ -471,7 +633,7 @@ func bindPipelineState(t *protocol.TaskRequest, schema protocol.PipelineSchema) 
 	if t.PipelineState.OutputProducers["$initial"] == "" {
 		t.PipelineState.OutputProducers["$initial"] = t.RequesterNodeID
 	}
-	return nil
+	return execSchema, nil
 }
 
 func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema protocol.PipelineSchema) {
@@ -503,13 +665,12 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 			var val any
 			if conn.FromStep == "$initial" {
 				val = t.Payload[conn.FromPort]
-				inputProducers[conn.ToPort] = pipelineState.OutputProducers["$initial"]
 			} else {
 				if stepOutputs, ok := pipelineState.Outputs[conn.FromStep]; ok {
 					val = stepOutputs[conn.FromPort]
 				}
-				inputProducers[conn.ToPort] = pipelineState.OutputProducers[conn.FromStep]
 			}
+			inputProducers[conn.ToPort] = pipelineState.OutputProducers[conn.FromStep]
 			stepPayload[conn.ToPort] = val
 		}
 	}
@@ -591,10 +752,22 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 			c.sendPipelineError(t, fmt.Errorf("step '%s' failed staging outputs: %w", currentStep.ID, err))
 			return
 		}
-
+		// TODO: use context to clean unused outputs when pipeline is finished
 		pipelineState.Outputs[currentStep.ID] = outputs
 		pipelineState.OutputProducers[currentStep.ID] = c.nodeID
 		pipelineState.CurrentStep++
+
+		// Save intermediate output and record WAL checkpoint
+		if c.taskJournal != nil {
+			_ = c.taskJournal.SaveIntermediateOutput(t.TaskID, currentStep.ID, outputs)
+		}
+		rec := c.checkpointFromTask(t, "running")
+		rec.StepID = currentStep.ID
+		rec.StepIndex = pipelineState.CurrentStep
+		rec.Outputs = protocol.CloneJSONMap(outputs)
+		rec.Intermediate = true
+		rec.PipelineState = protocol.ClonePipelineExecutionState(pipelineState)
+		_ = c.recordCheckpoint(rec)
 
 		c.advancePipeline(t, schema)
 	} else {
@@ -620,8 +793,20 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 		var err error
 		targetPeer, err = c.selectPipelineStepTarget(step, stepIndex)
 		if err != nil {
-			c.sendPipelineError(t, fmt.Errorf("failed to discover node for step '%s': %w", step.ID, err))
-			return
+			if _, localSupports := c.registry.GetHandler(step.Service); localSupports {
+				targetPeer = c.nodeID
+			} else {
+				exhaustErr := fmt.Errorf("failed to discover node for step '%s': %w", step.ID, err)
+				if stepIndex > 0 && t.PipelineState != nil && (t.RequesterNodeID != "" || t.ReplyTo != "") {
+					if escrowErr := c.escalateToEscrow(t, step, stepIndex, exhaustErr); escrowErr == nil {
+						return
+					} else {
+						c.logger.Warn("Failed to escalate task to escrow", "taskID", t.TaskID, "step", step.ID, "error", escrowErr)
+					}
+				}
+				c.sendPipelineError(t, exhaustErr)
+				return
+			}
 		}
 		if t.PipelineState != nil {
 			if t.PipelineState.SelectedTargets == nil {
@@ -631,27 +816,105 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 		}
 	}
 
-	var err error
-	if targetPeer == c.nodeID {
-		c.acceptedTasks.Delete(t.TaskID)
-		t.ExpectedProducerNodeID = c.nodeID
-		err = c.SubmitTask(t)
-		if err != nil {
-			c.sendPipelineError(t, fmt.Errorf("failed to submit local task: %w", err))
-		}
-	} else {
-		if c.taskDispatcher == nil {
-			c.sendPipelineError(t, fmt.Errorf("task dispatcher not configured on compute engine"))
+	err := c.dispatchStepWithFailover(t, step, targetPeer, stepIndex)
+	if err != nil {
+		if errors.Is(err, ErrTaskEscrowed) {
 			return
 		}
-		t.ExpectedProducerNodeID = targetPeer
-		err = c.taskDispatcher(targetPeer, t)
-		if err != nil {
-			c.sendPipelineError(t, fmt.Errorf("failed to dispatch step '%s' to peer '%s': %w", step.ID, targetPeer, err))
-			return
-		}
-		c.acceptedTasks.Delete(t.TaskID)
+		c.sendPipelineError(t, err)
 	}
+}
+
+func (c *ComputeEngine) dispatchStepWithFailover(t protocol.TaskRequest, step protocol.PipelineStep, initialTarget string, stepIndex int) error {
+	triedPeers := make(map[string]bool)
+	currentTarget := initialTarget
+
+	for range 3 {
+		triedPeers[currentTarget] = true
+
+		if currentTarget == c.nodeID {
+			c.acceptedTasks.Delete(t.TaskID)
+			t.ExpectedProducerNodeID = c.nodeID
+			if t.PipelineState != nil {
+				if t.PipelineState.SelectedTargets == nil {
+					t.PipelineState.SelectedTargets = make(map[string]string)
+				}
+				t.PipelineState.SelectedTargets[step.ID] = c.nodeID
+			}
+			err := c.SubmitTask(t)
+			if err == nil {
+				return nil
+			}
+			c.logger.Warn("Local execution failed for pipeline step, attempting failover",
+				"step", step.ID, "error", err)
+		} else {
+			if c.taskDispatcher == nil {
+				return fmt.Errorf("task dispatcher not configured on compute engine")
+			}
+			t.ExpectedProducerNodeID = currentTarget
+			if t.PipelineState != nil {
+				if t.PipelineState.SelectedTargets == nil {
+					t.PipelineState.SelectedTargets = make(map[string]string)
+				}
+				t.PipelineState.SelectedTargets[step.ID] = currentTarget
+			}
+			err := c.taskDispatcher(currentTarget, t)
+			if err == nil {
+				c.acceptedTasks.Delete(t.TaskID)
+				return nil
+			}
+			c.logger.Warn("Failed to dispatch pipeline step to peer, attempting failover",
+				"step", step.ID, "target", currentTarget, "error", err)
+		}
+
+		// Failover: query serviceFinder for an alternative candidate node offering the service
+		var altTarget string
+		if c.serviceFinder != nil {
+			var excluded []string
+			for p := range triedPeers {
+				excluded = append(excluded, p)
+			}
+			query := protocol.DiscoveryQuery{
+				Service:       step.Service,
+				ExcludedPeers: excluded,
+			}
+			if stepIndex > 0 {
+				query.RequiredCapabilities = map[string]int{
+					protocol.CapabilityPipelineState: protocol.PipelineStateCapabilityVersion,
+				}
+			}
+			peerID, _, _, findErr := c.serviceFinder(query)
+			if findErr == nil && peerID != "" && !triedPeers[peerID] {
+				altTarget = peerID
+			}
+		}
+
+		// If serviceFinder didn't find an untried peer, check if local node can handle it
+		if altTarget == "" && !triedPeers[c.nodeID] {
+			if _, localSupports := c.registry.GetHandler(step.Service); localSupports {
+				altTarget = c.nodeID
+			}
+		}
+
+		if altTarget == "" {
+			break
+		}
+
+		c.logger.Info("Failing over pipeline step to candidate node",
+			"step", step.ID, "previous", currentTarget, "alternative", altTarget)
+		currentTarget = altTarget
+	}
+
+	failErr := fmt.Errorf("failed to dispatch step '%s': all target candidates exhausted (initial: %s)", step.ID, initialTarget)
+	if stepIndex > 0 && t.PipelineState != nil && (t.RequesterNodeID != "" || t.ReplyTo != "") {
+		if escrowErr := c.escalateToEscrow(t, step, stepIndex, failErr); escrowErr == nil {
+			return ErrTaskEscrowed
+		} else {
+			c.logger.Warn("Failed to escalate task to escrow", "taskID", t.TaskID, "step", step.ID, "error", escrowErr)
+		}
+	}
+
+	return failErr
 }
 
 func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.PipelineSchema) {
@@ -659,6 +922,11 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 	if pipelineState == nil {
 		c.sendPipelineError(t, fmt.Errorf("pipeline execution state is missing"))
 		return
+	}
+
+	// Dynamic in-flight schema migration check before executing next step
+	if latest, exists := c.GetPipeline(t.Service); exists {
+		schema = c.tryDynamicSchemaMigration(t, pipelineState, schema, latest)
 	}
 
 	if pipelineState.CurrentStep < len(schema.Steps) {
@@ -683,6 +951,14 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		}
 
 		logger.LogSuccess()
+
+		rec := c.checkpointFromTask(t, "completed")
+		rec.StepID = finalStepID
+		rec.StepIndex = pipelineState.CurrentStep
+		rec.Outputs = protocol.CloneJSONMap(finalOutputs)
+		rec.Intermediate = false
+		rec.PipelineState = protocol.ClonePipelineExecutionState(pipelineState)
+		_ = c.recordCheckpoint(rec)
 
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:         t.TaskID,
@@ -710,6 +986,20 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 }
 
 func (c *ComputeEngine) sendPipelineError(t protocol.TaskRequest, err error) {
+	var stepID string
+	var stepIndex int
+	if t.PipelineState != nil {
+		stepIndex = t.PipelineState.CurrentStep
+		if stepIndex > 0 && t.PipelineState.Snapshot != nil && stepIndex-1 < len(t.PipelineState.Snapshot.Steps) {
+			stepID = t.PipelineState.Snapshot.Steps[stepIndex-1].ID
+		}
+	}
+	rec := c.checkpointFromTask(t, "failed")
+	rec.StepID = stepID
+	rec.StepIndex = stepIndex
+	rec.Error = err.Error()
+	_ = c.recordCheckpoint(rec)
+
 	responsePayload := protocol.ServiceTaskResponse{
 		TaskID:         t.TaskID,
 		Service:        t.Service,
@@ -872,6 +1162,18 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 	c.taskStatusesMu.Lock()
 	defer c.taskStatusesMu.Unlock()
 	if _, exists := c.taskStatuses.Load(req.TaskID); exists {
+		metadata := c.taskStatusMeta[req.TaskID]
+		if metadata.delegatedProducers == nil {
+			metadata.delegatedProducers = make(map[string]struct{})
+		}
+		for p := range delegatedProducers {
+			metadata.delegatedProducers[p] = struct{}{}
+		}
+		if req.ExpectedProducerNodeID != "" {
+			metadata.expectedProducer = req.ExpectedProducerNodeID
+			metadata.delegatedProducers[req.ExpectedProducerNodeID] = struct{}{}
+		}
+		c.taskStatusMeta[req.TaskID] = metadata
 		return
 	}
 	c.taskStatuses.Store(req.TaskID, response)
@@ -969,6 +1271,7 @@ func (c *ComputeEngine) AcceptTaskCallback(producerNodeID string, response proto
 		return fmt.Errorf("invalid callback task status %q", response.Status)
 	}
 	c.storeTaskStatusLocked(response)
+	c.recordTerminalResponseCheckpoint(response, producerNodeID)
 	return nil
 }
 
@@ -989,6 +1292,7 @@ func (c *ComputeEngine) RecordTaskResponse(response protocol.ServiceTaskResponse
 		c.acceptedTasks.Delete(response.TaskID)
 	}
 	c.storeTaskStatusLocked(response)
+	c.recordTerminalResponseCheckpoint(response, response.ProducerNodeID)
 }
 
 func (c *ComputeEngine) setTaskStatus(response protocol.ServiceTaskResponse) {

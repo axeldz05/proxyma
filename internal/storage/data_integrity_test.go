@@ -184,7 +184,7 @@ func TestStorageStrictReadsPropagateClosedDatabaseErrors(t *testing.T) {
 		"known.txt": {Name: "known.txt", Hash: "hash", Version: 1},
 	})
 	require.Error(t, err)
-	_, err = engine.CountDownloadIntentsE()
+	_, err = engine.CountDownloadIntents()
 	require.Error(t, err)
 }
 

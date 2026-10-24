@@ -61,3 +61,4 @@ func TestSaveBlobRenameOntoDirectoryFails(t *testing.T) {
 	_, _, err = st.SaveBlob(bytes.NewReader(content))
 	require.Error(t, err, "SaveBlob must not succeed when destination cannot be written")
 }
+

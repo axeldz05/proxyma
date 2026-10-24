@@ -80,16 +80,29 @@ func IsValidCASHash(s string) bool {
 	return len(s) == 64 && isHexString(s)
 }
 
+// Walk traverses the storage directory, invoking fn for every regular file entry (L1).
+func (st *Storage) Walk(fn func(path string, d fs.DirEntry) error) error {
+	return filepath.WalkDir(st.baseDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return fn(path, d)
+		}
+		return nil
+	})
+}
+
 func (st *Storage) populateCache() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	_ = VisitAndDo(st, func(path string, d fs.DirEntry) error {
+	_ = st.Walk(func(path string, d fs.DirEntry) error {
 		name := d.Name()
 		if IsValidCASHash(name) {
 			st.blobCache[name] = true
 		}
 		return nil
-	}, IsNotADir)
+	})
 }
 
 func (st *Storage) Name() string {

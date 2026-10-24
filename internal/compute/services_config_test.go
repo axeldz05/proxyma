@@ -22,9 +22,7 @@ func TestEveryServiceTypeHasBuilder(t *testing.T) {
 	}
 
 	known := make(map[protocol.ServiceType]bool, len(protocol.KnownServiceTypes()))
-	for _, typ := range protocol.KnownServiceTypes() {
-		known[typ] = true
-	}
+	protocol.PopulateMap(known, protocol.KnownServiceTypes(), true)
 	for typ := range serviceTypeBuilders {
 		if !known[typ] {
 			t.Errorf("builder registered for %q, which is not a canonical protocol type", typ)

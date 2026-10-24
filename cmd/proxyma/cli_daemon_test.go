@@ -313,7 +313,8 @@ func TestCLIContractRunSignalShutdown(t *testing.T) {
 			return
 		}
 		_ = cmd.Process.Kill()
-		<-wait
+		waitErr := <-wait
+		_ = waitErr
 	})
 
 	require.Eventually(t, func() bool {
@@ -464,7 +465,8 @@ func startLiveCLIContractDaemon(t *testing.T, storagePath string) *liveCLIContra
 		t.Fatalf("daemon exited before readiness: %v\n%s", err, output.String())
 	case <-time.After(10 * time.Second):
 		_ = cmd.Process.Kill()
-		<-wait
+		waitErr := <-wait
+		_ = waitErr
 		t.Fatalf("daemon readiness timed out\n%s", output.String())
 	}
 
@@ -488,7 +490,8 @@ func (d *liveCLIContractDaemon) stop() error {
 			d.stopErr = fmt.Errorf("request daemon stop: %w", err)
 			_ = d.stdin.Close()
 			_ = d.process.Kill()
-			<-d.wait
+			waitErr := <-d.wait
+			_ = waitErr
 			return
 		}
 		_ = d.stdin.Close()
@@ -501,7 +504,8 @@ func (d *liveCLIContractDaemon) stop() error {
 		case <-time.After(10 * time.Second):
 			d.stopErr = fmt.Errorf("daemon shutdown timed out")
 			_ = d.process.Kill()
-			<-d.wait
+			waitErr := <-d.wait
+			_ = waitErr
 		}
 	})
 	return d.stopErr

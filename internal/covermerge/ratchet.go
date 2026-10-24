@@ -237,7 +237,7 @@ func ReadBaselineFile(filePath string) (Baseline, error) {
 type oneDecimal float64
 
 func (value oneDecimal) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%.1f", value)), nil
+	return fmt.Appendf(nil, "%.1f", value), nil
 }
 
 type baselineJSON struct {

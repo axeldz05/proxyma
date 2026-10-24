@@ -59,13 +59,21 @@ func (s *ComputeEngine) HandleServiceSubmit(w http.ResponseWriter, r *http.Reque
 	} else {
 		expectedSubmitter := taskReq.PipelineState.OutputProducers["$initial"]
 		if taskReq.PipelineState.CurrentStep > 0 {
-			if schema, exists := s.GetPipeline(taskReq.Service); exists &&
+			var previousStepID string
+			if taskReq.PipelineState.Snapshot != nil && taskReq.PipelineState.CurrentStep <= len(taskReq.PipelineState.Snapshot.Steps) {
+				previousStepID = taskReq.PipelineState.Snapshot.Steps[taskReq.PipelineState.CurrentStep-1].ID
+			} else if schema, exists := s.GetPipeline(taskReq.Service); exists &&
 				taskReq.PipelineState.CurrentStep <= len(schema.Steps) {
-				previousStepID := schema.Steps[taskReq.PipelineState.CurrentStep-1].ID
+				previousStepID = schema.Steps[taskReq.PipelineState.CurrentStep-1].ID
+			}
+			if previousStepID != "" {
 				expectedSubmitter = taskReq.PipelineState.OutputProducers[previousStepID]
 			}
 		}
-		if expectedSubmitter == "" || expectedSubmitter != submitterNodeID {
+		initialSubmitter := taskReq.PipelineState.OutputProducers["$initial"]
+		isAuthorizedCoordinator := (initialSubmitter != "" && initialSubmitter == submitterNodeID) ||
+			(taskReq.RequesterNodeID != "" && taskReq.RequesterNodeID == submitterNodeID)
+		if (expectedSubmitter == "" || expectedSubmitter != submitterNodeID) && !isAuthorizedCoordinator {
 			utils.RespondError(w, http.StatusForbidden, "pipeline provenance does not match authenticated submitter")
 			return
 		}
@@ -123,3 +131,40 @@ func (s *ComputeEngine) HandleServiceCallback(w http.ResponseWriter, r *http.Req
 		JobID:   webhookPayload.TaskID,
 	})
 }
+
+func (s *ComputeEngine) HandleServiceEscrow(w http.ResponseWriter, r *http.Request) {
+	escrowReq, ok := utils.DecodeJSONOrError[protocol.TaskEscrowRequest](w, r)
+	if !ok {
+		return
+	}
+	producerNodeID, authenticated := p2p.RequirePeerCN(w, r)
+	if !authenticated {
+		return
+	}
+	if escrowReq.ProducerNodeID != "" && escrowReq.ProducerNodeID != producerNodeID {
+		utils.RespondError(w, http.StatusForbidden, "producer node ID must match authenticated peer")
+		return
+	}
+	if escrowReq.RequesterNodeID != "" && escrowReq.RequesterNodeID != s.nodeID {
+		utils.RespondError(w, http.StatusForbidden, "requester node ID must match coordinator")
+		return
+	}
+	if escrowReq.ProducerNodeID == "" {
+		escrowReq.ProducerNodeID = producerNodeID
+	}
+	if escrowReq.RequesterNodeID == "" {
+		escrowReq.RequesterNodeID = s.nodeID
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := s.PutTaskInEscrow(escrowReq); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to place task in escrow: "+err.Error())
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, protocol.APITaskAck{
+		Status:  "escrow",
+		Message: "Task accepted and placed in escrow",
+		JobID:   escrowReq.TaskID,
+	})
+}
+

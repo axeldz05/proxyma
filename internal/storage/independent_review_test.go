@@ -88,7 +88,7 @@ func TestRequestRemoteDownloadRejectsStaleMetadataBeforeDurableIntent(t *testing
 	err = engine.requestRemoteDownload(stale, "https://stale")
 	require.ErrorIs(t, err, ErrBlobDiscarded)
 	require.Zero(t, callbacks.Load())
-	count, countErr := engine.CountDownloadIntentsE()
+	count, countErr := engine.CountDownloadIntents()
 	require.NoError(t, countErr)
 	require.Zero(t, count)
 }
@@ -114,7 +114,7 @@ func TestDownloadCompletionInsideCallbackDoesNotRestoreActiveMarker(t *testing.T
 	require.NoError(t, err)
 
 	require.NoError(t, engine.requestRemoteDownload(entry, "https://peer"))
-	count, err := engine.CountDownloadIntentsE()
+	count, err := engine.CountDownloadIntents()
 	require.NoError(t, err)
 	require.Zero(t, count)
 	engine.downloadMu.Lock()
@@ -286,7 +286,7 @@ func TestDownloadCallbackFailureRollsBackOnlyItsReservation(t *testing.T) {
 	engine.downloadMu.Lock()
 	require.Empty(t, engine.activeDownloads)
 	engine.downloadMu.Unlock()
-	count, err := engine.CountDownloadIntentsE()
+	count, err := engine.CountDownloadIntents()
 	require.NoError(t, err)
 	require.Equal(t, 1, count, "durable intent remains for retry")
 }

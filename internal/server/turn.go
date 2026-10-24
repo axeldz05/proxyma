@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/pion/turn/v5"
 	"proxyma/internal/protocol"
@@ -16,6 +17,50 @@ const (
 	turnRelayPortMax = 49200
 )
 
+type closablePionLogger struct {
+	mu     sync.RWMutex
+	closed bool
+	base   utils.SlogLike
+}
+
+func (l *closablePionLogger) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
+}
+
+func (l *closablePionLogger) Debug(msg string, args ...any) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.closed && l.base != nil {
+		l.base.Debug(msg, args...)
+	}
+}
+
+func (l *closablePionLogger) Info(msg string, args ...any) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.closed && l.base != nil {
+		l.base.Info(msg, args...)
+	}
+}
+
+func (l *closablePionLogger) Warn(msg string, args ...any) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.closed && l.base != nil {
+		l.base.Warn(msg, args...)
+	}
+}
+
+func (l *closablePionLogger) Error(msg string, args ...any) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.closed && l.base != nil {
+		l.base.Error(msg, args...)
+	}
+}
+
 // turnServer is the embedded pion/turn listener that relays mesh traffic for
 // peers that cannot reach each other directly. It serves one listener per
 // address family with a known relay IP.
@@ -24,6 +69,7 @@ type turnServer struct {
 	configs []turn.PacketConnConfig
 	conns   []net.PacketConn
 	addrs   []string
+	pionLog *closablePionLogger
 }
 
 // maybeStartTURNServer starts the embedded TURN server once per node lifetime
@@ -120,7 +166,7 @@ func startTURNServer(cfg protocol.NodeConfig, relayV4, relayV6 string) (*turnSer
 
 	ts := &turnServer{}
 	if relayV4 != "" {
-		if err := ts.appendFamily(cfg, "udp4", listenAddr, relayV4); err != nil {
+		if err := ts.appendFamily("udp4", listenAddr, relayV4); err != nil {
 			ts.closeConns()
 			return nil, err
 		}
@@ -128,7 +174,7 @@ func startTURNServer(cfg protocol.NodeConfig, relayV4, relayV6 string) (*turnSer
 	if relayV6 != "" {
 		// IPv6 is best effort: skip it when the host cannot bind, but only
 		// while the IPv4 listener already exists.
-		if err := ts.appendFamily(cfg, "udp6", net.JoinHostPort("::", port), relayV6); err != nil {
+		if err := ts.appendFamily("udp6", net.JoinHostPort("::", port), relayV6); err != nil {
 			if len(ts.conns) == 0 {
 				ts.closeConns()
 				return nil, err
@@ -143,17 +189,19 @@ func startTURNServer(cfg protocol.NodeConfig, relayV4, relayV6 string) (*turnSer
 		return nil, fmt.Errorf("no TURN listener could be started")
 	}
 
+	pionLog := &closablePionLogger{base: cfg.Logger}
 	srv, err := turn.NewServer(turn.ServerConfig{
 		PacketConnConfigs: ts.configs,
 		Realm:             realm(cfg),
 		AuthHandler:       turn.LongTermTURNRESTAuthHandler(cfg.TURNSecret, nil),
-		LoggerFactory:     utils.PionLoggerFactory(cfg.Logger),
+		LoggerFactory:     utils.PionLoggerFactory(pionLog),
 	})
 	if err != nil {
 		ts.closeConns()
 		return nil, fmt.Errorf("create TURN server: %w", err)
 	}
 	ts.srv = srv
+	ts.pionLog = pionLog
 	return ts, nil
 }
 
@@ -164,7 +212,7 @@ func realm(cfg protocol.NodeConfig) string {
 	return cfg.TURNRealm
 }
 
-func (t *turnServer) appendFamily(cfg protocol.NodeConfig, network, bindAddr, relayIP string) error {
+func (t *turnServer) appendFamily(network, bindAddr, relayIP string) error {
 	relayAddress := net.ParseIP(relayIP)
 	if relayAddress == nil {
 		return fmt.Errorf("invalid TURN relay IP %q", relayIP)
@@ -201,6 +249,9 @@ func (t *turnServer) closeConns() {
 }
 
 func (t *turnServer) Close() {
+	if t.pionLog != nil {
+		t.pionLog.Close()
+	}
 	if t.srv != nil {
 		_ = t.srv.Close()
 	}
