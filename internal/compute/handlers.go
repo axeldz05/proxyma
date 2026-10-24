@@ -2,6 +2,7 @@ package compute
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -149,6 +150,35 @@ func (s *ComputeEngine) HandleServiceEscrow(w http.ResponseWriter, r *http.Reque
 		utils.RespondError(w, http.StatusForbidden, "requester node ID must match coordinator")
 		return
 	}
+
+	s.taskStatusesMu.Lock()
+	meta, exists := s.taskStatusMeta[escrowReq.TaskID]
+	if !exists {
+		if _, retired := s.retiredTaskStatuses[escrowReq.TaskID]; retired {
+			s.taskStatusesMu.Unlock()
+			utils.RespondError(w, http.StatusConflict, fmt.Sprintf("task %q is already in terminal state", escrowReq.TaskID))
+			return
+		}
+		s.taskStatusesMu.Unlock()
+		utils.RespondError(w, http.StatusNotFound, fmt.Sprintf("task %q not found", escrowReq.TaskID))
+		return
+	}
+	expectedProducer := meta.expectedProducer
+	_, delegated := meta.delegatedProducers[producerNodeID]
+	if (expectedProducer == "" || expectedProducer != producerNodeID) && !delegated {
+		s.taskStatusesMu.Unlock()
+		utils.RespondError(w, http.StatusForbidden, fmt.Sprintf("producer %q is not authorized for task %q", producerNodeID, escrowReq.TaskID))
+		return
+	}
+	if value, exists := s.taskStatuses.Load(escrowReq.TaskID); exists {
+		if current, ok := value.(protocol.ServiceTaskResponse); ok && isTerminalTaskStatus(current.Status) {
+			s.taskStatusesMu.Unlock()
+			utils.RespondError(w, http.StatusConflict, fmt.Sprintf("task %q is already in terminal state %q", escrowReq.TaskID, current.Status))
+			return
+		}
+	}
+	s.taskStatusesMu.Unlock()
+
 	if escrowReq.ProducerNodeID == "" {
 		escrowReq.ProducerNodeID = producerNodeID
 	}

@@ -509,7 +509,7 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 		}
 
 		// 4. Cross-task protection: collect blobs referenced by any other active task
-		// to prevent deleting deduplicated CAS blobs currently in use.
+		// or completed history records to prevent deleting deduplicated CAS blobs currently in use.
 		activeBucket, err := boltBucket(tx, bucketTasksActive)
 		if err != nil {
 			return err
@@ -519,6 +519,21 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 			var otherActive TaskRecord
 			if err := json.Unmarshal(v, &otherActive); err == nil {
 				protocol.PopulateMap(finalBlobs, otherActive.BlobHashes(), true)
+			}
+		}
+
+		histBucket, err := boltBucket(tx, bucketTasksHistory)
+		if err != nil {
+			return err
+		}
+		cHist := histBucket.Cursor()
+		for k, v := cHist.First(); k != nil; k, v = cHist.Next() {
+			if string(k) == taskID {
+				continue
+			}
+			var otherHist TaskRecord
+			if err := json.Unmarshal(v, &otherHist); err == nil {
+				protocol.PopulateMap(finalBlobs, extractNonIntermediateBlobHashes(otherHist.FinalOutputs), true)
 			}
 		}
 

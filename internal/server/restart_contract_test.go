@@ -15,6 +15,7 @@ import (
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
+	"proxyma/internal/storage"
 )
 
 func TestPublicHTTPContractSurvivesServerRestart(t *testing.T) {
@@ -208,4 +209,83 @@ func downloadRestartContractBlob(
 		t.Fatalf("read public download: %v", err)
 	}
 	return content
+}
+
+func TestZombieActiveTasksTransitionToFailedOnRestart(t *testing.T) {
+	storagePath := t.TempDir()
+	const nodeID = "zombie-task-node"
+	if err := p2p.SetupNewNode(
+		storagePath,
+		nodeID,
+		protocol.HTTPSAddr("127.0.0.1", "0"),
+	); err != nil {
+		t.Fatalf("set up restart node: %v", err)
+	}
+
+	cfg, err := protocol.LoadConfig(storagePath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Logger = protocol.NewLogger(&protocol.LogWriter{Stdout: io.Discard}, false)
+
+	// Pre-create storage engine and seed an active running task and an escrow task
+	se, err := storage.NewStorageEngine(cfg.Logger, storagePath, nil, nil)
+	if err != nil {
+		t.Fatalf("new storage engine: %v", err)
+	}
+	// Seed running zombie task
+	err = se.SaveActiveTask(storage.TaskRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  "zombie-running-1",
+			Service: "dummy-service",
+			Status:  "running",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed zombie active task: %v", err)
+	}
+	// Seed escrow task
+	err = se.SaveActiveTask(storage.TaskRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  "escrow-task-1",
+			Service: "dummy-service",
+			Status:  protocol.TaskStatusEscrow,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed escrow active task: %v", err)
+	}
+	_ = se.Close()
+
+	// Start server
+	srv, srvServe, _, _ := startRestartContractServer(t, storagePath)
+	defer stopRestartContractServer(t, srv, srvServe)
+
+	// Verify zombie task was transitioned to failed and moved to history
+	activeTasks, err := srv.Storage.LoadActiveTasks()
+	if err != nil {
+		t.Fatalf("load active tasks: %v", err)
+	}
+	for _, a := range activeTasks {
+		if a.TaskID == "zombie-running-1" {
+			t.Fatalf("zombie task %s must not remain active", a.TaskID)
+		}
+	}
+
+	histTask, histExists, err := srv.Storage.GetTaskHistory("zombie-running-1")
+	if err != nil || !histExists {
+		t.Fatalf("zombie task must be in history, exists=%v, err=%v", histExists, err)
+	}
+	if histTask.Status != "failed" {
+		t.Fatalf("zombie task status = %s, want failed", histTask.Status)
+	}
+	if histTask.FinalOutputs["error"] != "server restarted while task was active" {
+		t.Fatalf("zombie task error output = %v, want 'server restarted while task was active'", histTask.FinalOutputs["error"])
+	}
+
+	// Verify escrow task was restored to escrow in compute engine
+	_, inEscrow := srv.Compute.GetEscrowTask("escrow-task-1")
+	if !inEscrow {
+		t.Fatalf("escrow task must be restored in compute engine")
+	}
 }

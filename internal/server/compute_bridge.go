@@ -113,7 +113,11 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 		return fmt.Errorf("stage payload for dispatch: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	dispatchCtx := s.lifetimeCtx
+	if dispatchCtx == nil {
+		dispatchCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(dispatchCtx, PeerRPCDefault)
 	defer cancel()
 	if req.PipelineState != nil && req.PipelineState.CurrentStep > 0 {
 		schema, exists := s.Compute.GetPipeline(req.Service)
@@ -157,7 +161,11 @@ func (s *Server) DispatchTask(targetPeerID string, req protocol.TaskRequest) err
 }
 
 func (s *Server) DispatchEscrowTask(coordinatorPeerID string, req protocol.TaskEscrowRequest) error {
-	ctx, cancel := context.WithTimeout(s.lifetimeCtx, PeerRPCDefault)
+	parent := s.lifetimeCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, PeerRPCDefault)
 	defer cancel()
 	return s.callPeer(ctx, coordinatorPeerID, func(ctx context.Context, peerID string) error {
 		return s.peerClient.SendTaskEscrow(ctx, peerID, req)
@@ -183,7 +191,11 @@ func (s *Server) ensureQUICSession(peerID string) {
 
 	s.peerClient.UpdatePeerRoute(peerID, record)
 
-	waitCtx, waitCancel := context.WithTimeout(s.lifetimeCtx, PeerRPCQUICWait)
+	parent := s.lifetimeCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	waitCtx, waitCancel := context.WithTimeout(parent, PeerRPCQUICWait)
 	defer waitCancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

@@ -72,7 +72,10 @@ func mapEachPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Con
 	}
 	parent := opts.Context
 	if parent == nil {
-		parent = context.Background()
+		parent = s.lifetimeCtx
+		if parent == nil {
+			parent = context.Background()
+		}
 	}
 	peers := s.GetPeersCopy()
 	var (
@@ -124,7 +127,10 @@ func firstPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Conte
 	}
 	parent := opts.Context
 	if parent == nil {
-		parent = context.Background()
+		parent = s.lifetimeCtx
+		if parent == nil {
+			parent = context.Background()
+		}
 	}
 	var zero T
 	for peerID := range s.GetPeersCopy() {
@@ -148,7 +154,11 @@ func firstPeer[T any](s *Server, opts forEachPeerOpts, fn func(ctx context.Conte
 
 // gossipToPeer runs fn against one peer with PeerRPCDefault timeout (L2).
 func (s *Server) gossipToPeer(peerID string, fn func(ctx context.Context, peerID string) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), PeerRPCDefault)
+	parent := s.lifetimeCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, PeerRPCDefault)
 	defer cancel()
 	_ = s.callPeer(ctx, peerID, fn)
 }

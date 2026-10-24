@@ -513,6 +513,72 @@ func TestTaskJournalCrossTaskCASProtection(t *testing.T) {
 	require.True(t, exists, "final blob must remain")
 }
 
+func TestTaskJournalHistoryTaskCASProtection(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-journal-hist-cas-prot")
+	engine := testutil.NewStorageEngine(t, cfg)
+	t.Cleanup(func() { _ = engine.Close() })
+
+	// Task B is completed and its final output is sharedHash
+	sharedContent := []byte("shared content addressable block in history")
+	sharedHash, _, err := engine.SavePhysicalBlob(bytes.NewReader(sharedContent))
+	require.NoError(t, err)
+
+	uniqueContentA := []byte("task A private intermediate for hist test")
+	uniqueHashA, _, err := engine.SavePhysicalBlob(bytes.NewReader(uniqueContentA))
+	require.NoError(t, err)
+
+	finalContentA := []byte("task A final for hist test")
+	finalHashA, _, err := engine.SavePhysicalBlob(bytes.NewReader(finalContentA))
+	require.NoError(t, err)
+
+	// Task B completes with sharedHash in its final outputs
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: "task-B-completed",
+			Status: "completed",
+		},
+		Outputs: map[string]any{"final": fmt.Sprintf("vfs://%s", sharedHash)},
+	})
+	require.NoError(t, err)
+
+	// Task A produces sharedHash as intermediate output and uniqueHashA
+	err = engine.SaveIntermediateOutput("task-A", "step-0", map[string]any{
+		"shared": fmt.Sprintf("vfs://%s", sharedHash),
+		"unique": fmt.Sprintf("vfs://%s", uniqueHashA),
+	})
+	require.NoError(t, err)
+
+	// Task A completes
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: "task-A",
+			Status: "completed",
+		},
+		Outputs: map[string]any{"final": fmt.Sprintf("vfs://%s", finalHashA)},
+	})
+	require.NoError(t, err)
+
+	// Prune Task A intermediate data
+	err = engine.PruneIntermediateTaskData("task-A")
+	require.NoError(t, err)
+
+	// uniqueHashA should be pruned
+	exists, err := engine.HasPhysicalBlob(uniqueHashA)
+	require.NoError(t, err)
+	require.False(t, exists, "task A private intermediate blob should be pruned")
+
+	// sharedHash MUST NOT be pruned because completed Task B references it in history
+	exists, err = engine.HasPhysicalBlob(sharedHash)
+	require.NoError(t, err)
+	require.True(t, exists, "shared CAS blob must not be pruned while completed history task B references it")
+
+	// finalHashA must remain
+	exists, err = engine.HasPhysicalBlob(finalHashA)
+	require.NoError(t, err)
+	require.True(t, exists, "final blob must remain")
+}
+
 func TestTaskJournalListAndCleanup(t *testing.T) {
 	t.Parallel()
 	cfg := testutil.DefaultConfig(t, "node-storage-journal-list")

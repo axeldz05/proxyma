@@ -250,15 +250,37 @@ func New(cfg protocol.NodeConfig, peerClient p2p.PeerClient) (*Server, error) {
 		cfg.Logger.Error("Failed to load persisted pipeline schemas", "error", err)
 	}
 
-	// Restore persisted escrow tasks
+	// Restore persisted escrow tasks and transition zombie active tasks to failed
 	if activeTasks, err := s.Storage.LoadActiveTasks(); err == nil {
 		for _, task := range activeTasks {
 			if task.Status == protocol.TaskStatusEscrow {
 				s.Compute.RestoreEscrowTask(task)
+			} else {
+				cfg.Logger.Warn("Marking zombie active task as failed on startup", "taskID", task.TaskID, "status", task.Status)
+				failRec := storage.TaskJournalRecord{
+					TaskContext: storage.TaskContext{
+						TaskID:          task.TaskID,
+						Service:         task.Service,
+						RequesterNodeID: task.RequesterNodeID,
+						ReplyTo:         task.ReplyTo,
+						Status:          "failed",
+						Error:           "server restarted while task was active",
+						NodeID:          task.NodeID,
+						Payload:         protocol.CloneJSONMap(task.Payload),
+						PipelineState:   protocol.ClonePipelineExecutionState(task.PipelineState),
+					},
+					Outputs:   map[string]any{"error": "server restarted while task was active"},
+					StepID:    task.CurrentStepID,
+					StepIndex: task.CurrentStep,
+					Timestamp: time.Now().UTC(),
+				}
+				if err := s.Storage.AppendTaskCheckpoint(failRec); err != nil {
+					cfg.Logger.Error("Failed to transition zombie active task to failed", "taskID", task.TaskID, "error", err)
+				}
 			}
 		}
 	} else {
-		cfg.Logger.Error("Failed to load active tasks for escrow recovery", "error", err)
+		cfg.Logger.Error("Failed to load active tasks for recovery", "error", err)
 	}
 	s.Compute.StartEscrowSupervisor(2 * time.Second)
 

@@ -26,6 +26,12 @@ func coordinatorNodeID(t protocol.TaskRequest) string {
 			if peerID, ok := protocol.ParsePeerLocalHost(u.Hostname()); ok {
 				return peerID
 			}
+			if u.Scheme != "" && u.Host != "" {
+				return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+			}
+			if u.Host != "" {
+				return u.Host
+			}
 			return u.Hostname()
 		}
 	}
@@ -56,6 +62,7 @@ func (c *ComputeEngine) escalateToEscrow(t protocol.TaskRequest, step protocol.P
 	// If coordinator is this node, handle internally
 	if coordinator == c.nodeID || coordinator == "" {
 		c.logger.Info("Coordinator putting task into local escrow", "taskID", t.TaskID, "step", step.ID)
+		c.acceptedTasks.Delete(t.TaskID)
 		return c.PutTaskInEscrow(escrowReq)
 	}
 
@@ -126,9 +133,13 @@ func (c *ComputeEngine) PutTaskInEscrow(req protocol.TaskEscrowRequest) error {
 	if req.RequesterNodeID == "" {
 		req.RequesterNodeID = c.nodeID
 	}
+	c.escrowTasksMu.RLock()
+	existingEscrow, alreadyInEscrow := c.escrowTasks[req.TaskID]
+	c.escrowTasksMu.RUnlock()
+	isDuplicateEscrow := alreadyInEscrow && existingEscrow.StepIndex == req.StepIndex
 
 	// Persist checkpoint to bbolt WAL + bucketTasksActive
-	if c.taskJournal != nil {
+	if c.taskJournal != nil && !isDuplicateEscrow {
 		var stepOutputs map[string]any
 		if req.PipelineState != nil && req.StepIndex > 0 {
 			var prevStepID string
@@ -260,14 +271,12 @@ func (c *ComputeEngine) WakeupEscrowTasks() int {
 
 // ResumeEscrowTask attempts to resume a specific task from escrow.
 func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
-	c.escrowTasksMu.Lock()
+	c.escrowTasksMu.RLock()
 	task, exists := c.escrowTasks[taskID]
+	c.escrowTasksMu.RUnlock()
 	if !exists {
-		c.escrowTasksMu.Unlock()
 		return fmt.Errorf("task %q not in escrow", taskID)
 	}
-	delete(c.escrowTasks, taskID)
-	c.escrowTasksMu.Unlock()
 
 	schema, schemaExists := c.GetPipeline(task.Service)
 	if !schemaExists && task.PipelineState != nil && task.PipelineState.Snapshot != nil {
@@ -281,32 +290,11 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 		step = schema.Steps[stepIndex]
 	}
 
-	revertEscrow := func() {
-		c.escrowTasksMu.Lock()
-		c.escrowTasks[taskID] = task
-		c.escrowTasksMu.Unlock()
-
-		c.setTaskStatus(protocol.ServiceTaskResponse{
-			TaskID:         task.TaskID,
-			Service:        task.Service,
-			Status:         protocol.TaskStatusEscrow,
-			Error:          task.Error,
-			ProducerNodeID: task.ProducerNodeID,
-		})
-
-		rec := checkpointFromEscrow(task, protocol.TaskStatusEscrow, task.ProducerNodeID)
-		rec.StepID = step.ID
-		rec.StepIndex = stepIndex
-		_ = c.recordCheckpoint(rec)
-	}
-
 	if !schemaExists {
-		revertEscrow()
 		return fmt.Errorf("pipeline schema %q not found for escrow task", task.Service)
 	}
 
 	if stepIndex < 0 || stepIndex >= len(schema.Steps) {
-		revertEscrow()
 		return fmt.Errorf("step index %d out of bounds for pipeline %q", stepIndex, task.Service)
 	}
 
@@ -330,25 +318,34 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 	}
 
 	if targetPeer == "" {
-		revertEscrow()
 		return fmt.Errorf("no candidate node available for step '%s' service '%s'", step.ID, step.Service)
+	}
+
+	c.escrowTasksMu.Lock()
+	task, exists = c.escrowTasks[taskID]
+	if !exists {
+		c.escrowTasksMu.Unlock()
+		return fmt.Errorf("task %q not in escrow", taskID)
+	}
+	delete(c.escrowTasks, taskID)
+	c.escrowTasksMu.Unlock()
+
+	revertEscrow := func() {
+		c.escrowTasksMu.Lock()
+		c.escrowTasks[taskID] = task
+		c.escrowTasksMu.Unlock()
+
+		c.setTaskStatus(protocol.ServiceTaskResponse{
+			TaskID:         task.TaskID,
+			Service:        task.Service,
+			Status:         protocol.TaskStatusEscrow,
+			Error:          task.Error,
+			ProducerNodeID: task.ProducerNodeID,
+		})
 	}
 
 	c.logger.Info("Waking up escrow task for execution",
 		"taskID", task.TaskID, "step", step.ID, "targetPeer", targetPeer)
-
-	// Persist running checkpoint to WAL
-	rec := checkpointFromEscrow(task, "running", c.nodeID)
-	rec.StepID = step.ID
-	rec.StepIndex = stepIndex
-	_ = c.recordCheckpoint(rec)
-
-	c.setTaskStatus(protocol.ServiceTaskResponse{
-		TaskID:         task.TaskID,
-		Service:        task.Service,
-		Status:         "running",
-		ProducerNodeID: targetPeer,
-	})
 
 	// Re-construct TaskRequest from escrow state
 	taskReq := protocol.TaskRequest{
@@ -425,6 +422,16 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 			revertEscrow()
 			return fmt.Errorf("resubmit local task failed: %w", err)
 		}
+		c.setTaskStatus(protocol.ServiceTaskResponse{
+			TaskID:         task.TaskID,
+			Service:        task.Service,
+			Status:         "running",
+			ProducerNodeID: targetPeer,
+		})
+		rec := checkpointFromEscrow(task, "running", c.nodeID)
+		rec.StepID = step.ID
+		rec.StepIndex = stepIndex
+		_ = c.recordCheckpoint(rec)
 		return nil
 	}
 
@@ -437,6 +444,18 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 		revertEscrow()
 		return fmt.Errorf("dispatch step to %q failed: %w", targetPeer, err)
 	}
+	c.acceptedTasks.Delete(taskReq.TaskID)
+
+	c.setTaskStatus(protocol.ServiceTaskResponse{
+		TaskID:         task.TaskID,
+		Service:        task.Service,
+		Status:         "running",
+		ProducerNodeID: targetPeer,
+	})
+	rec := checkpointFromEscrow(task, "running", c.nodeID)
+	rec.StepID = step.ID
+	rec.StepIndex = stepIndex
+	_ = c.recordCheckpoint(rec)
 
 	return nil
 }

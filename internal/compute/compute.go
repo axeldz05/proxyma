@@ -321,6 +321,10 @@ func (c *ComputeEngine) BindPipelineTask(req *protocol.TaskRequest) error {
 		return fmt.Errorf("task request is nil")
 	}
 	schema, exists := c.GetPipeline(req.Service)
+	if !exists && req.PipelineState != nil && req.PipelineState.Snapshot != nil {
+		schema = *req.PipelineState.Snapshot
+		exists = true
+	}
 	if !exists {
 		return nil
 	}
@@ -338,6 +342,10 @@ func (c *ComputeEngine) PreparePipelineTargets(req *protocol.TaskRequest) error 
 		return nil
 	}
 	schema, exists := c.GetPipeline(req.Service)
+	if !exists && req.PipelineState.Snapshot != nil {
+		schema = *req.PipelineState.Snapshot
+		exists = true
+	}
 	if !exists {
 		return nil
 	}
@@ -497,6 +505,10 @@ func (c *ComputeEngine) processTask(t protocol.TaskRequest) {
 
 	// Intercept and run as pipeline if it is a pipeline schema
 	pipelineSchema, isPipeline := c.GetPipeline(t.Service)
+	if !isPipeline && t.PipelineState != nil && t.PipelineState.Snapshot != nil {
+		pipelineSchema = *t.PipelineState.Snapshot
+		isPipeline = true
+	}
 	if !isPipeline {
 		// Treat singular task as a pipeline of one step
 		pipelineSchema = protocol.PipelineSchema{
@@ -558,6 +570,33 @@ func (c *ComputeEngine) tryDynamicSchemaMigration(t protocol.TaskRequest, state 
 	state.SchemaHash = targetHash
 	cloned := protocol.ClonePipelineSchema(targetSchema)
 	state.Snapshot = &cloned
+
+	// Resolve candidates for upcoming migrated steps and track in delegatedProducers
+	if state.SelectedTargets == nil {
+		state.SelectedTargets = make(map[string]string, len(targetSchema.Steps))
+	}
+	for i := state.CurrentStep; i < len(targetSchema.Steps); i++ {
+		step := targetSchema.Steps[i]
+		if state.SelectedTargets[step.ID] == "" {
+			if step.TargetNodeID != "" {
+				state.SelectedTargets[step.ID] = step.TargetNodeID
+			} else if cand, err := c.selectPipelineStepTarget(step, i); err == nil && cand != "" {
+				state.SelectedTargets[step.ID] = cand
+			}
+		}
+	}
+	c.taskStatusesMu.Lock()
+	meta := c.taskStatusMeta[t.TaskID]
+	if meta.delegatedProducers == nil {
+		meta.delegatedProducers = make(map[string]struct{})
+	}
+	for _, target := range state.SelectedTargets {
+		if target != "" {
+			meta.delegatedProducers[target] = struct{}{}
+		}
+	}
+	c.taskStatusMeta[t.TaskID] = meta
+	c.taskStatusesMu.Unlock()
 
 	rec := c.checkpointFromTask(t, protocol.TaskEventSchemaMigrated)
 	rec.StepIndex = state.CurrentStep
@@ -817,6 +856,17 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 		}
 	}
 
+	if targetPeer != "" {
+		c.taskStatusesMu.Lock()
+		meta := c.taskStatusMeta[t.TaskID]
+		if meta.delegatedProducers == nil {
+			meta.delegatedProducers = make(map[string]struct{})
+		}
+		meta.delegatedProducers[targetPeer] = struct{}{}
+		c.taskStatusMeta[t.TaskID] = meta
+		c.taskStatusesMu.Unlock()
+	}
+
 	err := c.dispatchStepWithFailover(t, step, targetPeer, stepIndex)
 	if err != nil {
 		if errors.Is(err, ErrTaskEscrowed) {
@@ -829,6 +879,17 @@ func (c *ComputeEngine) routePipelineStep(t protocol.TaskRequest, step protocol.
 func (c *ComputeEngine) dispatchStepWithFailover(t protocol.TaskRequest, step protocol.PipelineStep, initialTarget string, stepIndex int) error {
 	triedPeers := make(map[string]bool)
 	currentTarget := initialTarget
+
+	if initialTarget != "" {
+		c.taskStatusesMu.Lock()
+		meta := c.taskStatusMeta[t.TaskID]
+		if meta.delegatedProducers == nil {
+			meta.delegatedProducers = make(map[string]struct{})
+		}
+		meta.delegatedProducers[initialTarget] = struct{}{}
+		c.taskStatusMeta[t.TaskID] = meta
+		c.taskStatusesMu.Unlock()
+	}
 
 	for range 3 {
 		triedPeers[currentTarget] = true
@@ -903,6 +964,14 @@ func (c *ComputeEngine) dispatchStepWithFailover(t protocol.TaskRequest, step pr
 
 		c.logger.Info("Failing over pipeline step to candidate node",
 			"step", step.ID, "previous", currentTarget, "alternative", altTarget)
+		c.taskStatusesMu.Lock()
+		meta := c.taskStatusMeta[t.TaskID]
+		if meta.delegatedProducers == nil {
+			meta.delegatedProducers = make(map[string]struct{})
+		}
+		meta.delegatedProducers[altTarget] = struct{}{}
+		c.taskStatusMeta[t.TaskID] = meta
+		c.taskStatusesMu.Unlock()
 		currentTarget = altTarget
 	}
 
@@ -1148,7 +1217,12 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 	}
 	delegatedProducers := make(map[string]struct{})
 	if req.PipelineState != nil {
-		if schema, exists := c.GetPipeline(req.Service); exists {
+		schema, exists := c.GetPipeline(req.Service)
+		if !exists && req.PipelineState.Snapshot != nil {
+			schema = *req.PipelineState.Snapshot
+			exists = true
+		}
+		if exists {
 			for _, step := range schema.Steps {
 				targetNodeID := req.PipelineState.SelectedTargets[step.ID]
 				if targetNodeID == "" {
@@ -1157,6 +1231,11 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 				if targetNodeID != "" {
 					delegatedProducers[targetNodeID] = struct{}{}
 				}
+			}
+		}
+		for _, target := range req.PipelineState.SelectedTargets {
+			if target != "" {
+				delegatedProducers[target] = struct{}{}
 			}
 		}
 	}
@@ -1229,12 +1308,13 @@ func (c *ComputeEngine) AcceptTaskCallback(producerNodeID string, response proto
 	if !ok {
 		return ErrTaskNotFound
 	}
-	expectedProducer := c.taskStatusMeta[response.TaskID].expectedProducer
-	if expectedProducer == "" {
-		return fmt.Errorf("%w: no producer was registered for task %q", ErrTaskProducer, response.TaskID)
-	}
-	_, delegated := c.taskStatusMeta[response.TaskID].delegatedProducers[producerNodeID]
-	if expectedProducer != producerNodeID && !delegated {
+	meta := c.taskStatusMeta[response.TaskID]
+	expectedProducer := meta.expectedProducer
+	_, delegated := meta.delegatedProducers[producerNodeID]
+	if (expectedProducer == "" || expectedProducer != producerNodeID) && !delegated {
+		if expectedProducer == "" && len(meta.delegatedProducers) == 0 {
+			return fmt.Errorf("%w: no producer was registered for task %q", ErrTaskProducer, response.TaskID)
+		}
 		return fmt.Errorf("%w: expected %q, got %q", ErrTaskProducer, expectedProducer, producerNodeID)
 	}
 	if response.Service == "" {
