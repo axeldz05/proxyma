@@ -441,6 +441,42 @@ func TestTaskJournalTerminalStateCannotRegress(t *testing.T) {
 	})
 	require.ErrorIs(t, err, storage.ErrTaskTerminal)
 
+	// Attempting to overwrite completed status with failed status must also be rejected
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: taskID,
+			Status: "failed",
+		},
+		StepID: "step-1",
+	})
+	require.ErrorIs(t, err, storage.ErrTaskTerminal)
+
+	// Duplicate completed checkpoint must be accepted (idempotent retransmission)
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: taskID,
+			Status: "completed",
+		},
+		StepID: "step-1",
+	})
+	require.NoError(t, err)
+
+	// Failed task in history must reject late completed checkpoint
+	failedTaskID := "task-failed-terminal-check"
+	require.NoError(t, engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: failedTaskID,
+			Status: "failed",
+		},
+	}))
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: failedTaskID,
+			Status: "completed",
+		},
+	})
+	require.ErrorIs(t, err, storage.ErrTaskTerminal)
+
 	// Must not be present in active tasks
 	activeTasks, err := engine.LoadActiveTasks()
 	require.NoError(t, err)
@@ -577,6 +613,126 @@ func TestTaskJournalHistoryTaskCASProtection(t *testing.T) {
 	exists, err = engine.HasPhysicalBlob(finalHashA)
 	require.NoError(t, err)
 	require.True(t, exists, "final blob must remain")
+}
+
+func TestTaskJournalHistoryTaskPayloadCASProtection(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-journal-payload-cas-prot")
+	engine := testutil.NewStorageEngine(t, cfg)
+	t.Cleanup(func() { _ = engine.Close() })
+
+	// Task B is completed and its input Payload references sharedHash
+	sharedContent := []byte("shared content addressable block in payload")
+	sharedHash, _, err := engine.SavePhysicalBlob(bytes.NewReader(sharedContent))
+	require.NoError(t, err)
+
+	uniqueContentA := []byte("task A private intermediate for payload test")
+	uniqueHashA, _, err := engine.SavePhysicalBlob(bytes.NewReader(uniqueContentA))
+	require.NoError(t, err)
+
+	// Task B completes with sharedHash in its Payload
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  "task-B-payload",
+			Status:  "completed",
+			Payload: map[string]any{"input_blob": fmt.Sprintf("vfs://%s", sharedHash)},
+		},
+		Outputs: map[string]any{"final": "done"},
+	})
+	require.NoError(t, err)
+
+	// Task A produces sharedHash as intermediate output and uniqueHashA
+	err = engine.SaveIntermediateOutput("task-A", "step-0", map[string]any{
+		"shared": fmt.Sprintf("vfs://%s", sharedHash),
+		"unique": fmt.Sprintf("vfs://%s", uniqueHashA),
+	})
+	require.NoError(t, err)
+
+	// Task A completes
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: "task-A",
+			Status: "completed",
+		},
+		Outputs: map[string]any{"final": "done"},
+	})
+	require.NoError(t, err)
+
+	// Prune Task A intermediate data
+	err = engine.PruneIntermediateTaskData("task-A")
+	require.NoError(t, err)
+
+	// uniqueHashA should be pruned
+	exists, err := engine.HasPhysicalBlob(uniqueHashA)
+	require.NoError(t, err)
+	require.False(t, exists, "task A private intermediate blob should be pruned")
+
+	// sharedHash MUST NOT be pruned because completed Task B references it in Payload
+	exists, err = engine.HasPhysicalBlob(sharedHash)
+	require.NoError(t, err)
+	require.True(t, exists, "shared CAS blob must not be pruned while completed history task B references it in Payload")
+}
+
+func TestSweepPendingBlobGC_ProtectsTaskStorageBlobs(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-sweep-task-blobs")
+	engine := testutil.NewStorageEngine(t, cfg)
+	t.Cleanup(func() { _ = engine.Close() })
+
+	activeBlobContent := []byte("active-task-blob-payload")
+	activeHash, _, err := engine.SavePhysicalBlob(bytes.NewReader(activeBlobContent))
+	require.NoError(t, err)
+
+	historyBlobContent := []byte("history-task-blob-payload")
+	historyHash, _, err := engine.SavePhysicalBlob(bytes.NewReader(historyBlobContent))
+	require.NoError(t, err)
+
+	unreferencedBlobContent := []byte("unreferenced-pending-gc-blob")
+	unrefHash, _, err := engine.SavePhysicalBlob(bytes.NewReader(unreferencedBlobContent))
+	require.NoError(t, err)
+
+	// Save active task referencing activeHash
+	err = engine.SaveActiveTask(storage.TaskRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  "active-task-gc-test",
+			Status:  "running",
+			Payload: map[string]any{"file": fmt.Sprintf("vfs://%s", activeHash)},
+		},
+	})
+	require.NoError(t, err)
+
+	// Save history task referencing historyHash in Payload
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID:  "history-task-gc-test",
+			Status:  "completed",
+			Payload: map[string]any{"input": fmt.Sprintf("vfs://%s", historyHash)},
+		},
+		Outputs: map[string]any{"result": "ok"},
+	})
+	require.NoError(t, err)
+
+	// Stage all three hashes into pendingBlobGC
+	require.NoError(t, engine.QueueBlobGCForTesting(activeHash))
+	require.NoError(t, engine.QueueBlobGCForTesting(historyHash))
+	require.NoError(t, engine.QueueBlobGCForTesting(unrefHash))
+
+	// Sweep pending blob GC
+	require.NoError(t, engine.SweepPendingBlobGC())
+
+	// unrefHash should have been purged
+	exists, err := engine.HasPhysicalBlob(unrefHash)
+	require.NoError(t, err)
+	require.False(t, exists, "unreferenced blob in pending GC must be purged")
+
+	// activeHash and historyHash MUST be preserved
+	exists, err = engine.HasPhysicalBlob(activeHash)
+	require.NoError(t, err)
+	require.True(t, exists, "blob referenced by active task must NOT be purged by SweepPendingBlobGC")
+
+	exists, err = engine.HasPhysicalBlob(historyHash)
+	require.NoError(t, err)
+	require.True(t, exists, "blob referenced by history task payload must NOT be purged by SweepPendingBlobGC")
 }
 
 func TestTaskJournalListAndCleanup(t *testing.T) {
@@ -719,6 +875,47 @@ func TestTaskJournalCrashRecoveryAndPersistence(t *testing.T) {
 		require.Equal(t, uint64(2), histJournal[1].Sequence)
 	}
 }
+
+func TestTaskJournalSchemaMigrated_PreservesActiveStatus(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-storage-journal-schema-migrated-status")
+	engine := testutil.NewStorageEngine(t, cfg)
+	t.Cleanup(func() { _ = engine.Close() })
+
+	taskID := "task-schema-migration-status"
+
+	// 1. Initial running checkpoint
+	err := engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: taskID,
+			Status: "running",
+		},
+		StepID: "step-0",
+	})
+	require.NoError(t, err)
+
+	active, exists, err := engine.GetActiveTask(taskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, "running", active.Status)
+
+	// 2. Schema migrated checkpoint
+	err = engine.AppendTaskCheckpoint(storage.TaskJournalRecord{
+		TaskContext: storage.TaskContext{
+			TaskID: taskID,
+			Status: protocol.TaskEventSchemaMigrated,
+		},
+		StepID: "step-0",
+	})
+	require.NoError(t, err)
+
+	// active.Status must remain "running" and NOT be overwritten by "schema_migrated"
+	active, exists, err = engine.GetActiveTask(taskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, "running", active.Status, "active task status must not be overwritten by schema_migrated")
+}
+
 
 func TestTaskJournalConcurrentCheckpoints(t *testing.T) {
 	t.Parallel()

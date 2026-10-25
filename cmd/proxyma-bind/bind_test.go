@@ -2,6 +2,7 @@ package proxyma_bind
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,9 +10,19 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"proxyma/internal/p2p"
+	"proxyma/internal/protocol"
 )
 
 func TestNodeLifecycle(t *testing.T) {
+	// If default TCP port is occupied by an external service on the host, skip
+	if l, err := net.Listen("tcp", ":"+protocol.DefaultTCPPort); err != nil {
+		t.Skipf("default port %s is occupied by an external service: %v", protocol.DefaultTCPPort, err)
+	} else {
+		_ = l.Close()
+	}
+
 	tempDir := t.TempDir()
 
 	// Ensure no node is running initially
@@ -78,6 +89,13 @@ func TestStreamService_ValidationError(t *testing.T) {
 
 func TestStreamService_GomobileBinding(t *testing.T) {
 	tempDir := t.TempDir()
+	if err := p2p.SetupNewNode(
+		tempDir,
+		"gomobile-stream-node",
+		protocol.HTTPSAddr("127.0.0.1", "0"),
+	); err != nil {
+		t.Fatal(err)
+	}
 	StartNode(tempDir, true)
 	defer StopNode()
 

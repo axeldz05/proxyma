@@ -868,7 +868,7 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 		if err != nil {
 			return err
 		}
-		return index.ForEach(func(k, raw []byte) error {
+		if err := index.ForEach(func(k, raw []byte) error {
 			var entry protocol.IndexEntry
 			if err := json.Unmarshal(raw, &entry); err != nil {
 				return fmt.Errorf("corrupt JSON in %s/%s: %w", vfsIndexBucket, string(k), err)
@@ -877,7 +877,47 @@ func (se *StorageEngine) sweepPendingBlobGCLocked() error {
 				referenced[entry.Hash] = true
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		if activeB := tx.Bucket([]byte(bucketTasksActive)); activeB != nil {
+			if err := activeB.ForEach(func(k, raw []byte) error {
+				var task TaskRecord
+				if err := json.Unmarshal(raw, &task); err != nil {
+					return fmt.Errorf("corrupt JSON in %s/%s: %w", bucketTasksActive, string(k), err)
+				}
+				for _, h := range task.BlobHashes() {
+					if pending[h] {
+						referenced[h] = true
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if histB := tx.Bucket([]byte(bucketTasksHistory)); histB != nil {
+			if err := histB.ForEach(func(k, raw []byte) error {
+				var task TaskRecord
+				if err := json.Unmarshal(raw, &task); err != nil {
+					return fmt.Errorf("corrupt JSON in %s/%s: %w", bucketTasksHistory, string(k), err)
+				}
+				for _, h := range extractNonIntermediateBlobHashes(task.FinalOutputs) {
+					if pending[h] {
+						referenced[h] = true
+					}
+				}
+				for _, h := range ExtractBlobHashes(task.Payload) {
+					if pending[h] {
+						referenced[h] = true
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil || len(pending) == 0 {
 		return err

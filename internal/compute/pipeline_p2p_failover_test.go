@@ -891,6 +891,14 @@ func TestPipelineCoordinatorEscrow_DispatchFailureRevertsToEscrow(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, exists)
 	require.Equal(t, protocol.TaskStatusEscrow, activeTask.Status, "active record must revert to escrow in bbolt")
+
+	// Late callback from failed dispatch target must be rejected
+	err = coordEngine.AcceptTaskCallback("flaky-node", protocol.ServiceTaskResponse{
+		TaskID:  "task-revert-1",
+		Service: pipeSchema.ID,
+		Status:  "completed",
+	})
+	require.ErrorIs(t, err, compute.ErrTaskProducer, "failed dispatch target must not be accepted as callback producer after revert")
 }
 
 

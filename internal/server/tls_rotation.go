@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/utils"
 	"sync"
+	"time"
 )
 
 // tlsClientMaterial is an immutable client cert + verify pair swapped on rotation (H1).
@@ -161,30 +164,83 @@ func (s *Server) RotateCAAndResignPeers() {
 
 	s.Config.Logger.Info("Triggering CA Rotation & Peer Re-signing...")
 
-	// 1. Rotate the CA files
-	certsDir := filepath.Dir(s.Config.CAPath)
-	err := p2p.RotateCA(certsDir)
+	// Stage new CA and node certificate in a temporary directory
+	stageDir, err := os.MkdirTemp("", "proxyma-ca-rotation-*")
 	if err != nil {
-		s.Config.Logger.Error("Failed to rotate CA", "error", err)
+		s.Config.Logger.Error("Failed to create CA rotation staging directory", "error", err)
+		return
+	}
+	defer func() { _ = os.RemoveAll(stageDir) }()
+
+	// 1. Generate new CA in staging directory
+	err = p2p.RotateCA(stageDir)
+	if err != nil {
+		s.Config.Logger.Error("Failed to rotate CA in staging", "error", err)
+		return
+	}
+	stageCAPath, stageCAKeyPath := p2p.CACertPaths(stageDir)
+	stageOwnCertFile, stageOwnKeyFile := p2p.NodeCertPaths(stageDir, s.Config.ID)
+
+	// 2. Issue own node certificate using staged CA
+	err = p2p.IssueNodeCertificate(stageDir, stageDir, s.Config.ID)
+	if err != nil {
+		s.Config.Logger.Error("Failed to issue staged own certificate", "error", err)
 		return
 	}
 
-	// 2. Re-sign own certificate with the new CA
-	ownCertFile, ownKeyFile := p2p.NodeCertPaths(certsDir, s.Config.ID)
-	err = p2p.IssueNodeCertificate(certsDir, certsDir, s.Config.ID)
+	newCACertPEM, err := p2p.ReadCAPEM(stageCAPath)
 	if err != nil {
-		s.Config.Logger.Error("Failed to re-sign own certificate", "error", err)
+		s.Config.Logger.Error("Failed to read staged CA cert", "error", err)
+		return
+	}
+	oldCACertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
+	if err != nil {
+		s.Config.Logger.Error("Failed to read current CA cert", "error", err)
 		return
 	}
 
-	// 3. Push re-signed peer certs. Client/server snapshots stay on the pre-rotation
-	// material until step 4 so peers still presenting old CA certs can be reached.
-	caCertPEM, err := p2p.ReadCAPEM(s.Config.CAPath)
-	if err != nil {
-		s.Config.Logger.Error("Failed to read new CA cert", "error", err)
-		return
+	// Install transitional in-memory trust bundle (old CA + new CA) so pre-rotation
+	// and post-rotation peers can both be accepted and dialed during transition.
+	transitionalPool := x509.NewCertPool()
+	transitionalPool.AppendCertsFromPEM(oldCACertPEM)
+	transitionalPool.AppendCertsFromPEM(newCACertPEM)
+
+	s.tlsMutex.Lock()
+	oldServerMaterial := s.serverMaterial.Load()
+	oldClientMaterial := s.clientMaterial.Load()
+
+	if oldServerMaterial != nil && oldServerMaterial.cfg != nil {
+		transitionalServerCfg := oldServerMaterial.cfg.Clone()
+		transitionalServerCfg.ClientCAs = transitionalPool
+		s.storeServerMaterial(transitionalServerCfg)
 	}
 
+	if oldClientMaterial != nil {
+		transitionalClientMaterial := &tlsClientMaterial{
+			cert: oldClientMaterial.cert,
+			verify: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+				if len(rawCerts) == 0 {
+					return errors.New("no certificates provided by peer")
+				}
+				cert, err := x509.ParseCertificate(rawCerts[0])
+				if err != nil {
+					return fmt.Errorf("failed to parse certificate: %w", err)
+				}
+				opts := x509.VerifyOptions{
+					Roots:       transitionalPool,
+					CurrentTime: time.Now(),
+				}
+				if _, err := cert.Verify(opts); err != nil {
+					return fmt.Errorf("bad certificate: %w", err)
+				}
+				return nil
+			},
+		}
+		s.clientMaterial.Store(transitionalClientMaterial)
+	}
+	s.tlsMutex.Unlock()
+
+	// 3. Push re-signed peer certs to all peers.
 	var (
 		pushMu   sync.Mutex
 		pushFail int
@@ -199,7 +255,7 @@ func (s *Server) RotateCAAndResignPeers() {
 			return errPeerSkipped
 		}
 
-		newCertPEM, err := p2p.ReSignPeerCertificate(cert.PublicKey, peerID, s.Config.CAPath, caKeyPath)
+		newCertPEM, err := p2p.ReSignPeerCertificate(cert.PublicKey, peerID, stageCAPath, stageCAKeyPath)
 		if err != nil {
 			s.Config.Logger.Error("Failed to re-sign peer certificate", "peerID", peerID, "error", err)
 			pushMu.Lock()
@@ -209,7 +265,7 @@ func (s *Server) RotateCAAndResignPeers() {
 		}
 
 		err = s.peerClient.RotateTLS(ctx, peerID, protocol.RotateTLSPayload{
-			CACert:   string(caCertPEM),
+			CACert:   string(newCACertPEM),
 			NodeCert: string(newCertPEM),
 		})
 		if err != nil {
@@ -224,12 +280,69 @@ func (s *Server) RotateCAAndResignPeers() {
 	})
 
 	if pushFail > 0 {
-		s.Config.Logger.Error("CA rotation push incomplete; keeping pre-rotation TLS in memory so peers are not locked out",
+		s.Config.Logger.Error("CA rotation push incomplete; rolling back in-memory TLS and preserving on-disk CA",
 			"failedPeers", pushFail)
+		s.tlsMutex.Lock()
+		if oldServerMaterial != nil {
+			s.serverMaterial.Store(oldServerMaterial)
+		}
+		if oldClientMaterial != nil {
+			s.clientMaterial.Store(oldClientMaterial)
+		}
+		s.tlsMutex.Unlock()
 		return
 	}
 
-	// 4. Reload local TLS only after every registered peer acknowledged the new material.
+	// 4. Commit staged material to disk only after every registered peer acknowledged the new material.
+	certsDir := filepath.Dir(s.Config.CAPath)
+	ownCertFile, ownKeyFile := p2p.NodeCertPaths(certsDir, s.Config.ID)
+
+	stageCAKeyPEM, err := os.ReadFile(stageCAKeyPath)
+	if err != nil {
+		s.Config.Logger.Error("Failed to read staged CA key", "error", err)
+		return
+	}
+	stageOwnCertPEM, err := os.ReadFile(stageOwnCertFile)
+	if err != nil {
+		s.Config.Logger.Error("Failed to read staged own cert", "error", err)
+		return
+	}
+	stageOwnKeyPEM, err := os.ReadFile(stageOwnKeyFile)
+	if err != nil {
+		s.Config.Logger.Error("Failed to read staged own key", "error", err)
+		return
+	}
+
+	oldCAKeyPEM, readKeyErr := os.ReadFile(caKeyPath)
+	if err := utils.WriteFileAtomic(caKeyPath, stageCAKeyPEM, 0600); err != nil {
+		s.Config.Logger.Error("Failed to persist rotated CA key", "error", err)
+		s.tlsMutex.Lock()
+		if oldServerMaterial != nil {
+			s.serverMaterial.Store(oldServerMaterial)
+		}
+		if oldClientMaterial != nil {
+			s.clientMaterial.Store(oldClientMaterial)
+		}
+		s.tlsMutex.Unlock()
+		return
+	}
+	if err := p2p.WriteNodePEMs(s.Config.CAPath, ownCertFile, ownKeyFile, newCACertPEM, stageOwnCertPEM, stageOwnKeyPEM); err != nil {
+		s.Config.Logger.Error("Failed to persist rotated node certs", "error", err)
+		if readKeyErr == nil {
+			_ = utils.WriteFileAtomic(caKeyPath, oldCAKeyPEM, 0600)
+		}
+		s.tlsMutex.Lock()
+		if oldServerMaterial != nil {
+			s.serverMaterial.Store(oldServerMaterial)
+		}
+		if oldClientMaterial != nil {
+			s.clientMaterial.Store(oldClientMaterial)
+		}
+		s.tlsMutex.Unlock()
+		return
+	}
+
+	// 5. Reload local TLS now that disk has been updated
 	err = s.ReloadTLSConfig(s.Config.CAPath, ownCertFile, ownKeyFile)
 	if err != nil {
 		s.Config.Logger.Error("Failed to reload own TLS config after rotation", "error", err)

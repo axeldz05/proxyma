@@ -35,7 +35,7 @@ type Storage struct {
 }
 
 type hashLock struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	refs int
 }
 
@@ -57,6 +57,28 @@ func (st *Storage) lockHash(hash string) func() {
 	lock.mu.Lock()
 	return func() {
 		lock.mu.Unlock()
+		st.hashLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(st.hashLocks, hash)
+		}
+		st.hashLocksMu.Unlock()
+	}
+}
+
+func (st *Storage) rlockHash(hash string) func() {
+	st.hashLocksMu.Lock()
+	lock := st.hashLocks[hash]
+	if lock == nil {
+		lock = &hashLock{}
+		st.hashLocks[hash] = lock
+	}
+	lock.refs++
+	st.hashLocksMu.Unlock()
+
+	lock.mu.RLock()
+	return func() {
+		lock.mu.RUnlock()
 		st.hashLocksMu.Lock()
 		lock.refs--
 		if lock.refs == 0 {
@@ -344,14 +366,28 @@ func (st *Storage) BlobExists(hash string) (bool, error) {
 	if !IsValidCASHash(hash) {
 		return false, nil
 	}
-	unlock := st.lockHash(hash)
-	defer unlock()
+	unlock := st.rlockHash(hash)
+	var exUnlock func()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+		if exUnlock != nil {
+			exUnlock()
+		}
+	}()
+	if st.verifiedCurrentLocked(hash) {
+		return true, nil
+	}
 	if err := st.verifyAndCacheLocked(hash); err != nil {
 		if os.IsNotExist(err) {
 			st.removeCachedHash(hash)
 			return false, nil
 		}
 		if errors.Is(err, ErrBlobCorrupt) {
+			unlock()
+			unlock = nil
+			exUnlock = st.lockHash(hash)
 			quarantineErr := st.quarantineBlobLocked(hash)
 			return false, errors.Join(err, quarantineErr)
 		}
@@ -364,22 +400,36 @@ func (st *Storage) ReadBlob(hash string, w io.Writer) error {
 	if !IsValidCASHash(hash) {
 		return ErrFileDoesNotExist
 	}
-	unlock := st.lockHash(hash)
-	defer unlock()
+	unlock := st.rlockHash(hash)
+	var exUnlock func()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+		if exUnlock != nil {
+			exUnlock()
+		}
+	}()
 	fullPath := filepath.Join(st.baseDir, hash)
-	if err := st.verifyAndCacheLocked(hash); err != nil {
-		if os.IsNotExist(err) {
-			st.removeCachedHash(hash)
-			return ErrFileDoesNotExist
+	if !st.verifiedCurrentLocked(hash) {
+		if err := st.verifyAndCacheLocked(hash); err != nil {
+			if os.IsNotExist(err) {
+				st.removeCachedHash(hash)
+				return ErrFileDoesNotExist
+			}
+			if errors.Is(err, ErrBlobCorrupt) {
+				unlock()
+				unlock = nil
+				exUnlock = st.lockHash(hash)
+				quarantineErr := st.quarantineBlobLocked(hash)
+				return errors.Join(err, quarantineErr)
+			}
+			return err
 		}
-		if errors.Is(err, ErrBlobCorrupt) {
-			quarantineErr := st.quarantineBlobLocked(hash)
-			return errors.Join(err, quarantineErr)
-		}
-		return err
 	}
 	file, err := os.Open(fullPath)
 	if os.IsNotExist(err) {
+		st.removeCachedHash(hash)
 		return ErrFileDoesNotExist
 	}
 	if err != nil {

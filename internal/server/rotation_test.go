@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
@@ -229,3 +230,50 @@ func TestCARotationReloadsQUICTLS(t *testing.T) {
 		return ok
 	}, 2*time.Second, 10*time.Millisecond, "server must accept the rotated client certificate")
 }
+
+func TestClusterCARotation_RollbackOnPeerPushFailurePreservesDiskCA(t *testing.T) {
+	sponsorCfg := testutil.DefaultConfig(t, "sponsor-rollback")
+	isSponsorTrue := true
+	sponsorCfg.IsSponsorOverride = &isSponsorTrue
+	sponsorSrv := NewServer(t, sponsorCfg, nil)
+
+	// Initialize a peer node to get a valid signed certificate
+	peer1Cfg := testutil.DefaultConfig(t, "peer-fail")
+	isSponsorFalse := false
+	peer1Cfg.IsSponsorOverride = &isSponsorFalse
+	peer1Srv := NewServer(t, peer1Cfg, nil)
+
+	peerCertRaw := peer1Srv.ServerTLSConfig().Certificates[0].Certificate[0]
+	peerCert, err := x509.ParseCertificate(peerCertRaw)
+	require.NoError(t, err)
+
+	// Add peer to sponsor with an unreachable address so push fails
+	sponsorSrv.AddPeer(peer1Srv.Config.ID, protocol.AddressRecord{
+		Addresses: []string{"https://127.0.0.1:1"}, // unreachable
+		IsSponsor: false,
+	})
+	sponsorSrv.Peers.SetPeerCertificate(peer1Srv.Config.ID, peerCert)
+	sponsorSrv.SetPeerOnline(peer1Srv.Config.ID, true)
+
+	// Read initial CA bytes on disk
+	caPath := sponsorSrv.Config.CAPath
+	initialCAPEM, err := os.ReadFile(caPath)
+	require.NoError(t, err)
+
+	caKeyPath := p2p.CAKeyPath(caPath)
+	initialCAKeyPEM, err := os.ReadFile(caKeyPath)
+	require.NoError(t, err)
+
+	// Trigger rotation - will fail pushing to failing-peer
+	sponsorSrv.RotateCAAndResignPeers()
+
+	// Verify on-disk CA files were NOT changed
+	currentCAPEM, err := os.ReadFile(caPath)
+	require.NoError(t, err)
+	require.Equal(t, initialCAPEM, currentCAPEM, "CA cert on disk must not be overwritten when peer push fails")
+
+	currentCAKeyPEM, err := os.ReadFile(caKeyPath)
+	require.NoError(t, err)
+	require.Equal(t, initialCAKeyPEM, currentCAKeyPEM, "CA key on disk must not be overwritten when peer push fails")
+}
+

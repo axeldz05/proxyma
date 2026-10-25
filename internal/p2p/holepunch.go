@@ -80,14 +80,33 @@ func cloneQUICTLSConfig(cfg *tls.Config) *tls.Config {
 
 // BurstPings sends n hole-punch pings to addr at the given interval (L2).
 func BurstPings(pc net.PacketConn, addr *net.UDPAddr, localID string, n int, interval time.Duration) {
+	BurstPingsContext(context.Background(), pc, addr, localID, n, interval)
+}
+
+// BurstPingsContext sends n hole-punch pings to addr at interval, stopping early if ctx is cancelled (L2).
+func BurstPingsContext(ctx context.Context, pc net.PacketConn, addr *net.UDPAddr, localID string, n int, interval time.Duration) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if pc == nil || addr == nil || n <= 0 {
 		return
 	}
 	pingPayload := HolePunchPingPayload(localID)
 	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		_, _ = pc.WriteTo(pingPayload, addr)
 		if i+1 < n && interval > 0 {
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -616,13 +635,36 @@ func (qm *QUICManager) handleIncomingConnection(conn *quic.Conn) {
 	qm.serveIncomingStreams(conn, &tlsState)
 }
 
+type switchableLimiter struct {
+	r       io.Reader
+	limit   int64
+	limited bool
+}
+
+func (s *switchableLimiter) Read(p []byte) (int, error) {
+	if !s.limited {
+		return s.r.Read(p)
+	}
+	if s.limit <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > s.limit {
+		p = p[:s.limit]
+	}
+	n, err := s.r.Read(p)
+	s.limit -= int64(n)
+	return n, err
+}
+
 func (qm *QUICManager) handleIncomingStream(stream *quic.Stream, tlsState *tls.ConnectionState) {
 	defer func() { _ = stream.Close() }()
 
-	req, err := http.ReadRequest(bufio.NewReader(io.LimitReader(stream, 10*1024*1024)))
+	limiter := &switchableLimiter{r: stream, limit: 1 * 1024 * 1024, limited: true}
+	req, err := http.ReadRequest(bufio.NewReader(limiter))
 	if err != nil {
 		return
 	}
+	limiter.limited = false
 	req.TLS = tlsState
 
 	// Route to local http handler via httptest recorder
@@ -834,7 +876,7 @@ func (qm *QUICManager) RespondToHolePunch(ctx context.Context, peerID, remoteUDP
 	go func() {
 		errCh <- qm.waitForHolePunch(punchCtx, peerID, rUDPAddr, false)
 	}()
-	go BurstPings(qm.PacketConn, rUDPAddr, qm.LocalID, 20, 150*time.Millisecond)
+	go BurstPingsContext(punchCtx, qm.PacketConn, rUDPAddr, qm.LocalID, 20, 150*time.Millisecond)
 
 	if err := <-errCh; err != nil {
 		res.err = err
@@ -881,7 +923,7 @@ func (qm *QUICManager) waitForHolePunch(ctx context.Context, peerID string, rUDP
 	case <-ctx.Done():
 		return fmt.Errorf("hole punching timeout to %s: %w", peerID, ctx.Err())
 	case <-pingCh:
-		BurstPings(qm.PacketConn, rUDPAddr, qm.LocalID, 3, 0)
+		BurstPingsContext(ctx, qm.PacketConn, rUDPAddr, qm.LocalID, 3, 0)
 		return nil
 	}
 }
@@ -1000,3 +1042,15 @@ func (w *quicResponseWriter) WriteHeader(statusCode int) {
 	}
 	_, _ = fmt.Fprint(w.stream, "\r\n")
 }
+
+func (w *quicResponseWriter) Flush() {
+	if !w.headerWritten {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+var (
+	_ http.ResponseWriter = (*quicResponseWriter)(nil)
+	_ http.Flusher        = (*quicResponseWriter)(nil)
+)
+

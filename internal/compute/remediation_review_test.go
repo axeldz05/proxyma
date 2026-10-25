@@ -201,29 +201,39 @@ func TestFailoverAndDynamicMigration_DelegatedProducersCallbackAuthorization(t *
 	}
 	engine.RegisterOutgoingTask(task)
 
-	// Initial worker is authorized, but alt-worker is not yet
+	// 1. Initial worker is authorized, but random alt-worker is not
 	require.ErrorIs(t, engine.AcceptTaskCallback("alt-worker", protocol.ServiceTaskResponse{
 		TaskID:  taskID,
 		Service: "pipeline-failover",
 		Status:  "completed",
 	}), ErrTaskProducer)
 
-	// Simulate failover step updating delegatedProducers (as dispatchStepWithFailover does)
+	// 2. An unauthorized worker attempting to claim $initial == coordinator must be rejected
+	require.ErrorIs(t, engine.AcceptTaskCallback("mallory", protocol.ServiceTaskResponse{
+		TaskID:  taskID,
+		Service: "pipeline-failover",
+		Status:  "completed",
+		PipelineState: &protocol.PipelineExecutionState{
+			SelectedTargets: map[string]string{"step0": "mallory"},
+			OutputProducers: map[string]string{"$initial": "coord-failover"},
+		},
+	}), ErrTaskProducer, "forged callback referencing coordinator as $initial must be rejected")
+
+	// 3. A dynamically delegated worker (recorded in delegatedProducers via failover/migration) is authorized
 	engine.taskStatusesMu.Lock()
 	meta := engine.taskStatusMeta[taskID]
 	if meta.delegatedProducers == nil {
 		meta.delegatedProducers = make(map[string]struct{})
 	}
-	meta.delegatedProducers["alt-worker"] = struct{}{}
+	meta.delegatedProducers["failover-worker"] = struct{}{}
 	engine.taskStatusMeta[taskID] = meta
 	engine.taskStatusesMu.Unlock()
 
-	// Now alt-worker is authorized
-	require.NoError(t, engine.AcceptTaskCallback("alt-worker", protocol.ServiceTaskResponse{
+	require.NoError(t, engine.AcceptTaskCallback("failover-worker", protocol.ServiceTaskResponse{
 		TaskID:  taskID,
 		Service: "pipeline-failover",
 		Status:  "completed",
-	}))
+	}), "dynamically delegated worker in delegatedProducers must be accepted")
 }
 
 func TestCoordinatorNodeID_URLHandling(t *testing.T) {
@@ -254,8 +264,9 @@ func TestCoordinatorNodeID_URLHandling(t *testing.T) {
 	}
 	require.Equal(t, "explicit-node", coordinatorNodeID(req4))
 
-	// 5. OutputProducers $initial takes precedence over ReplyTo
+	// 5. OutputProducers $initial takes precedence over ReplyTo and RequesterNodeID
 	req5 := protocol.TaskRequest{
+		RequesterNodeID: "edge-client",
 		PipelineState: &protocol.PipelineExecutionState{
 			OutputProducers: map[string]string{"$initial": "initial-producer"},
 		},
@@ -534,6 +545,68 @@ func TestRoutePipelineStep_PreselectedTargetTrackedInDelegatedProducers(t *testi
 		Service: "pipe-preselected",
 		Status:  "completed",
 	}))
+}
+
+func TestCleanShutdown_CheckpointsActiveTasksInWAL(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	storageEngine, err := storage.NewStorageEngine(logger, t.TempDir(), nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = storageEngine.Close() })
+
+	engine, err := NewComputeEngine(context.Background(), logger, nil, 1, "test-node")
+	require.NoError(t, err)
+	engine.SetTaskJournal(storageEngine)
+
+	started := make(chan struct{})
+	require.NoError(t, engine.RegisterNewService(protocol.ServiceSchema{Name: "slow-svc"}, BuildUnaryHandler(
+		func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	)))
+
+	taskID := "task-active-at-shutdown"
+	require.NoError(t, engine.SubmitTask(protocol.TaskRequest{
+		TaskID:  taskID,
+		Service: "slow-svc",
+	}))
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	queuedTaskID := "task-queued-at-shutdown"
+	require.NoError(t, engine.SubmitTask(protocol.TaskRequest{
+		TaskID:  queuedTaskID,
+		Service: "slow-svc",
+	}))
+
+	// Close engine while task is active and queuedTask is pending in acceptedTasks
+	engine.Close()
+
+	// Verify status in engine memory
+	resp, exists := engine.GetTaskResponse(queuedTaskID)
+	require.True(t, exists)
+	require.Equal(t, "failed", resp.Status)
+
+	// Verify durable WAL checkpoint was recorded for queued task
+	journal, err := storageEngine.GetTaskJournal(queuedTaskID)
+	require.NoError(t, err)
+	require.NotEmpty(t, journal)
+
+	var foundFailed bool
+	for _, rec := range journal {
+		if rec.Status == "failed" {
+			foundFailed = true
+			require.Contains(t, rec.Error, ErrClosed.Error())
+		}
+	}
+	require.True(t, foundFailed, "clean shutdown must checkpoint active queued task as failed in WAL")
 }
 
 

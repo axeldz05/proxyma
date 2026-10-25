@@ -1,8 +1,10 @@
 package p2p
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -269,3 +271,65 @@ func TestReloadTLSRotatesStandaloneListenerWithoutCallback(t *testing.T) {
 	}
 	require.Error(t, staleErr, "listener must not keep presenting its pre-rotation certificate")
 }
+
+func TestSwitchableLimiter_LargeBodyNotTruncated(t *testing.T) {
+	t.Parallel()
+
+	// 12 MB payload (larger than former 10 MB LimitReader)
+	bodySize := 12 * 1024 * 1024
+	header := "POST /upload HTTP/1.1\r\nHost: example.com\r\nContent-Length: 12582912\r\n\r\n"
+	pipeReader, pipeWriter := net.Pipe()
+
+	go func() {
+		defer func() { _ = pipeWriter.Close() }()
+		_, _ = pipeWriter.Write([]byte(header))
+		chunk := make([]byte, 64*1024)
+		for written := 0; written < bodySize; {
+			toWrite := len(chunk)
+			if bodySize-written < toWrite {
+				toWrite = bodySize - written
+			}
+			_, _ = pipeWriter.Write(chunk[:toWrite])
+			written += toWrite
+		}
+	}()
+
+	limiter := &switchableLimiter{r: pipeReader, limit: 1 * 1024 * 1024, limited: true}
+	bufr := bufio.NewReader(limiter)
+	req, err := http.ReadRequest(bufr)
+	require.NoError(t, err)
+	limiter.limited = false
+
+	n, err := io.Copy(io.Discard, req.Body)
+	require.NoError(t, err)
+	require.Equal(t, int64(bodySize), n, "body larger than 10MB must not be truncated")
+}
+
+func TestSwitchableLimiter_RejectsHugeHeaders(t *testing.T) {
+	t.Parallel()
+
+	// 1.5 MB header exceeds 1 MB limit
+	hugeHeader := "POST /upload HTTP/1.1\r\nHost: example.com\r\nX-Spam: " + string(make([]byte, 1500*1024)) + "\r\n\r\n"
+	pipeReader, pipeWriter := net.Pipe()
+
+	go func() {
+		defer func() { _ = pipeWriter.Close() }()
+		_, _ = pipeWriter.Write([]byte(hugeHeader))
+	}()
+
+	limiter := &switchableLimiter{r: pipeReader, limit: 1 * 1024 * 1024, limited: true}
+	bufr := bufio.NewReader(limiter)
+	_, err := http.ReadRequest(bufr)
+	require.Error(t, err, "headers exceeding limit must be rejected")
+}
+
+func TestQUICResponseWriter_ImplementsFlusher(t *testing.T) {
+	t.Parallel()
+
+	var rw http.ResponseWriter = &quicResponseWriter{header: make(http.Header)}
+	flusher, ok := rw.(http.Flusher)
+	require.True(t, ok, "quicResponseWriter must satisfy http.Flusher")
+	require.NotNil(t, flusher)
+}
+
+

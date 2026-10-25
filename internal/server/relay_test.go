@@ -540,3 +540,39 @@ func TestRelayedRequestPreservesOriginIdentity(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, lastStatus)
 	mu.Unlock()
 }
+
+func TestHandleRelayForward_UnauthenticatedOriginStripped(t *testing.T) {
+	t.Parallel()
+
+	sv := NewServer(t, testutil.DefaultConfig(t, "relay-fwd-unauth"), nil)
+	sv.AddPeer("target-node", protocol.AddressRecord{Addresses: []string{"https://target.invalid"}})
+	// Create queue for target
+	q, err := sv.Relays.GetOrCreateQueue("target-node")
+	require.NoError(t, err)
+
+	bodyBytes, err := json.Marshal(protocol.RelayRequest{
+		Target:       "target-node",
+		ReqID:        "unauth-req-1",
+		Method:       http.MethodPost,
+		Path:         protocol.PathClusterJoin,
+		OriginPeerID: "spoofed-peer-id",
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, protocol.PathRelayForward, bytes.NewReader(bodyBytes))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	// Request has no TLS connection state (unauthenticated)
+
+	rec := httptest.NewRecorder()
+	go sv.HandleRelayForward(rec, req)
+
+	select {
+	case forwarded := <-q:
+		require.Equal(t, "", forwarded.OriginPeerID, "unauthenticated caller must have OriginPeerID stripped")
+		require.Equal(t, "target-node", forwarded.Target)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for forwarded relay request")
+	}
+}
+

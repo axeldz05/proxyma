@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	storage "proxyma/internal/storage/physical"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -222,4 +223,85 @@ func TestDeleteBlobClearsCacheWhenAlreadyMissing(t *testing.T) {
 	exists, err := aStorage.BlobExists(hash)
 	require.NoError(t, err)
 	require.False(t, exists)
+}
+
+func TestReadBlobClearsCacheWhenFileRemovedExternally(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	aStorage := storage.NewStorage(baseDir)
+	content := "external-removal-test"
+	hash, _, err := aStorage.SaveBlob(strings.NewReader(content))
+	require.NoError(t, err)
+
+	// First verify it exists and is cached
+	exists, err := aStorage.BlobExists(hash)
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	// Remove file behind storage's back
+	require.NoError(t, os.Remove(filepath.Join(baseDir, hash)))
+
+	// ReadBlob should detect missing file and clear cache
+	var buf bytes.Buffer
+	err = aStorage.ReadBlob(hash, &buf)
+	require.ErrorIs(t, err, storage.ErrFileDoesNotExist)
+
+	// Subsequent BlobExists must report false
+	exists, err = aStorage.BlobExists(hash)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestConcurrentReadBlob(t *testing.T) {
+	t.Parallel()
+	aStorage := storage.NewStorage(t.TempDir())
+
+	content := []byte("concurrent reader payload test")
+	hash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	const readers = 10
+	var wg sync.WaitGroup
+	wg.Add(readers)
+
+	for range readers {
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			err := aStorage.ReadBlob(hash, &buf)
+			require.NoError(t, err)
+			require.Equal(t, content, buf.Bytes())
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestConcurrentReadBlobCorrupt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	aStorage := storage.NewStorage(dir)
+
+	content := []byte("corrupt-payload-target")
+	hash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	// Corrupt the blob on disk
+	blobPath := filepath.Join(dir, hash)
+	require.NoError(t, os.WriteFile(blobPath, []byte("tampered-bytes"), 0644))
+
+	const readers = 10
+	var wg sync.WaitGroup
+	wg.Add(readers)
+
+	for range readers {
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			err := aStorage.ReadBlob(hash, &buf)
+			require.Error(t, err)
+		}()
+	}
+
+	wg.Wait()
 }

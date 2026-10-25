@@ -482,17 +482,17 @@ func TLSConfigTrustCAHash(caHash string) *tls.Config {
 	}
 }
 
-// WriteNodePEMs writes CA/node cert/key PEM bytes to disk (L2).
+// WriteNodePEMs writes CA/node cert/key PEM bytes to disk atomically (L2).
 // keyPEM may be empty (e.g. CA rotation that only updates certs).
 func WriteNodePEMs(caPath, certPath, keyPath string, caPEM, certPEM, keyPEM []byte) error {
-	if err := os.WriteFile(caPath, caPEM, 0644); err != nil {
+	if err := utils.WriteFileAtomic(caPath, caPEM, 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+	if err := utils.WriteFileAtomic(certPath, certPEM, 0644); err != nil {
 		return err
 	}
 	if len(keyPEM) > 0 && keyPath != "" {
-		if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		if err := utils.WriteFileAtomic(keyPath, keyPEM, 0600); err != nil {
 			return err
 		}
 	}

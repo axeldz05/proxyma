@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 )
 
@@ -128,9 +129,18 @@ func TestRunServiceRejectsMalformedAndNonObjectPayloadSynchronously(t *testing.T
 
 func TestStreamServiceCanBeCanceledByReturnedStreamID(t *testing.T) {
 	StopNode()
-	tempDir := t.TempDir()
-	StartNode(tempDir, true)
 	t.Cleanup(StopNode)
+	tempDir := t.TempDir()
+	if err := p2p.SetupNewNode(
+		tempDir,
+		"stream-test-node",
+		protocol.HTTPSAddr("127.0.0.1", "0"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if result := StartNode(tempDir, true); result != "" {
+		t.Fatalf("StartNode: %s", result)
+	}
 
 	srv := getSrv()
 	if srv == nil {

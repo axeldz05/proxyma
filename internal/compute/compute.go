@@ -1020,6 +1020,9 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 		rec.Intermediate = false
 		rec.PipelineState = protocol.ClonePipelineExecutionState(pipelineState)
 		_ = c.recordCheckpoint(rec)
+		if c.taskJournal != nil && c.hasIntermediateBlobs(pipelineState, schema) {
+			_ = c.taskJournal.PruneIntermediateTaskData(t.TaskID)
+		}
 
 		responsePayload := protocol.ServiceTaskResponse{
 			TaskID:         t.TaskID,
@@ -1027,6 +1030,7 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 			Status:         "completed",
 			Outputs:        finalOutputs,
 			ProducerNodeID: c.nodeID,
+			PipelineState:  protocol.ClonePipelineExecutionState(pipelineState),
 		}
 
 		storedResponse := responsePayload
@@ -1044,6 +1048,22 @@ func (c *ComputeEngine) advancePipeline(t protocol.TaskRequest, schema protocol.
 			}
 		}
 	}
+}
+
+func (c *ComputeEngine) hasIntermediateBlobs(state *protocol.PipelineExecutionState, schema protocol.PipelineSchema) bool {
+	if state == nil || len(schema.Steps) <= 1 {
+		return false
+	}
+	finalStepID := schema.Steps[len(schema.Steps)-1].ID
+	for stepID, outputs := range state.Outputs {
+		if stepID == finalStepID || stepID == "$pipeline_outputs" {
+			continue
+		}
+		if len(storage.ExtractBlobHashes(outputs)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *ComputeEngine) sendPipelineError(t protocol.TaskRequest, err error) {
@@ -1067,6 +1087,7 @@ func (c *ComputeEngine) sendPipelineError(t protocol.TaskRequest, err error) {
 		Status:         "failed",
 		Error:          err.Error(),
 		ProducerNodeID: c.nodeID,
+		PipelineState:  protocol.ClonePipelineExecutionState(t.PipelineState),
 	}
 	c.setTaskStatus(responsePayload)
 	if t.ReplyTo != "" {
@@ -1298,14 +1319,19 @@ func (c *ComputeEngine) AcceptTaskCallback(producerNodeID string, response proto
 		return ErrTaskNotFound
 	}
 	meta := c.taskStatusMeta[response.TaskID]
-	expectedProducer := meta.expectedProducer
-	_, delegated := meta.delegatedProducers[producerNodeID]
-	if (expectedProducer == "" || expectedProducer != producerNodeID) && !delegated {
+	authorized := c.isAuthorizedCallbackProducer(producerNodeID, meta)
+	if !authorized {
+		expectedProducer := meta.expectedProducer
 		if expectedProducer == "" && len(meta.delegatedProducers) == 0 {
 			return fmt.Errorf("%w: no producer was registered for task %q", ErrTaskProducer, response.TaskID)
 		}
 		return fmt.Errorf("%w: expected %q, got %q", ErrTaskProducer, expectedProducer, producerNodeID)
 	}
+	if meta.delegatedProducers == nil {
+		meta.delegatedProducers = make(map[string]struct{})
+	}
+	meta.delegatedProducers[producerNodeID] = struct{}{}
+	c.taskStatusMeta[response.TaskID] = meta
 	if response.Service == "" {
 		response.Service = current.Service
 	} else if current.Service != "" && response.Service != current.Service {
@@ -1341,6 +1367,18 @@ func (c *ComputeEngine) AcceptTaskCallback(producerNodeID string, response proto
 	c.storeTaskStatusLocked(response)
 	c.recordTerminalResponseCheckpoint(response, producerNodeID)
 	return nil
+}
+
+func (c *ComputeEngine) isAuthorizedCallbackProducer(producerNodeID string, meta taskStatusMetadata) bool {
+	if meta.expectedProducer != "" && meta.expectedProducer == producerNodeID {
+		return true
+	}
+	if meta.delegatedProducers != nil {
+		if _, ok := meta.delegatedProducers[producerNodeID]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordTaskResponse publishes the trusted result of server-side output ingest.
@@ -1598,6 +1636,9 @@ func (c *ComputeEngine) failAcceptedTasks() {
 				}
 			}
 			c.storeTaskStatusLocked(failedTaskResponse(req.TaskID, req.Service, ErrClosed.Error()))
+			rec := c.checkpointFromTask(req, "failed")
+			rec.Error = ErrClosed.Error()
+			_ = c.recordCheckpoint(rec)
 			c.acceptedTasks.Delete(key)
 		}
 		return true

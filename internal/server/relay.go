@@ -284,6 +284,7 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 			utils.RespondError(w, http.StatusForbidden, "mTLS certificate required for this relay path")
 			return
 		}
+		req.OriginPeerID = ""
 	}
 
 	queue, err := s.Relays.GetOrCreateQueue(req.Target)

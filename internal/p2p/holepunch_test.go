@@ -1,6 +1,7 @@
 package p2p_test
 
 import (
+	"context"
 	"net"
 	"proxyma/internal/p2p"
 	"testing"
@@ -99,6 +100,26 @@ func TestBurstPingsNoopOnNil(t *testing.T) {
 	p2p.BurstPings(nil, nil, "x", 5, time.Millisecond)
 	p2p.BurstPings(nil, &net.UDPAddr{}, "x", 0, 0)
 }
+
+func TestBurstPingsContext_Cancellation(t *testing.T) {
+	t.Parallel()
+
+	send, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = send.Close() })
+
+	addr := send.LocalAddr().(*net.UDPAddr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	p2p.BurstPingsContext(ctx, send, addr, "puncher", 100, 100*time.Millisecond)
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 100*time.Millisecond, "cancelled context must return immediately from BurstPingsContext")
+}
+
 
 func TestHolePunchPingDemuxDoesNotSteal(t *testing.T) {
 	t.Parallel()

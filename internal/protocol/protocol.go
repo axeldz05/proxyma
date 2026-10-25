@@ -194,12 +194,13 @@ type DiscoveryQuery struct {
 }
 
 type ServiceTaskResponse struct {
-	TaskID         string         `json:"task_id"`
-	Service        string         `json:"service"`
-	Status         string         `json:"status"`
-	Error          string         `json:"error,omitempty"`
-	Outputs        map[string]any `json:"outputs,omitempty"`
-	ProducerNodeID string         `json:"producer_node_id,omitempty"`
+	TaskID         string                  `json:"task_id"`
+	Service        string                  `json:"service"`
+	Status         string                  `json:"status"`
+	Error          string                  `json:"error,omitempty"`
+	Outputs        map[string]any          `json:"outputs,omitempty"`
+	ProducerNodeID string                  `json:"producer_node_id,omitempty"`
+	PipelineState  *PipelineExecutionState `json:"pipeline_state,omitempty"`
 }
 
 const (
@@ -244,6 +245,7 @@ func CloneTaskEscrowRequest(req TaskEscrowRequest) TaskEscrowRequest {
 // CloneServiceTaskResponse isolates nested outputs at status boundaries.
 func CloneServiceTaskResponse(response ServiceTaskResponse) ServiceTaskResponse {
 	response.Outputs = CloneJSONMap(response.Outputs)
+	response.PipelineState = ClonePipelineExecutionState(response.PipelineState)
 	return response
 }
 

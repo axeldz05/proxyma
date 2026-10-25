@@ -15,13 +15,13 @@ import (
 )
 
 func coordinatorNodeID(t protocol.TaskRequest) string {
-	if t.RequesterNodeID != "" {
-		return t.RequesterNodeID
-	}
 	if t.PipelineState != nil && t.PipelineState.OutputProducers != nil {
 		if initial := t.PipelineState.OutputProducers["$initial"]; initial != "" {
 			return initial
 		}
+	}
+	if t.RequesterNodeID != "" {
+		return t.RequesterNodeID
 	}
 	if t.ReplyTo != "" {
 		if u, err := url.Parse(t.ReplyTo); err == nil && u.Hostname() != "" {
@@ -142,20 +142,7 @@ func (c *ComputeEngine) PutTaskInEscrow(req protocol.TaskEscrowRequest) error {
 
 	// Persist checkpoint to bbolt WAL + bucketTasksActive
 	if c.taskJournal != nil && !isDuplicateEscrow {
-		var stepOutputs map[string]any
-		if req.PipelineState != nil && req.StepIndex > 0 {
-			var prevStepID string
-			if req.PipelineState.Snapshot != nil && req.StepIndex-1 < len(req.PipelineState.Snapshot.Steps) {
-				prevStepID = req.PipelineState.Snapshot.Steps[req.StepIndex-1].ID
-			} else if schema, exists := c.GetPipeline(req.Service); exists && req.StepIndex-1 < len(schema.Steps) {
-				prevStepID = schema.Steps[req.StepIndex-1].ID
-			}
-			if prevStepID != "" && req.PipelineState.Outputs != nil {
-				stepOutputs = req.PipelineState.Outputs[prevStepID]
-			}
-		}
 		rec := checkpointFromEscrow(req, protocol.TaskStatusEscrow, req.ProducerNodeID)
-		rec.Outputs = protocol.CloneJSONMap(stepOutputs)
 		rec.Timestamp = req.Timestamp
 		if err := c.recordCheckpoint(rec); err != nil {
 			return fmt.Errorf("persist escrow checkpoint: %w", err)
@@ -329,10 +316,22 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 	delete(c.escrowTasks, taskID)
 	c.escrowTasksMu.Unlock()
 
+	c.taskStatusesMu.Lock()
+	prevMeta, hasPrevMeta := c.taskStatusMeta[taskID]
+	c.taskStatusesMu.Unlock()
+
 	revertEscrow := func() {
 		c.escrowTasksMu.Lock()
 		c.escrowTasks[taskID] = task
 		c.escrowTasksMu.Unlock()
+
+		c.taskStatusesMu.Lock()
+		if hasPrevMeta {
+			c.taskStatusMeta[taskID] = prevMeta
+		} else {
+			delete(c.taskStatusMeta, taskID)
+		}
+		c.taskStatusesMu.Unlock()
 
 		c.setTaskStatus(protocol.ServiceTaskResponse{
 			TaskID:         task.TaskID,

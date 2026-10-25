@@ -146,7 +146,15 @@ func newTaskRecord(taskID string, createdAt time.Time) TaskRecord {
 }
 
 func (t *TaskRecord) applyJournalRecord(record TaskJournalRecord) {
+	prevStatus := t.Status
 	t.Overlay(record.TaskContext)
+	if record.Status == protocol.TaskEventSchemaMigrated {
+		if prevStatus != "" {
+			t.Status = prevStatus
+		} else {
+			t.Status = "running"
+		}
+	}
 	t.UpdatedAt = record.Timestamp
 	if record.StepID != "" {
 		t.CurrentStepID = record.StepID
@@ -318,7 +326,7 @@ func (se *StorageEngine) AppendTaskCheckpoint(record TaskJournalRecord) error {
 			return err
 		}
 		if histExists && isTerminalTaskStatus(hist.Status) {
-			if !isTerminalTaskStatus(record.Status) {
+			if record.Status != hist.Status {
 				return ErrTaskTerminal
 			}
 		}
@@ -451,12 +459,62 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 		return err
 	}
 
+	// Read-only pre-flight inspection: check task status and verify if intermediate
+	// records exist before acquiring full DB write lock and scanning history.
+	var hasIntermediate bool
+	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
+		isActive, err := boltHasKey(tx, bucketTasksActive, taskID)
+		if err != nil {
+			return err
+		}
+		if isActive {
+			return ErrTaskActive
+		}
+
+		_, histExists, err := boltGetJSON[TaskRecord](tx, bucketTasksHistory, taskID)
+		if err != nil {
+			return err
+		}
+
+		journalBucket := tx.Bucket([]byte(bucketTasksJournal))
+		var hasTerminalJournal bool
+		if journalBucket != nil {
+			errStop := errors.New("stop")
+			err := scanTaskJournalRecords(journalBucket, taskID, func(_ []byte, rec TaskJournalRecord) error {
+				if isTerminalTaskStatus(rec.Status) {
+					hasTerminalJournal = true
+				}
+				if (rec.Intermediate || !isTerminalTaskStatus(rec.Status)) && rec.Status != protocol.TaskEventSchemaMigrated {
+					hasIntermediate = true
+				}
+				if hasIntermediate && (histExists || hasTerminalJournal) {
+					return errStop
+				}
+				return nil
+			})
+			if err != nil && !errors.Is(err, errStop) {
+				return err
+			}
+		}
+
+		if !histExists && !hasTerminalJournal {
+			return ErrTaskNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !hasIntermediate {
+		return nil
+	}
+
 	se.mutationMu.Lock()
 	defer se.mutationMu.Unlock()
 
 	var intermediateBlobsSet = make(map[string]bool)
 
-	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
+	err = se.subscriptions.Update(func(tx *bbolt.Tx) error {
 		// 1. Guard: Check if task is active. Active tasks cannot have intermediate data pruned.
 		isActive, err := boltHasKey(tx, bucketTasksActive, taskID)
 		if err != nil {
@@ -503,10 +561,12 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 		finalBlobs := make(map[string]bool)
 		if histExists {
 			protocol.PopulateMap(finalBlobs, extractNonIntermediateBlobHashes(hist.FinalOutputs), true)
+			protocol.PopulateMap(finalBlobs, ExtractBlobHashes(hist.Payload), true)
 		}
 		for _, item := range journalRecords {
 			if !item.rec.Intermediate && isTerminalTaskStatus(item.rec.Status) {
 				protocol.PopulateMap(finalBlobs, extractNonIntermediateBlobHashes(item.rec.Outputs), true)
+				protocol.PopulateMap(finalBlobs, ExtractBlobHashes(item.rec.Payload), true)
 			}
 		}
 
@@ -536,6 +596,7 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 			var otherHist TaskRecord
 			if err := json.Unmarshal(v, &otherHist); err == nil {
 				protocol.PopulateMap(finalBlobs, extractNonIntermediateBlobHashes(otherHist.FinalOutputs), true)
+				protocol.PopulateMap(finalBlobs, ExtractBlobHashes(otherHist.Payload), true)
 			}
 		}
 
@@ -543,7 +604,7 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 		var intermediateKeys [][]byte
 		for _, item := range journalRecords {
 			rec := item.rec
-			if rec.Intermediate || !isTerminalTaskStatus(rec.Status) {
+			if (rec.Intermediate || !isTerminalTaskStatus(rec.Status)) && rec.Status != protocol.TaskEventSchemaMigrated {
 				intermediateKeys = append(intermediateKeys, item.key)
 				protocol.PopulateMapIf(intermediateBlobsSet, rec.BlobHashes(), true, func(h string) bool {
 					return !finalBlobs[h]
@@ -574,6 +635,10 @@ func (se *StorageEngine) PruneIntermediateTaskData(taskID string) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	if len(intermediateBlobsSet) == 0 {
+		return nil
 	}
 
 	// 8. Physically sweep queued orphans
