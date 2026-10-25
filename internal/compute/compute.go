@@ -13,6 +13,7 @@ import (
 	"proxyma/internal/utils"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -590,11 +591,9 @@ func (c *ComputeEngine) tryDynamicSchemaMigration(t protocol.TaskRequest, state 
 	if meta.delegatedProducers == nil {
 		meta.delegatedProducers = make(map[string]struct{})
 	}
-	for _, target := range state.SelectedTargets {
-		if target != "" {
-			meta.delegatedProducers[target] = struct{}{}
-		}
-	}
+	protocol.PopulateMapIf(meta.delegatedProducers, slices.Collect(maps.Values(state.SelectedTargets)), struct{}{}, func(target string) bool {
+		return target != ""
+	})
 	c.taskStatusMeta[t.TaskID] = meta
 	c.taskStatusesMu.Unlock()
 
@@ -718,19 +717,15 @@ func (c *ComputeEngine) executePipelineStep(t protocol.TaskRequest, schema proto
 
 	if !hasConnections {
 		if pipelineState.CurrentStep == 0 {
-			for k, v := range t.Payload {
-				if k != "$pipeline" && k != "requester_node_id" {
-					stepPayload[k] = v
-					inputProducers[k] = pipelineState.OutputProducers["$initial"]
-				}
-			}
+			protocol.CopyMapIf(stepPayload, t.Payload, func(k string, _ any) bool {
+				return k != "$pipeline" && k != "requester_node_id"
+			})
+			protocol.PopulateMap(inputProducers, slices.Collect(maps.Keys(stepPayload)), pipelineState.OutputProducers["$initial"])
 		} else {
 			prevStepID := schema.Steps[pipelineState.CurrentStep-1].ID
 			if prevOutputs, ok := pipelineState.Outputs[prevStepID]; ok {
 				maps.Copy(stepPayload, prevOutputs)
-				for key := range prevOutputs {
-					inputProducers[key] = pipelineState.OutputProducers[prevStepID]
-				}
+				protocol.PopulateMap(inputProducers, slices.Collect(maps.Keys(prevOutputs)), pipelineState.OutputProducers[prevStepID])
 			}
 		}
 	}
@@ -932,13 +927,9 @@ func (c *ComputeEngine) dispatchStepWithFailover(t protocol.TaskRequest, step pr
 		// Failover: query serviceFinder for an alternative candidate node offering the service
 		var altTarget string
 		if c.serviceFinder != nil {
-			var excluded []string
-			for p := range triedPeers {
-				excluded = append(excluded, p)
-			}
 			query := protocol.DiscoveryQuery{
 				Service:       step.Service,
-				ExcludedPeers: excluded,
+				ExcludedPeers: slices.Collect(maps.Keys(triedPeers)),
 			}
 			if stepIndex > 0 {
 				query.RequiredCapabilities = map[string]int{
@@ -1233,11 +1224,9 @@ func (c *ComputeEngine) RegisterOutgoingTask(req protocol.TaskRequest) {
 				}
 			}
 		}
-		for _, target := range req.PipelineState.SelectedTargets {
-			if target != "" {
-				delegatedProducers[target] = struct{}{}
-			}
-		}
+		protocol.PopulateMapIf(delegatedProducers, slices.Collect(maps.Values(req.PipelineState.SelectedTargets)), struct{}{}, func(target string) bool {
+			return target != ""
+		})
 	}
 	c.taskStatusesMu.Lock()
 	defer c.taskStatusesMu.Unlock()

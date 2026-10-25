@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"proxyma/internal/protocol"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -531,11 +533,8 @@ func (qm *QUICManager) removeDial(peerID string) {
 
 func (qm *QUICManager) detachSessions() []*quic.Conn {
 	qm.SessionsMu.Lock()
-	sessions := make([]*quic.Conn, 0, len(qm.Sessions))
-	for id, sess := range qm.Sessions {
-		sessions = append(sessions, sess)
-		delete(qm.Sessions, id)
-	}
+	sessions := slices.Collect(maps.Values(qm.Sessions))
+	clear(qm.Sessions)
 	qm.SessionsMu.Unlock()
 	return sessions
 }

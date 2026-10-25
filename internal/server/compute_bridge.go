@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"slices"
 	"time"
 )
 
@@ -12,12 +13,7 @@ func (s *Server) RequestServiceToCluster(query protocol.DiscoveryQuery) (string,
 	var bids []protocol.ServiceBid
 
 	isExcluded := func(peerID string) bool {
-		for _, excluded := range query.ExcludedPeers {
-			if peerID == excluded {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(query.ExcludedPeers, peerID)
 	}
 
 	if !isExcluded(s.Config.ID) {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -636,10 +638,7 @@ func (se *StorageEngine) listTaskRecords(bucket string, sortByUpdated bool) ([]T
 	if err != nil {
 		return nil, err
 	}
-	tasks := make([]TaskRecord, 0, len(taskMap))
-	for _, task := range taskMap {
-		tasks = append(tasks, task)
-	}
+	tasks := slices.Collect(maps.Values(taskMap))
 	sort.Slice(tasks, func(i, j int) bool {
 		if sortByUpdated {
 			if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {

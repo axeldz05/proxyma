@@ -11,6 +11,7 @@ import (
 	"net"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -94,14 +95,7 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	// 2. Discover local interface IPs
 	localIPs, _ := utils.GetRoutableLocalIPs()
 	for _, lip := range localIPs {
-		dup := false
-		for _, ip := range ips {
-			if ip.Equal(lip) {
-				dup = true
-				break
-			}
-		}
-		if !dup {
+		if !slices.ContainsFunc(ips, func(ip net.IP) bool { return ip.Equal(lip) }) {
 			ips = append(ips, lip)
 		}
 	}

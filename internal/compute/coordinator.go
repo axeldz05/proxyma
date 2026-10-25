@@ -3,7 +3,9 @@ package compute
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"time"
 
@@ -254,10 +256,7 @@ func (c *ComputeEngine) RestoreEscrowTask(task storage.TaskRecord) {
 // any that now have eligible candidates available in the mesh. Returns the number of resumed tasks.
 func (c *ComputeEngine) WakeupEscrowTasks() int {
 	c.escrowTasksMu.RLock()
-	taskIDs := make([]string, 0, len(c.escrowTasks))
-	for id := range c.escrowTasks {
-		taskIDs = append(taskIDs, id)
-	}
+	taskIDs := slices.Collect(maps.Keys(c.escrowTasks))
 	c.escrowTasksMu.RUnlock()
 
 	var resumed int
@@ -407,11 +406,9 @@ func (c *ComputeEngine) ResumeEscrowTask(taskID string) error {
 	meta.delegatedProducers[targetPeer] = struct{}{}
 	meta.expectedProducer = targetPeer
 	if taskReq.PipelineState != nil {
-		for _, p := range taskReq.PipelineState.SelectedTargets {
-			if p != "" {
-				meta.delegatedProducers[p] = struct{}{}
-			}
-		}
+		protocol.PopulateMapIf(meta.delegatedProducers, slices.Collect(maps.Values(taskReq.PipelineState.SelectedTargets)), struct{}{}, func(p string) bool {
+			return p != ""
+		})
 	}
 	c.taskStatusMeta[task.TaskID] = meta
 	c.taskStatusesMu.Unlock()

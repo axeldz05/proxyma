@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
+	"slices"
 
 	"proxyma/internal/protocol"
 	"proxyma/shared/uischema"
@@ -251,8 +253,6 @@ func HasUnixUnary(unixAction string) bool {
 // RegisteredUnixActions returns the set of unix action strings with handlers (for consistency tests).
 func RegisteredUnixActions() map[string]struct{} {
 	out := make(map[string]struct{}, len(unixHandlers))
-	for k := range unixHandlers {
-		out[k] = struct{}{}
-	}
+	protocol.PopulateMap(out, slices.Collect(maps.Keys(unixHandlers)), struct{}{})
 	return out
 }

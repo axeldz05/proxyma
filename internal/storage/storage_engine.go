@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -332,10 +334,7 @@ func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.Inde
 func (se *StorageEngine) ProcessRemoteManifestE(manifest map[string]protocol.IndexEntry) ([]protocol.IndexEntry, error) {
 	var missingFiles []protocol.IndexEntry
 	var manifestErr error
-	names := make([]string, 0, len(manifest))
-	for name := range manifest {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(manifest))
 	sort.Strings(names)
 	for _, name := range names {
 		remoteFileInfo := manifest[name]
