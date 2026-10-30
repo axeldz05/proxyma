@@ -35,6 +35,8 @@ func TestSetHostResourceSampler(t *testing.T) {
 	cpu, mem = currentHostResourceSampler()()
 	require.GreaterOrEqual(t, cpu, 0.0)
 	require.LessOrEqual(t, cpu, 10.0)
+	require.GreaterOrEqual(t, mem, 0.0)
+	require.LessOrEqual(t, mem, 10.0)
 
 	// Passing nil should reset to defaultHostResourceSampler
 	restoreNil := SetHostResourceSampler(nil)

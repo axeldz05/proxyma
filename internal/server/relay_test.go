@@ -657,7 +657,7 @@ func TestRelayForwardReqIDCollision(t *testing.T) {
 
 	resp, err := sponsor.Client().Do(fwdReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
