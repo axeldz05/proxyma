@@ -9,10 +9,10 @@ import (
 
 type MockPeerClient struct {
 	OnFetchManifest        func(ctx context.Context, addr string) (map[string]protocol.IndexEntry, error)
-	OnAnnounce             func(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
+	OnAnnounce             func(ctx context.Context, sponsorAddress string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	OnNotify               func(ctx context.Context, addr string, n protocol.PeerNotification) error
 	OnNotifyServiceUpdate  func(ctx context.Context, addr string, n protocol.ServiceNotification) error
-	OnAddPeer              func(addr string, req protocol.AddPeerRequest) error
+	OnAddPeer              func(ctx context.Context, addr string, req protocol.AddPeerRequest) error
 	OnDownloadBlob         func(ctx context.Context, addr, hash string) (io.ReadCloser, error)
 	OnDiscoverServices     func(ctx context.Context, addr string) ([]string, error)
 	OnSubmitTask           func(ctx context.Context, addr string, req protocol.TaskRequest) error
@@ -26,18 +26,19 @@ type MockPeerClient struct {
 	OnRequestProbe         func(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 	OnRotateTLS            func(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	OnNotifyPipelineSchema func(ctx context.Context, addr string, n protocol.PipelineNotification) error
+	OnStreamServiceNegotiated func(ctx context.Context, peerID string, serviceName string, payload map[string]any) (p2p.NegotiatedServiceStream, error)
 }
 
-func (m *MockPeerClient) AddPeer(addr string, req protocol.AddPeerRequest) error {
+func (m *MockPeerClient) AddPeer(ctx context.Context, addr string, req protocol.AddPeerRequest) error {
 	if m.OnAddPeer != nil {
-		return m.OnAddPeer(addr, req)
+		return m.OnAddPeer(ctx, addr, req)
 	}
 	return nil
 }
 
-func (m *MockPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
+func (m *MockPeerClient) Announce(ctx context.Context, sponsorAddress string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
 	if m.OnAnnounce != nil {
-		return m.OnAnnounce(sponsorAddres, peerRequest)
+		return m.OnAnnounce(ctx, sponsorAddress, peerRequest)
 	}
 	return map[string]protocol.AddressRecord{}, nil
 }
@@ -156,6 +157,14 @@ func (m *MockPeerClient) NotifyPipelineSchema(ctx context.Context, addr string, 
 
 func (m *MockPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
 	return nil, nil
+}
+
+func (m *MockPeerClient) StreamServiceNegotiated(ctx context.Context, peerID string, serviceName string, payload map[string]any) (p2p.NegotiatedServiceStream, error) {
+	if m.OnStreamServiceNegotiated != nil {
+		return m.OnStreamServiceNegotiated(ctx, peerID, serviceName, payload)
+	}
+	rc, err := m.StreamService(ctx, peerID, serviceName, payload)
+	return p2p.NegotiatedServiceStream{Body: rc, Version: protocol.ServiceStreamVersion}, err
 }
 
 func (m *MockPeerClient) UpdatePeerRoute(peerID string, record protocol.AddressRecord) {}

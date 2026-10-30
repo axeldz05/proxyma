@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -41,10 +40,10 @@ func TestOutboxGenerationRejectsReverseCommitAndPersistsAcrossRestart(t *testing
 	require.NoError(t, err)
 	require.Greater(t, newer, older)
 
-	applied, err := engine.PutOutboxRawIfCurrentGeneration(id, newer, []byte("newer"), nil)
+	applied, err := engine.PutOutboxRawIfCurrentGeneration(id, newer, []byte("newer"))
 	require.NoError(t, err)
 	require.True(t, applied)
-	applied, err = engine.PutOutboxRawIfCurrentGeneration(id, older, []byte("older"), nil)
+	applied, err = engine.PutOutboxRawIfCurrentGeneration(id, older, []byte("older"))
 	require.NoError(t, err)
 	require.False(t, applied, "an older reservation must not overwrite a newer committed value")
 
@@ -64,31 +63,6 @@ func TestOutboxGenerationRejectsReverseCommitAndPersistsAcrossRestart(t *testing
 	require.Greater(t, afterRestart, newer)
 }
 
-func TestOutboxV2NamespaceCannotCollideWithLegacyKey(t *testing.T) {
-	t.Parallel()
-	engine, err := NewStorageEngine(slog.Default(), t.TempDir(), nil, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, engine.Close()) })
-
-	const id = "same-arbitrary-key"
-	require.NoError(t, engine.PutOutboxRaw(id, []byte("legacy")))
-	generation, err := engine.ReserveOutboxGeneration(id)
-	require.NoError(t, err)
-	applied, err := engine.PutOutboxRawIfCurrentGeneration(id, generation, []byte("v2"), nil)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	v2, err := engine.ListOutboxRaw()
-	require.NoError(t, err)
-	require.Equal(t, map[string][]byte{id: []byte("v2")}, v2)
-	legacy, err := engine.ListLegacyOutboxRaw()
-	require.NoError(t, err)
-	require.Equal(t, map[string][]byte{id: []byte("legacy")}, legacy)
-	count, err := engine.CountOutboxEntries()
-	require.NoError(t, err)
-	require.Equal(t, 2, count)
-}
-
 func TestOutboxReservationReleaseCannotDeleteNewerReservation(t *testing.T) {
 	t.Parallel()
 	engine, err := NewStorageEngine(slog.Default(), t.TempDir(), nil, nil)
@@ -100,83 +74,32 @@ func TestOutboxReservationReleaseCannotDeleteNewerReservation(t *testing.T) {
 	newer, err := engine.ReserveOutboxGeneration("entity")
 	require.NoError(t, err)
 	require.NoError(t, engine.ReleaseOutboxGeneration("entity", older))
-	applied, err := engine.PutOutboxRawIfCurrentGeneration("entity", newer, []byte("newer"), nil)
+	applied, err := engine.PutOutboxRawIfCurrentGeneration("entity", newer, []byte("newer"))
 	require.NoError(t, err)
 	require.True(t, applied)
 	require.NoError(t, engine.subscriptions.View(func(tx *bbolt.Tx) error {
-		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxV2Reservations)).Stats().KeyN)
+		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxReservations)).Stats().KeyN)
 		return nil
 	}))
 }
 
-func TestLegacyMigrationSnapshotCannotOverwriteNewerV2Mutation(t *testing.T) {
-	t.Parallel()
-	engine, err := NewStorageEngine(slog.Default(), t.TempDir(), nil, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, engine.Close()) })
 
-	const id = "entity"
-	require.NoError(t, engine.PutOutboxRaw("legacy", []byte("legacy")))
-	expectedCurrent, err := engine.GetOutboxRaw(id)
-	require.NoError(t, err)
-	require.Nil(t, expectedCurrent)
-
-	generation, err := engine.ReserveOutboxGeneration(id)
-	require.NoError(t, err)
-	applied, err := engine.PutOutboxRawIfCurrentGeneration(id, generation, []byte("newer"), nil)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	_, migrated, err := engine.ReserveOutboxGenerationIfUnchanged(id, expectedCurrent)
-	require.NoError(t, err)
-	require.False(t, migrated)
-	current, err := engine.GetOutboxRaw(id)
-	require.NoError(t, err)
-	require.Equal(t, []byte("newer"), current)
-}
-
-func TestLegacyMigrationCannotStealInFlightMutationReservation(t *testing.T) {
-	t.Parallel()
-	engine, err := NewStorageEngine(slog.Default(), t.TempDir(), nil, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, engine.Close()) })
-
-	const id = "in-flight"
-	mutationGeneration, err := engine.ReserveOutboxGeneration(id)
-	require.NoError(t, err)
-	_, reserved, err := engine.ReserveOutboxGenerationIfUnchanged(id, nil)
-	require.NoError(t, err)
-	require.False(t, reserved)
-	applied, err := engine.PutOutboxRawIfCurrentGeneration(id, mutationGeneration, []byte("mutation"), nil)
-	require.NoError(t, err)
-	require.True(t, applied)
-}
-
-func TestOutboxNamespaceMigrationPreservesIntentsAndReclaimsReservations(t *testing.T) {
+func TestOutboxReclaimsStaleReservationsAtStartup(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	engine, err := NewStorageEngine(slog.Default(), dir, nil, nil)
 	require.NoError(t, err)
 
-	intent := downloadIntent{
-		File:   protocol.IndexEntry{Name: "pending.txt", Hash: "hash", Version: 1},
-		Source: "https://peer",
-	}
-	rawIntent, err := json.Marshal(intent)
+	const id = "stale-reservation-key"
+	generation, err := engine.ReserveOutboxGeneration(id)
 	require.NoError(t, err)
-	const legacyGeneration = uint64(41)
-	rawGeneration := make([]byte, 8)
-	binary.BigEndian.PutUint64(rawGeneration, legacyGeneration)
-	require.NoError(t, engine.subscriptions.Update(func(tx *bbolt.Tx) error {
-		legacy := tx.Bucket([]byte(bucketNotifyOutbox))
-		if err := legacy.Put([]byte(outboxGenerationPrefix+"old-key"), rawGeneration); err != nil {
-			return err
-		}
-		if err := legacy.Put([]byte(downloadIntentKey(intent.File.Name)), rawIntent); err != nil {
-			return err
-		}
-		reservations := tx.Bucket([]byte(bucketNotifyOutboxV2Reservations))
-		return reservations.Put([]byte("abandoned"), rawGeneration)
+	require.NotZero(t, generation)
+
+	require.NoError(t, engine.subscriptions.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketNotifyOutboxReservations))
+		require.NotNil(t, b)
+		require.Equal(t, 1, b.Stats().KeyN)
+		return nil
 	}))
 	require.NoError(t, engine.Close())
 
@@ -185,18 +108,17 @@ func TestOutboxNamespaceMigrationPreservesIntentsAndReclaimsReservations(t *test
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 
 	require.NoError(t, reopened.subscriptions.View(func(tx *bbolt.Tx) error {
-		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxV2Reservations)).Stats().KeyN)
-		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutbox)).Stats().KeyN)
-		require.Equal(t, 1, tx.Bucket([]byte(bucketDownloadIntents)).Stats().KeyN)
+		b := tx.Bucket([]byte(bucketNotifyOutboxReservations))
+		require.NotNil(t, b)
+		require.Zero(t, b.Stats().KeyN, "transient reservations must be cleared on startup")
 		return nil
 	}))
-	generation, err := reopened.ReserveOutboxGeneration("new-key")
+
+	nextGen, err := reopened.ReserveOutboxGeneration(id)
 	require.NoError(t, err)
-	require.Greater(t, generation, legacyGeneration)
-	count, err := reopened.CountDownloadIntents()
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Greater(t, nextGen, generation)
 }
+
 
 func TestTombstonePersistenceFailureReturnsServerError(t *testing.T) {
 	t.Parallel()

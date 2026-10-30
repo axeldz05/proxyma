@@ -245,17 +245,19 @@ func TestOutboxGenerationMetadataIsReclaimed(t *testing.T) {
 		id := filepath.Base(t.TempDir())
 		generation, err := engine.ReserveOutboxGeneration(id)
 		require.NoError(t, err)
-		applied, err := engine.PutOutboxRawIfCurrentGeneration(id, generation, []byte("payload"), nil)
+		applied, err := engine.PutOutboxRawIfCurrentGeneration(id, generation, []byte("payload"))
 		require.NoError(t, err)
 		require.True(t, applied)
-		require.NoError(t, engine.DeleteOutboxEntry(id))
+		deleted, err := engine.DeleteOutboxEntryIfUnchanged(id, []byte("payload"))
+		require.NoError(t, err)
+		require.True(t, deleted)
 		_ = i
 	}
 
 	err := engine.subscriptions.View(func(tx *bbolt.Tx) error {
-		require.Equal(t, 1, tx.Bucket([]byte(bucketNotifyOutboxV2Generations)).Stats().KeyN)
-		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxV2Reservations)).Stats().KeyN)
-		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxV2)).Stats().KeyN)
+		require.Equal(t, 1, tx.Bucket([]byte(bucketNotifyOutboxGenerations)).Stats().KeyN)
+		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutboxReservations)).Stats().KeyN)
+		require.Zero(t, tx.Bucket([]byte(bucketNotifyOutbox)).Stats().KeyN)
 		return nil
 	})
 	require.NoError(t, err)

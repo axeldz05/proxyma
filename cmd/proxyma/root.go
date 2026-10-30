@@ -61,6 +61,9 @@ func init() {
 				if paramCopy.Required {
 					_ = actionCmd.MarkFlagRequired(paramCopy.Name)
 				}
+				if paramCopy.Hidden {
+					_ = actionCmd.Flags().MarkHidden(paramCopy.Name)
+				}
 			}
 
 			if actionCopy.Domain == "service" && actionCopy.Name == "run" {

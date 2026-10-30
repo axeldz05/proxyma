@@ -90,6 +90,7 @@ func TestServiceAddCmd(t *testing.T) {
 			"--name", "my-grpc",
 			"--storage", tempDir,
 			"--type", "grpc", // Even if schema is provided, type/exec are outside schema
+			"--exec", "http://localhost:8080/rpc",
 			"--schema-file", schemaPath,
 		})
 
@@ -106,12 +107,49 @@ func TestServiceAddCmd(t *testing.T) {
 
 		svc, exists := services["my-grpc"]
 		require.True(t, exists)
-		require.Equal(t, protocol.ServiceTypeGRPC, svc.Type)
+		require.Equal(t, protocol.ServiceTypeHTTP, svc.Type)
+		require.Equal(t, "http://localhost:8080/rpc", svc.Exec)
 
 		tokenParam, ok := svc.Schema.Parameters["token"]
 		require.True(t, ok)
 		require.Equal(t, "string", tokenParam.Type)
 		require.True(t, tokenParam.Required)
+	})
+
+	t.Run("Add canonical http service", func(t *testing.T) {
+		rootCmd.SetArgs([]string{
+			"service", "add",
+			"--name", "my-http",
+			"--storage", tempDir,
+			"--type", "http",
+			"--exec", "http://localhost:8080/webhook",
+			"--desc", "Canonical HTTP service",
+		})
+
+		err := rootCmd.Execute()
+		require.NoError(t, err)
+
+		servicesFile := compute.ServicesFilePath(tempDir)
+		data, err := os.ReadFile(servicesFile)
+		require.NoError(t, err)
+
+		var services map[string]LocalService
+		err = json.Unmarshal(data, &services)
+		require.NoError(t, err)
+
+		svc, exists := services["my-http"]
+		require.True(t, exists)
+		require.Equal(t, protocol.ServiceTypeHTTP, svc.Type)
+		require.Equal(t, "http://localhost:8080/webhook", svc.Exec)
+	})
+
+	t.Run("service run payload flag is hidden", func(t *testing.T) {
+		runCmd, _, err := rootCmd.Find([]string{"service", "run"})
+		require.NoError(t, err)
+		require.NotNil(t, runCmd)
+		flag := runCmd.Flags().Lookup("payload")
+		require.NotNil(t, flag, "payload flag should exist")
+		require.True(t, flag.Hidden, "payload flag must be marked hidden")
 	})
 
 	t.Run("Remove service", func(t *testing.T) {

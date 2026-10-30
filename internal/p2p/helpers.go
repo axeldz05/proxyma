@@ -72,6 +72,9 @@ func (c *HTTPPeerClient) sendRequestWithHeaders(
 	contentType string,
 	headers http.Header,
 ) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	safeURL, err := validateAndBuildURL(target, path)
 	if err != nil {
 		return nil, err
@@ -93,6 +96,9 @@ func (c *HTTPPeerClient) sendRequestWithHeaders(
 
 // PostJSONAbsolute POSTs JSON to an absolute URL (L1). Caller must close the response body.
 func PostJSONAbsolute(ctx context.Context, client *http.Client, urlStr string, body any) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if client == nil {
 		client = http.DefaultClient
 	}

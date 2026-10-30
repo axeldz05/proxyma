@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"proxyma/internal/protocol"
 
@@ -39,6 +40,20 @@ func TestRequireHTTPExec(t *testing.T) {
 	}
 	if err := requireHTTPExec("/usr/bin/thing", protocol.ServiceTypeServerStream, "exec URL"); err == nil {
 		t.Error("local command must be rejected for http-only types")
+	}
+	if err := requireHTTPExec("/usr/bin/thing", protocol.ServiceTypeHTTP, "webhook URL"); err == nil {
+		t.Error("local command must be rejected for http service type")
+	}
+	if err := requireHTTPExec("http://localhost:8080/webhook", protocol.ServiceTypeHTTP, "webhook URL"); err != nil {
+		t.Errorf("http exec must be accepted: %v", err)
+	}
+}
+
+func TestBuildHandlerRejectsNonHTTPExecForHTTPTypes(t *testing.T) {
+	for _, typ := range []protocol.ServiceType{protocol.ServiceTypeHTTP, protocol.ServiceTypeGRPC} {
+		if _, err := BuildHandler(typ, "/bin/echo"); err == nil {
+			t.Errorf("type %q must reject non-http exec", typ)
+		}
 	}
 }
 
@@ -123,8 +138,8 @@ func TestUpsertLocalServiceValidatesAndNormalizesDirectCallers(t *testing.T) {
 
 	services, err := LoadServicesMap(dir)
 	require.NoError(t, err)
-	require.Equal(t, protocol.ServiceTypeGRPCBidi, services["alias"].Type)
-	require.Equal(t, protocol.ServiceTypeGRPCBidi, services["alias"].Schema.Type)
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, services["alias"].Type)
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, services["alias"].Schema.Type)
 
 	err = UpsertLocalService(dir, "broken", protocol.LocalService{
 		Type:   protocol.ServiceType("unknown"),
@@ -183,15 +198,94 @@ func TestServicesFileUsesCrossProcessAdvisoryLock(t *testing.T) {
 	unlock, err := lockServicesFile(dir, true)
 	require.NoError(t, err)
 
-	acquired, secondUnlock, err := tryLockServicesFile(dir, true)
-	require.NoError(t, err)
-	require.False(t, acquired, "a second process/file descriptor must not enter the same write critical section")
-	require.Nil(t, secondUnlock)
+	started := make(chan struct{})
+	acquired := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		close(started)
+		secondUnlock, err := lockServicesFile(dir, true)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		close(acquired)
+		errCh <- secondUnlock()
+	}()
+
+	<-started
+	select {
+	case <-acquired:
+		t.Fatal("a second process/file descriptor must not enter the same write critical section while held")
+	case err := <-errCh:
+		t.Fatalf("unexpected error acquiring second lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 
 	require.NoError(t, unlock())
-	acquired, secondUnlock, err = tryLockServicesFile(dir, true)
+
+	select {
+	case <-acquired:
+	case err := <-errCh:
+		t.Fatalf("failed acquiring second lock after release: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for second lock to acquire after release")
+	}
+
+	require.NoError(t, <-errCh)
+}
+
+func TestServicesFileSharedLockAllowsConcurrentReaders(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	unlock1, err := lockServicesFile(dir, false)
 	require.NoError(t, err)
-	require.True(t, acquired)
-	require.NotNil(t, secondUnlock)
-	require.NoError(t, secondUnlock())
+	defer func() { require.NoError(t, unlock1()) }()
+
+	unlock2, err := lockServicesFile(dir, false)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, unlock2()) }()
+}
+
+func TestHTTPAndLegacyServiceTypesInServicesConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	testCases := []struct {
+		name         string
+		serviceType  protocol.ServiceType
+		exec         string
+		expectedType protocol.ServiceType
+	}{
+		{"http-service", protocol.ServiceTypeHTTP, "http://localhost:8080/do", protocol.ServiceTypeHTTP},
+		{"grpc-alias-service", protocol.ServiceTypeGRPC, "http://localhost:8080/do", protocol.ServiceTypeHTTP},
+		{"http-bidi-service", protocol.ServiceTypeHTTPBidi, "echo bidi", protocol.ServiceTypeHTTPBidi},
+		{"grpc-bidi-alias", protocol.ServiceTypeGRPCBidi, "echo bidi", protocol.ServiceTypeHTTPBidi},
+		{"bidi-grpc-alias", protocol.ServiceTypeBidiGRPC, "echo bidi", protocol.ServiceTypeHTTPBidi},
+	}
+
+	for _, tc := range testCases {
+		svc := protocol.LocalService{
+			Type: tc.serviceType,
+			Exec: tc.exec,
+			Schema: protocol.ServiceSchema{
+				Name:       tc.name,
+				Type:       tc.serviceType,
+				Parameters: map[string]protocol.ServiceParameter{},
+			},
+		}
+		require.NoError(t, UpsertLocalService(dir, tc.name, svc))
+	}
+
+	loaded, err := LoadServicesMap(dir)
+	require.NoError(t, err)
+	for _, tc := range testCases {
+		s, ok := loaded[tc.name]
+		require.True(t, ok, "service %s should exist in loaded services", tc.name)
+		require.Equal(t, tc.expectedType, s.Type)
+		require.Equal(t, tc.expectedType, s.Schema.Type)
+
+		handler, err := BuildHandler(s.Type, s.Exec)
+		require.NoError(t, err, "handler for %s must build cleanly", tc.name)
+		require.NotNil(t, handler)
+	}
 }

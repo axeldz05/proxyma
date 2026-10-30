@@ -186,7 +186,7 @@ func BuildHTTPHandler(endpointURL string, timeout time.Duration) ServiceHandler 
 			if out != nil {
 				close(out)
 			}
-			return nil, fmt.Errorf("unary grpc service does not support streaming")
+			return nil, fmt.Errorf("unary http service does not support streaming")
 		}
 		return doJSONPost(ctx, client, endpointURL, payload)
 	}

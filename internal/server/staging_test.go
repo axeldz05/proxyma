@@ -94,7 +94,8 @@ func TestLocalServiceRunAutoFetchesRemoteOutputBlob(t *testing.T) {
 
 	outContent := []byte("remote-output-bytes")
 	require.NoError(t, provider.Storage.SaveLocalFile("remote-out.txt", bytes.NewReader(outContent)))
-	meta, ok := provider.Storage.GetFileMeta("remote-out.txt")
+	meta, ok, err := provider.Storage.GetFileMetaE("remote-out.txt")
+	require.NoError(t, err)
 	require.True(t, ok)
 
 	require.NoError(t, provider.Compute.RegisterNewService(protocol.ServiceSchema{

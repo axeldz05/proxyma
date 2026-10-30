@@ -204,7 +204,7 @@ func TestHTTPPeerClientAnnounce(t *testing.T) {
 	})
 	addr, client := newMockServer(t, mux)
 
-	peers, err := client.Announce(addr, protocol.AddPeerRequest{
+	peers, err := client.Announce(context.Background(), addr, protocol.AddPeerRequest{
 		ID:      "newcomer",
 		Address: protocol.AddressRecord{Addresses: []string{"https://newcomer:9090"}},
 	})
@@ -239,7 +239,7 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 			Addresses: []string{"https://new-node:8080"},
 		},
 	}
-	err := client.AddPeer(addr, payload)
+	err := client.AddPeer(context.Background(), addr, payload)
 	require.NoError(t, err)
 
 	select {
@@ -247,6 +247,51 @@ func TestHTTPPeerClientAddPeer(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("AddPeer handler was never called")
 	}
+}
+
+func TestHTTPPeerClientContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(protocol.PathPeersAnnounce, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	mux.HandleFunc(protocol.PathPeersAdd, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	addr, client := newMockServer(t, mux)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.Announce(ctx, addr, protocol.AddPeerRequest{ID: "canceled"})
+	require.Error(t, err)
+
+	err = client.AddPeer(ctx, addr, protocol.AddPeerRequest{ID: "canceled"})
+	require.Error(t, err)
+}
+
+func TestHTTPPeerClientNilContext(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(protocol.PathPeersAnnounce, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc(protocol.PathPeersAdd, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"message":"ok"}`))
+	})
+	addr, client := newMockServer(t, mux)
+
+	// nil context should fall back gracefully without panic
+	peers, err := client.Announce(nil, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
+	require.NoError(t, err)
+	require.NotNil(t, peers)
+
+	err = client.AddPeer(nil, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
+	require.NoError(t, err)
 }
 
 func TestHTTPPeerClientSubmitAndCallback(t *testing.T) {

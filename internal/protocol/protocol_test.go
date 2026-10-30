@@ -57,7 +57,7 @@ func TestNormalizeServiceSchema(t *testing.T) {
 		Type: protocol.ServiceTypeBidiStream,
 	}, "")
 	require.Equal(t, "keep", s2.Name)
-	require.Equal(t, protocol.ServiceTypeGRPCBidi, s2.Type)
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, s2.Type)
 }
 
 func TestDescribeParameter(t *testing.T) {
@@ -90,15 +90,16 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 	}{
 		{protocol.ServiceTypeExec, false},
 		{protocol.ServiceTypeScript, false},
+		{protocol.ServiceTypeHTTP, false},
 		{protocol.ServiceTypeGRPC, false},
+		{protocol.ServiceTypeHTTPBidi, true},
 		{protocol.ServiceTypeGRPCBidi, true},
 		{protocol.ServiceTypeBidi, true},
-		{protocol.ServiceTypeBidiStream, true}, // normalizes to grpc_bidi
+		{protocol.ServiceTypeBidiStream, true}, // normalizes to http_bidi
 		{protocol.ServiceTypeBidiGRPC, true},
 		{protocol.ServiceTypeServerStream, true},
 		{protocol.ServiceTypeHTTPServerStream, true},
 		{protocol.ServiceTypeGRPCServerStream, true},
-		{protocol.ServiceTypeHTTPBidi, true},
 		{protocol.ServiceTypeWebRTC, true},
 		{protocol.ServiceTypeScreen, true},
 	}
@@ -108,11 +109,15 @@ func TestServiceTypeIsStreaming(t *testing.T) {
 			require.Equal(t, tc.streaming, tc.typ.IsStreaming())
 		})
 	}
-	require.Equal(t, protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeBidiStream.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTP, protocol.ServiceTypeGRPC.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTP, protocol.ServiceTypeHTTP.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, protocol.ServiceTypeBidiStream.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, protocol.ServiceTypeGRPCBidi.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, protocol.ServiceTypeBidiGRPC.Normalize())
 	require.Equal(t, protocol.ServiceTypeBidi, protocol.ServiceTypeBidi.Normalize())
 	require.Equal(t, protocol.ServiceTypeServerStream, protocol.ServiceTypeHTTPServerStream.Normalize())
 	require.Equal(t, protocol.ServiceTypeServerStream, protocol.ServiceTypeGRPCServerStream.Normalize())
-	require.Equal(t, protocol.ServiceTypeGRPCBidi, protocol.ServiceTypeHTTPBidi.Normalize())
+	require.Equal(t, protocol.ServiceTypeHTTPBidi, protocol.ServiceTypeHTTPBidi.Normalize())
 }
 
 func TestNormalizeSortStrategy(t *testing.T) {

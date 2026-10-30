@@ -52,15 +52,90 @@ func startJoinTLSServer(t *testing.T, tlsConfig *tls.Config, handler http.Handle
 	return server
 }
 
-func legacyJoinToken(t *testing.T, payload p2p.InvitePayload, secret string) string {
+func smartJoinToken(t *testing.T, payload p2p.InvitePayload, secret string) string {
 	t.Helper()
 
-	raw, err := json.Marshal(payload)
+	hash, err := hex.DecodeString(payload.CAHash)
 	require.NoError(t, err)
-	return base64.RawURLEncoding.EncodeToString(raw) + "." + secret
+	require.Len(t, hash, 32)
+
+	secretBytes, err := hex.DecodeString(secret)
+	require.NoError(t, err)
+	require.Len(t, secretBytes, 32)
+
+	addr := payload.Address
+	if addr == "" && len(payload.Addresses) > 0 {
+		addr = payload.Addresses[0]
+	}
+	cleanAddr := strings.TrimPrefix(strings.TrimPrefix(addr, "https://"), "http://")
+	host, portStr, err := net.SplitHostPort(cleanAddr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	var tokenBytes bytes.Buffer
+	tokenBytes.WriteByte(2)
+	tokenBytes.Write(hash)
+	tokenBytes.Write(secretBytes)
+	require.NoError(t, binary.Write(&tokenBytes, binary.BigEndian, uint16(port)))
+
+	entries := len(payload.Addresses)
+	if entries == 0 && host != "" {
+		entries = 1
+	}
+	if payload.SponsorID != "" && payload.RelayAddr != "" {
+		entries++
+	}
+	tokenBytes.WriteByte(byte(entries))
+
+	if len(payload.Addresses) > 0 {
+		for _, a := range payload.Addresses {
+			h, _, err := net.SplitHostPort(strings.TrimPrefix(strings.TrimPrefix(a, "https://"), "http://"))
+			require.NoError(t, err)
+			ip := net.ParseIP(h)
+			if ip != nil {
+				if ip4 := ip.To4(); ip4 != nil {
+					tokenBytes.WriteByte(1)
+					tokenBytes.Write(ip4)
+				} else {
+					tokenBytes.WriteByte(2)
+					tokenBytes.Write(ip.To16())
+				}
+			} else {
+				tokenBytes.WriteByte(3)
+				tokenBytes.WriteByte(byte(len(h)))
+				tokenBytes.WriteString(h)
+			}
+		}
+	} else if host != "" {
+		ip := net.ParseIP(host)
+		if ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				tokenBytes.WriteByte(1)
+				tokenBytes.Write(ip4)
+			} else {
+				tokenBytes.WriteByte(2)
+				tokenBytes.Write(ip.To16())
+			}
+		} else {
+			tokenBytes.WriteByte(3)
+			tokenBytes.WriteByte(byte(len(host)))
+			tokenBytes.WriteString(host)
+		}
+	}
+
+	if payload.SponsorID != "" && payload.RelayAddr != "" {
+		tokenBytes.WriteByte(4)
+		tokenBytes.WriteByte(byte(len(payload.SponsorID)))
+		tokenBytes.WriteString(payload.SponsorID)
+		tokenBytes.WriteByte(byte(len(payload.RelayAddr)))
+		tokenBytes.WriteString(payload.RelayAddr)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(tokenBytes.Bytes())
 }
 
-func v2JoinToken(t *testing.T, caHash string, port uint16, relayAddr string) (token, secret string) {
+func multiTargetJoinToken(t *testing.T, caHash string, port uint16, relayAddr string) (token, secret string) {
 	t.Helper()
 
 	hash, err := hex.DecodeString(caHash)
@@ -95,7 +170,7 @@ func TestJoinFailureDoesNotExposeInviteSecret(t *testing.T) {
 	t.Parallel()
 
 	secret := strings.Repeat("0123456789abcdef", 4)
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address: "https://127.0.0.1:0",
 		CAHash:  strings.Repeat("b", 64),
 	}, secret)
@@ -127,7 +202,7 @@ func TestJoinNeverSendsInviteSecretOverPlainHTTP(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	secret := strings.Repeat("d", 64)
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address: server.URL,
 		CAHash:  strings.Repeat("e", 64),
 	}, secret)
@@ -158,7 +233,7 @@ func TestJoinRejectsSponsorWhoseCADoesNotMatchToken(t *testing.T) {
 	otherCAHash, err := p2p.CAHashFromPEM(otherCAPEM)
 	require.NoError(t, err)
 
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address: sponsor.URL,
 		CAHash:  otherCAHash,
 	}, strings.Repeat("b", 64))
@@ -200,7 +275,7 @@ func TestJoinRejectsRedirectBeforeInviteSecretReplay(t *testing.T) {
 		w.WriteHeader(http.StatusTemporaryRedirect)
 	}))
 	secret := strings.Repeat("a", 64)
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address: redirector.URL,
 		CAHash:  caHash,
 	}, secret)
@@ -229,7 +304,7 @@ func TestJoinRelayRejectionDoesNotLogSecretEcho(t *testing.T) {
 			Body:       []byte("rejected secret " + secret[:8]),
 		})
 	}))
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address:   "https://127.0.0.1:0",
 		CAHash:    caHash,
 		SponsorID: "join-sponsor",
@@ -285,7 +360,7 @@ func TestJoinUsesHostnameThenRelayBeforePackedIPLiteral(t *testing.T) {
 	require.NoError(t, err)
 	port, err := strconv.ParseUint(portString, 10, 16)
 	require.NoError(t, err)
-	token, _ := v2JoinToken(t, caHash, uint16(port), relay.URL)
+	token, _ := multiTargetJoinToken(t, caHash, uint16(port), relay.URL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -328,7 +403,7 @@ func TestJoinCancellationStopsFallbackAttempts(t *testing.T) {
 	_, port, err := net.SplitHostPort(directURL.Host)
 	require.NoError(t, err)
 	secret := strings.Repeat("c", 64)
-	token := legacyJoinToken(t, p2p.InvitePayload{
+	token := smartJoinToken(t, p2p.InvitePayload{
 		Address:   "https://" + net.JoinHostPort("localhost", port),
 		CAHash:    caHash,
 		SponsorID: "join-sponsor",

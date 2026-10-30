@@ -261,7 +261,8 @@ func (pr *PeerRegistry) UpdatePeerService(peerID string, action string, schema p
 	}
 
 	switch action {
-	case protocol.ActionAdd, protocol.ActionModify:
+	case protocol.ActionAdd:
+		schema = protocol.NormalizeServiceSchema(schema.Name, schema, schema.Type)
 		st.services[schema.Name] = schema
 		pr.logger.Info("Cluster service registered", "service", schema.Name, "peer", peerID)
 	case protocol.ActionRemove:

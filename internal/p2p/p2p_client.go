@@ -7,16 +7,17 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"proxyma/internal/protocol"
 )
 
 type PeerClient interface {
 	FetchManifest(ctx context.Context, peerID string) (map[string]protocol.IndexEntry, error)
-	Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
+	Announce(ctx context.Context, sponsorAddress string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error)
 	Notify(ctx context.Context, peerID string, notification protocol.PeerNotification) error
 	NotifyServiceUpdate(ctx context.Context, peerID string, notification protocol.ServiceNotification) error
 	NotifyPipelineSchema(ctx context.Context, peerID string, notification protocol.PipelineNotification) error
-	AddPeer(peerID string, req protocol.AddPeerRequest) error
+	AddPeer(ctx context.Context, peerID string, req protocol.AddPeerRequest) error
 	DownloadBlob(ctx context.Context, peerID, hash string) (io.ReadCloser, error)
 	DiscoverServices(ctx context.Context, peerID string) ([]string, error)
 	SubmitTask(ctx context.Context, peerID string, req protocol.TaskRequest) error
@@ -30,6 +31,7 @@ type PeerClient interface {
 	RequestProbe(ctx context.Context, targetAddr string, req protocol.ProbeRequest) (protocol.ProbeResponse, error)
 	RotateTLS(ctx context.Context, peerID string, payload protocol.RotateTLSPayload) error
 	StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error)
+	StreamServiceNegotiated(ctx context.Context, peerID string, serviceName string, payload map[string]any) (NegotiatedServiceStream, error)
 
 	// Routing / lifecycle (formerly ad-hoc type assertions)
 	UpdatePeerRoute(peerID string, record protocol.AddressRecord)
@@ -48,15 +50,6 @@ type PeerClient interface {
 type NegotiatedServiceStream struct {
 	Body    io.ReadCloser
 	Version int
-}
-
-type ServiceStreamNegotiator interface {
-	StreamServiceNegotiated(
-		ctx context.Context,
-		peerID string,
-		serviceName string,
-		payload map[string]any,
-	) (NegotiatedServiceStream, error)
 }
 
 type HTTPPeerClient struct {
@@ -189,21 +182,17 @@ func (c *HTTPPeerClient) FetchServiceBid(ctx context.Context, peerID string, que
 	return doJSON[protocol.ServiceBid](ctx, c, "POST", peerID, protocol.PathRel(protocol.PathServicesBid), query)
 }
 
-func (c *HTTPPeerClient) AddPeer(peerID string, req protocol.AddPeerRequest) error {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
-	defer cancel()
+func (c *HTTPPeerClient) AddPeer(ctx context.Context, peerID string, req protocol.AddPeerRequest) error {
 	return doVoid(ctx, c, "POST", peerID, protocol.PathRel(protocol.PathPeersAdd), req, http.StatusOK)
 }
 
-func (c *HTTPPeerClient) Announce(sponsorAddres string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
-	defer cancel()
-	return doJSON[map[string]protocol.AddressRecord](ctx, c, "POST", sponsorAddres, protocol.PathRel(protocol.PathPeersAnnounce), peerRequest)
+func (c *HTTPPeerClient) Announce(ctx context.Context, sponsorAddress string, peerRequest protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
+	return doJSON[map[string]protocol.AddressRecord](ctx, c, "POST", sponsorAddress, protocol.PathRel(protocol.PathPeersAnnounce), peerRequest)
 }
 
 func (c *HTTPPeerClient) PollRelay(ctx context.Context, sponsorAddr string, peerID string) (protocol.RelayRequest, error) {
 	var relayReq protocol.RelayRequest
-	resp, err := doRequest(ctx, c, "GET", sponsorAddr, protocol.PathRel(protocol.PathRelayPoll)+"?id="+peerID, nil)
+	resp, err := doRequest(ctx, c, "GET", sponsorAddr, protocol.PathRel(protocol.PathRelayPoll)+"?id="+url.QueryEscape(peerID), nil)
 	if err != nil {
 		return relayReq, err
 	}
@@ -253,15 +242,8 @@ func (c *HTTPPeerClient) RotateTLS(ctx context.Context, peerID string, payload p
 }
 
 func (c *HTTPPeerClient) StreamService(ctx context.Context, peerID string, serviceName string, payload map[string]any) (io.ReadCloser, error) {
-	body, _, err := c.openPeerBody(
-		ctx,
-		http.MethodPost,
-		peerID,
-		protocol.WithServiceQuery(protocol.PathRel(protocol.PathServicesStream), serviceName),
-		payload,
-		nil,
-	)
-	return body, err
+	stream, err := c.StreamServiceNegotiated(ctx, peerID, serviceName, payload)
+	return stream.Body, err
 }
 
 func (c *HTTPPeerClient) StreamServiceNegotiated(
@@ -287,7 +269,6 @@ func (c *HTTPPeerClient) StreamServiceNegotiated(
 	switch selected := resp.Header.Get(protocol.HeaderStreamSelectedVersion); selected {
 	case fmt.Sprintf("%d", protocol.ServiceStreamVersion):
 		version = protocol.ServiceStreamVersion
-	case "", protocol.StreamVersionLegacy:
 	default:
 		_ = body.Close()
 		return NegotiatedServiceStream{}, fmt.Errorf("unsupported selected stream version %q", selected)

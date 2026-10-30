@@ -71,10 +71,6 @@ func (s *Server) outboxKey(peerID string, kind gossipKind, dedupe string) string
 	return encodeOutboxTuple(peerID, string(kind), dedupe)
 }
 
-func legacyOutboxKey(peerID string, kind gossipKind, dedupe string) string {
-	return peerID + "|" + string(kind) + "|" + dedupe
-}
-
 func (s *Server) lockOutboxDelivery(id string) func() {
 	key := struct {
 		server *Server
@@ -110,31 +106,12 @@ func (s *Server) notificationEntityFromPayload(kind gossipKind, raw json.RawMess
 }
 
 // outboxEntity resolves the routing entity of a queued entry, falling back to
-// the kind's payload extractor for legacy rows stored without an Entity field.
+// the kind's payload extractor if the Entity field is empty.
 func (s *Server) outboxEntity(kind gossipKind, raw json.RawMessage, stored string) (string, bool) {
 	if stored != "" {
 		return stored, true
 	}
 	return s.notificationEntityFromPayload(kind, raw)
-}
-
-func (s *Server) matchingLegacyOutboxEntries(peerID string, kind gossipKind, entity string) (map[string][]byte, error) {
-	matches := make(map[string][]byte)
-	rawEntries, err := s.Storage.ListLegacyOutboxRaw()
-	if err != nil {
-		return nil, err
-	}
-	for id, raw := range rawEntries {
-		var entry outboxEntry
-		if json.Unmarshal(raw, &entry) != nil || entry.PeerID != peerID || entry.Kind != kind {
-			continue
-		}
-		legacyEntity, ok := s.outboxEntity(kind, entry.Payload, entry.Entity)
-		if ok && legacyEntity == entity {
-			matches[id] = raw
-		}
-	}
-	return matches, nil
 }
 
 // notifyWithOutbox durably stages the latest generation before sending, then
@@ -319,11 +296,7 @@ func (s *Server) stageOutbox(
 	if err != nil {
 		return outboxAttempt{}, false, err
 	}
-	superseded, err := s.matchingLegacyOutboxEntries(peerID, kind, entity)
-	if err != nil {
-		return outboxAttempt{}, false, err
-	}
-	applied, err := s.Storage.PutOutboxRawIfCurrentGeneration(id, generation, data, superseded)
+	applied, err := s.Storage.PutOutboxRawIfCurrentGeneration(id, generation, data)
 	if err != nil {
 		return outboxAttempt{}, false, err
 	}
@@ -390,85 +363,10 @@ func (s *Server) startOutboxWorker() bool {
 	})
 }
 
-func (s *Server) reconcileLegacyOutbox(rawEntries map[string][]byte) error {
-	type candidate struct {
-		entry  outboxEntry
-		entity string
-		rows   map[string][]byte
-	}
-	groups := make(map[string]candidate)
-	for id, raw := range rawEntries {
-		var entry outboxEntry
-		if json.Unmarshal(raw, &entry) != nil {
-			continue
-		}
-		entity, ok := s.outboxEntity(entry.Kind, entry.Payload, entry.Entity)
-		if !ok {
-			continue
-		}
-		key := s.outboxKey(entry.PeerID, entry.Kind, entity)
-		item := groups[key]
-		if item.rows == nil {
-			item = candidate{entry: entry, entity: entity, rows: make(map[string][]byte)}
-		}
-		item.rows[id] = raw
-		groups[key] = item
-	}
-	for _, item := range groups {
-		id := s.outboxKey(item.entry.PeerID, item.entry.Kind, item.entity)
-		expectedCurrent, err := s.Storage.GetOutboxRaw(id)
-		if err != nil {
-			return err
-		}
-		payload, keep, err := s.currentNotificationPayload(item.entry.Kind, item.entity)
-		if err != nil {
-			return err
-		}
-		if !keep {
-			if err := s.Storage.DeleteLegacyOutboxEntriesIfUnchanged(item.rows); err != nil {
-				return err
-			}
-			continue
-		}
-		generation, reserved, err := s.Storage.ReserveOutboxGenerationIfUnchanged(id, expectedCurrent)
-		if err != nil {
-			return err
-		}
-		if !reserved {
-			continue
-		}
-		rawPayload, err := json.Marshal(payload)
-		if err != nil {
-			_ = s.Storage.ReleaseOutboxGeneration(id, generation)
-			return err
-		}
-		entry := outboxEntry{
-			ID:         id,
-			PeerID:     item.entry.PeerID,
-			Kind:       item.entry.Kind,
-			Entity:     item.entity,
-			Generation: generation,
-			Payload:    rawPayload,
-			CreatedAt:  time.Now().UTC(),
-		}
-		rawEntry, err := json.Marshal(entry)
-		if err != nil {
-			_ = s.Storage.ReleaseOutboxGeneration(id, generation)
-			return err
-		}
-		_, err = s.Storage.PutOutboxRawIfCurrentGeneration(id, generation, rawEntry, item.rows)
-		_ = s.Storage.ReleaseOutboxGeneration(id, generation)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Server) currentNotificationPayload(kind gossipKind, entity string) (any, bool, error) {
 	spec, ok := s.catalogKindFor(kind)
 	if !ok || spec.current == nil {
-		return nil, false, fmt.Errorf("unsupported legacy outbox kind %q", kind)
+		return nil, false, fmt.Errorf("unsupported outbox kind %q", kind)
 	}
 	return spec.current(s, entity)
 }
@@ -526,14 +424,6 @@ func (s *Server) flushOutbox() {
 	}
 	defer s.outboxFlushMu.Unlock()
 
-	legacyEntries, err := s.Storage.ListLegacyOutboxRaw()
-	if err != nil {
-		return
-	}
-	if err := s.reconcileLegacyOutbox(legacyEntries); err != nil {
-		s.Config.Logger.Debug("Failed to reconcile legacy outbox", "error", err)
-		return
-	}
 	rawEntries, err := s.Storage.ListOutboxRaw()
 	if err != nil || len(rawEntries) == 0 {
 		return

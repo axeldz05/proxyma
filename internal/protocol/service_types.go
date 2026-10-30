@@ -6,7 +6,9 @@ type ServiceType string
 const (
 	ServiceTypeExec             ServiceType = "exec"
 	ServiceTypeScript           ServiceType = "script"
+	ServiceTypeHTTP             ServiceType = "http"
 	ServiceTypeGRPC             ServiceType = "grpc"
+	ServiceTypeHTTPBidi         ServiceType = "http_bidi"
 	ServiceTypeGRPCBidi         ServiceType = "grpc_bidi"
 	ServiceTypeBidiGRPC         ServiceType = "bidi_grpc"
 	ServiceTypeBidi             ServiceType = "bidi"
@@ -14,7 +16,6 @@ const (
 	ServiceTypeServerStream     ServiceType = "server_stream"
 	ServiceTypeHTTPServerStream ServiceType = "http_server_stream"
 	ServiceTypeGRPCServerStream ServiceType = "grpc_server_stream" // legacy alias → server_stream
-	ServiceTypeHTTPBidi         ServiceType = "http_bidi"          // HTTP NDJSON bidi (preferred name)
 	ServiceTypeWebRTC           ServiceType = "webrtc"             // WebRTC DataChannel JSON stream
 	ServiceTypeScreen           ServiceType = "screen"             // server-stream of media frames (fake/MJPEG)
 )
@@ -35,10 +36,13 @@ type serviceTypeSpec struct {
 var serviceTypeSpecs = []serviceTypeSpec{
 	{Canonical: ServiceTypeExec},
 	{Canonical: ServiceTypeScript},
-	{Canonical: ServiceTypeGRPC},
 	{
-		Canonical: ServiceTypeGRPCBidi,
-		Aliases:   []ServiceType{ServiceTypeBidiGRPC, ServiceTypeBidiStream, ServiceTypeHTTPBidi},
+		Canonical: ServiceTypeHTTP,
+		Aliases:   []ServiceType{ServiceTypeGRPC},
+	},
+	{
+		Canonical: ServiceTypeHTTPBidi,
+		Aliases:   []ServiceType{ServiceTypeGRPCBidi, ServiceTypeBidiGRPC, ServiceTypeBidiStream},
 		Streaming: true,
 	},
 	{Canonical: ServiceTypeBidi, Streaming: true},

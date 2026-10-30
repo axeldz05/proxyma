@@ -46,11 +46,6 @@ func IsVFSFileNotFound(err error) bool {
 // Callers must quarantine the current source intent instead of hot-looping it.
 var ErrBlobIntegrity = errors.New("blob failed permanent integrity verification")
 
-const (
-	outboxGenerationPrefix  = "\x00outbox-generation\x00"
-	outboxReservationPrefix = "\x00outbox-reservation\x00"
-	downloadIntentPrefix    = "\x00download-intent\x00"
-)
 
 type downloadIntent struct {
 	File   protocol.IndexEntry `json:"file"`
@@ -90,7 +85,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 				return fmt.Errorf("create bucket %s: %w", bName, err)
 			}
 		}
-		return migrateOutboxNamespaces(tx)
+		return clearTransientOutboxReservations(tx)
 	}); err != nil {
 		// Release the file lock, or a retry in this process burns the Open timeout.
 		_ = db.Close()
@@ -112,17 +107,7 @@ func NewStorageEngine(logger *slog.Logger, path string, notify func(protocol.Ind
 	return engine, nil
 }
 
-func (se *StorageEngine) GetFileMeta(logicalName string) (protocol.IndexEntry, bool) {
-	entry, exists, err := se.GetFileMetaE(logicalName)
-	if err != nil {
-		se.logger.Error("Failed to read VFS metadata", "file", logicalName, "error", err)
-		return protocol.IndexEntry{}, false
-	}
-	return entry, exists
-}
-
-// GetFileMetaE is the error-preserving metadata read API. GetFileMeta remains
-// as a compatibility wrapper for callers that cannot yet accept an error.
+// GetFileMetaE is the error-preserving metadata read API.
 func (se *StorageEngine) GetFileMetaE(logicalName string) (protocol.IndexEntry, bool, error) {
 	return se.vfs.Get(logicalName)
 }
@@ -210,16 +195,7 @@ func (se *StorageEngine) SetServiceSubscription(pattern string, subscribed bool)
 	return nil
 }
 
-// HasServiceSubscriptions reports whether any service interest filters are active.
-func (se *StorageEngine) HasServiceSubscriptions() bool {
-	hasSubscriptions, err := se.HasServiceSubscriptionsE()
-	if err != nil {
-		se.logger.Error("Failed to read service subscriptions", "error", err)
-		return false
-	}
-	return hasSubscriptions
-}
-
+// HasServiceSubscriptionsE reports whether any service interest filters are active.
 func (se *StorageEngine) HasServiceSubscriptionsE() (bool, error) {
 	var n int
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
@@ -233,17 +209,8 @@ func (se *StorageEngine) HasServiceSubscriptionsE() (bool, error) {
 	return n > 0, err
 }
 
-// IsServiceSubscribed returns true when name matches any stored pattern.
+// IsServiceSubscribedE returns true when name matches any stored pattern.
 // If no service subscriptions exist, returns true (accept-all / join sync compat).
-func (se *StorageEngine) IsServiceSubscribed(name string) bool {
-	subscribed, err := se.IsServiceSubscribedE(name)
-	if err != nil {
-		se.logger.Error("Failed to match service subscription", "service", name, "error", err)
-		return false
-	}
-	return subscribed
-}
-
 func (se *StorageEngine) IsServiceSubscribedE(name string) (bool, error) {
 	matched := false
 	hasSubscriptions := false
@@ -320,17 +287,8 @@ func (se *StorageEngine) upsertIndexLocked(entry protocol.IndexEntry) (bool, err
 	return updated, nil
 }
 
-func (se *StorageEngine) ProcessRemoteManifest(manifest map[string]protocol.IndexEntry) []protocol.IndexEntry {
-	missing, err := se.ProcessRemoteManifestE(manifest)
-	if err != nil {
-		se.logger.Error("Failed to process remote manifest", "error", err)
-	}
-	return missing
-}
-
 // ProcessRemoteManifestE processes every entry in deterministic name order,
 // preserving successful metadata decisions while joining per-entry failures.
-// ProcessRemoteManifest remains as a compatibility wrapper for its server caller.
 func (se *StorageEngine) ProcessRemoteManifestE(manifest map[string]protocol.IndexEntry) ([]protocol.IndexEntry, error) {
 	var missingFiles []protocol.IndexEntry
 	var manifestErr error
@@ -1050,95 +1008,15 @@ func outboxGlobalGenerationKey() []byte {
 	return []byte("global")
 }
 
-func downloadIntentKey(name string) string {
-	return downloadIntentPrefix + base64.RawURLEncoding.EncodeToString([]byte(name))
-}
-
 func downloadIntentStorageKey(name string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(name))
 }
 
-func isRecognizedLegacyOutboxMetadata(key, value []byte) bool {
-	if (bytes.HasPrefix(key, []byte(outboxGenerationPrefix)) ||
-		bytes.HasPrefix(key, []byte(outboxReservationPrefix))) && len(value) == 8 {
-		return true
-	}
-	if !bytes.HasPrefix(key, []byte(downloadIntentPrefix)) {
-		return false
-	}
-	var intent downloadIntent
-	return json.Unmarshal(value, &intent) == nil && intent.File.Name != ""
-}
-
-// migrateOutboxNamespaces moves only structurally recognized metadata. Legacy
-// notification rows stay isolated for payload-aware server reconciliation.
-func migrateOutboxNamespaces(tx *bbolt.Tx) error {
-	legacy, err := boltBucket(tx, bucketNotifyOutbox)
+func clearTransientOutboxReservations(tx *bbolt.Tx) error {
+	reservations, err := boltBucket(tx, bucketNotifyOutboxReservations)
 	if err != nil {
 		return err
 	}
-	generations, err := boltBucket(tx, bucketNotifyOutboxV2Generations)
-	if err != nil {
-		return err
-	}
-	reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
-	if err != nil {
-		return err
-	}
-	intents, err := boltBucket(tx, bucketDownloadIntents)
-	if err != nil {
-		return err
-	}
-
-	var generation uint64
-	if raw := generations.Get(outboxGlobalGenerationKey()); len(raw) != 0 {
-		if len(raw) != 8 {
-			return fmt.Errorf("invalid global outbox generation")
-		}
-		generation = binary.BigEndian.Uint64(raw)
-	}
-	var removeLegacy [][]byte
-	err = legacy.ForEach(func(key, value []byte) error {
-		switch {
-		case bytes.HasPrefix(key, []byte(outboxGenerationPrefix)) && len(value) == 8:
-			if candidate := binary.BigEndian.Uint64(value); candidate > generation {
-				generation = candidate
-			}
-			removeLegacy = append(removeLegacy, bytes.Clone(key))
-		case bytes.HasPrefix(key, []byte(outboxReservationPrefix)) && len(value) == 8:
-			removeLegacy = append(removeLegacy, bytes.Clone(key))
-		case bytes.HasPrefix(key, []byte(downloadIntentPrefix)):
-			var intent downloadIntent
-			if err := json.Unmarshal(value, &intent); err != nil {
-				return fmt.Errorf("corrupt legacy download intent %q: %w", string(key), err)
-			}
-			if intent.File.Name == "" {
-				return fmt.Errorf("invalid legacy download intent %q: empty file name", string(key))
-			}
-			if err := intents.Put([]byte(downloadIntentStorageKey(intent.File.Name)), value); err != nil {
-				return err
-			}
-			removeLegacy = append(removeLegacy, bytes.Clone(key))
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if generation != 0 {
-		raw := make([]byte, 8)
-		binary.BigEndian.PutUint64(raw, generation)
-		if err := generations.Put(outboxGlobalGenerationKey(), raw); err != nil {
-			return err
-		}
-	}
-	for _, key := range removeLegacy {
-		if err := legacy.Delete(key); err != nil {
-			return err
-		}
-	}
-	// Reservations represent in-process commits. None can survive a restart,
-	// so clearing them bounds metadata without weakening ordering.
 	var staleReservations [][]byte
 	if err := reservations.ForEach(func(key, _ []byte) error {
 		staleReservations = append(staleReservations, bytes.Clone(key))
@@ -1168,11 +1046,11 @@ func (se *StorageEngine) ReserveOutboxGeneration(id string) (uint64, error) {
 }
 
 func reserveOutboxGenerationTx(tx *bbolt.Tx, id string) (uint64, error) {
-	generations, err := boltBucket(tx, bucketNotifyOutboxV2Generations)
+	generations, err := boltBucket(tx, bucketNotifyOutboxGenerations)
 	if err != nil {
 		return 0, err
 	}
-	reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+	reservations, err := boltBucket(tx, bucketNotifyOutboxReservations)
 	if err != nil {
 		return 0, err
 	}
@@ -1202,58 +1080,12 @@ func reserveOutboxGenerationTx(tx *bbolt.Tx, id string) (uint64, error) {
 	return generation, nil
 }
 
-// ReserveOutboxGenerationIfUnchanged atomically revalidates an active-row
-// snapshot and reserves the next generation. Migration callers must retry when
-// the snapshot changed.
-func (se *StorageEngine) ReserveOutboxGenerationIfUnchanged(
-	id string,
-	expected []byte,
-) (uint64, bool, error) {
-	var generation uint64
-	reserved := false
-	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
-		if err != nil {
-			return err
-		}
-		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
-		if err != nil {
-			return err
-		}
-		current := entries.Get([]byte(id))
-		if (current == nil) != (expected == nil) || !bytes.Equal(current, expected) {
-			return nil
-		}
-		if reservations.Get([]byte(id)) != nil {
-			return nil
-		}
-		generation, err = reserveOutboxGenerationTx(tx, id)
-		reserved = err == nil
-		return err
-	})
-	return generation, reserved, err
-}
-
-func (se *StorageEngine) GetOutboxRaw(id string) ([]byte, error) {
-	var out []byte
-	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutboxV2)
-		if err != nil {
-			return err
-		}
-		if raw := b.Get([]byte(id)); raw != nil {
-			out = bytes.Clone(raw)
-		}
-		return nil
-	})
-	return out, err
-}
 
 // ReleaseOutboxGeneration reclaims a failed staging reservation without
 // disturbing a newer reservation for the same entity.
 func (se *StorageEngine) ReleaseOutboxGeneration(id string, generation uint64) error {
 	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
+		b, err := boltBucket(tx, bucketNotifyOutboxReservations)
 		if err != nil {
 			return err
 		}
@@ -1266,38 +1098,25 @@ func (se *StorageEngine) ReleaseOutboxGeneration(id string, generation uint64) e
 }
 
 // PutOutboxRawIfCurrentGeneration commits data only while generation is still
-// the newest reservation. Payload-verified legacy rows are removed atomically.
+// the newest reservation.
 func (se *StorageEngine) PutOutboxRawIfCurrentGeneration(
 	id string,
 	generation uint64,
 	data []byte,
-	superseded map[string][]byte,
 ) (bool, error) {
 	applied := false
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
+		entries, err := boltBucket(tx, bucketNotifyOutbox)
 		if err != nil {
 			return err
 		}
-		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
-		if err != nil {
-			return err
-		}
-		legacy, err := boltBucket(tx, bucketNotifyOutbox)
+		reservations, err := boltBucket(tx, bucketNotifyOutboxReservations)
 		if err != nil {
 			return err
 		}
 		rawGeneration := reservations.Get([]byte(id))
 		if len(rawGeneration) != 8 || binary.BigEndian.Uint64(rawGeneration) != generation {
 			return nil
-		}
-		for supersededID, expected := range superseded {
-			current := legacy.Get([]byte(supersededID))
-			if current != nil && bytes.Equal(current, expected) {
-				if err := legacy.Delete([]byte(supersededID)); err != nil {
-					return err
-				}
-			}
 		}
 		if err := entries.Put([]byte(id), data); err != nil {
 			return err
@@ -1311,40 +1130,12 @@ func (se *StorageEngine) PutOutboxRawIfCurrentGeneration(
 	return applied, err
 }
 
-// PutOutboxRaw upserts a legacy/raw notify outbox entry.
-func (se *StorageEngine) PutOutboxRaw(id string, data []byte) error {
-	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutbox)
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte(id), data)
-	})
-}
-
-func (se *StorageEngine) DeleteOutboxEntry(id string) error {
-	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		entries, err := boltBucket(tx, bucketNotifyOutboxV2)
-		if err != nil {
-			return err
-		}
-		reservations, err := boltBucket(tx, bucketNotifyOutboxV2Reservations)
-		if err != nil {
-			return err
-		}
-		if err := entries.Delete([]byte(id)); err != nil {
-			return err
-		}
-		return reservations.Delete([]byte(id))
-	})
-}
-
 // DeleteOutboxEntryIfUnchanged acknowledges only the exact generation read by
 // a sender. A same-key replacement remains durable for a later attempt.
 func (se *StorageEngine) DeleteOutboxEntryIfUnchanged(id string, expected []byte) (bool, error) {
 	deleted := false
 	err := se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		b, err := boltBucket(tx, bucketNotifyOutbox)
 		if err != nil {
 			return err
 		}
@@ -1364,7 +1155,7 @@ func (se *StorageEngine) DeleteOutboxEntryIfUnchanged(id string, expected []byte
 func (se *StorageEngine) OutboxEntryMatches(id string, expected []byte) (bool, error) {
 	matches := false
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		b, err := boltBucket(tx, bucketNotifyOutbox)
 		if err != nil {
 			return err
 		}
@@ -1377,21 +1168,12 @@ func (se *StorageEngine) OutboxEntryMatches(id string, expected []byte) (bool, e
 func (se *StorageEngine) CountOutboxEntries() (int, error) {
 	var n int
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		v2, err := boltBucket(tx, bucketNotifyOutboxV2)
+		b, err := boltBucket(tx, bucketNotifyOutbox)
 		if err != nil {
 			return err
 		}
-		legacy, err := boltBucket(tx, bucketNotifyOutbox)
-		if err != nil {
-			return err
-		}
-		n = v2.Stats().KeyN
-		return legacy.ForEach(func(k, v []byte) error {
-			if !isRecognizedLegacyOutboxMetadata(k, v) {
-				n++
-			}
-			return nil
-		})
+		n = b.Stats().KeyN
+		return nil
 	})
 	return n, err
 }
@@ -1399,7 +1181,7 @@ func (se *StorageEngine) CountOutboxEntries() (int, error) {
 func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutboxV2)
+		b, err := boltBucket(tx, bucketNotifyOutbox)
 		if err != nil {
 			return err
 		}
@@ -1411,43 +1193,6 @@ func (se *StorageEngine) ListOutboxRaw() (map[string][]byte, error) {
 		})
 	})
 	return out, err
-}
-
-// ListLegacyOutboxRaw returns only rows that still require payload-aware
-// reconciliation. Recognized metadata is never exposed as a notification.
-func (se *StorageEngine) ListLegacyOutboxRaw() (map[string][]byte, error) {
-	out := make(map[string][]byte)
-	err := se.subscriptions.View(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutbox)
-		if err != nil {
-			return err
-		}
-		return b.ForEach(func(k, v []byte) error {
-			if isRecognizedLegacyOutboxMetadata(k, v) {
-				return nil
-			}
-			out[string(k)] = bytes.Clone(v)
-			return nil
-		})
-	})
-	return out, err
-}
-
-func (se *StorageEngine) DeleteLegacyOutboxEntriesIfUnchanged(entries map[string][]byte) error {
-	return se.subscriptions.Update(func(tx *bbolt.Tx) error {
-		b, err := boltBucket(tx, bucketNotifyOutbox)
-		if err != nil {
-			return err
-		}
-		for id, expected := range entries {
-			if current := b.Get([]byte(id)); current != nil && bytes.Equal(current, expected) {
-				if err := b.Delete([]byte(id)); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
 }
 
 func (se *StorageEngine) requestRemoteDownload(file protocol.IndexEntry, source string) error {

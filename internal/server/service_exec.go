@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 	"strings"
@@ -335,21 +334,12 @@ func (s *Server) localServiceStreamRun(
 
 		streamCtx, cancel := context.WithTimeout(ctx, PeerRPCStream)
 		defer cancel()
-		var streamBody io.ReadCloser
-		streamVersion := 0
-		if negotiator, ok := s.peerClient.(p2p.ServiceStreamNegotiator); ok {
-			negotiated, negotiateErr := negotiator.StreamServiceNegotiated(
-				streamCtx,
-				targetPeerID,
-				serviceName,
-				payload,
-			)
-			err = negotiateErr
-			streamBody = negotiated.Body
-			streamVersion = negotiated.Version
-		} else {
-			streamBody, err = s.peerClient.StreamService(streamCtx, targetPeerID, serviceName, payload)
-		}
+		negotiated, err := s.peerClient.StreamServiceNegotiated(
+			streamCtx,
+			targetPeerID,
+			serviceName,
+			payload,
+		)
 		if err != nil {
 			if streamCtx.Err() != nil {
 				return streamCtx.Err()
@@ -357,6 +347,8 @@ func (s *Server) localServiceStreamRun(
 			s.Config.Logger.Error("StreamService from remote peer failed", "peerID", targetPeerID, "service", serviceName, "error", err)
 			return fmt.Errorf("failed to stream service from remote peer '%s': %w", targetPeerID, err)
 		}
+		streamBody := negotiated.Body
+		streamVersion := negotiated.Version
 		if streamBody == nil {
 			return fmt.Errorf("remote peer '%s' returned an empty stream body", targetPeerID)
 		}
@@ -364,41 +356,49 @@ func (s *Server) localServiceStreamRun(
 		stopClose := context.AfterFunc(streamCtx, func() { _ = streamBody.Close() })
 		defer stopClose()
 
-		if streamVersion != 0 && streamVersion != protocol.ServiceStreamVersion {
+		if streamVersion != protocol.ServiceStreamVersion {
 			return fmt.Errorf("unsupported negotiated remote service stream version %d", streamVersion)
 		}
 		err = utils.ForEachNDJSON(streamBody, func(chunk map[string]any) error {
-			if streamVersion == protocol.ServiceStreamVersion {
-				versionValue, framed := chunk["proxyma_stream_version"]
-				if !framed {
-					return fmt.Errorf("negotiated v1 remote service stream emitted a legacy frame")
+			versionValue, framed := chunk["proxyma_stream_version"]
+			if !framed {
+				return fmt.Errorf("negotiated v1 remote service stream emitted a legacy frame")
+			}
+			var versionNumber int
+			switch v := versionValue.(type) {
+			case float64:
+				versionNumber = int(v)
+			case int:
+				versionNumber = v
+			case int64:
+				versionNumber = int(v)
+			default:
+				return fmt.Errorf("unsupported remote service stream version %v", versionValue)
+			}
+			if versionNumber != protocol.ServiceStreamVersion {
+				return fmt.Errorf("unsupported remote service stream version %v", versionValue)
+			}
+			kindValue, ok := chunk["kind"].(string)
+			if !ok {
+				return fmt.Errorf("versioned remote stream frame has no valid kind")
+			}
+			switch protocol.ServiceStreamFrameKind(kindValue) {
+			case protocol.ServiceStreamFrameComplete:
+				return errServiceStreamComplete
+			case protocol.ServiceStreamFrameError:
+				message, _ := chunk["error"].(string)
+				if message == "" {
+					message = "remote stream failed"
 				}
-				version, ok := versionValue.(float64)
-				if !ok || version != protocol.ServiceStreamVersion {
-					return fmt.Errorf("unsupported remote service stream version %v", versionValue)
+				return fmt.Errorf("%s", message)
+			case protocol.ServiceStreamFrameChunk:
+				data, ok := chunk["chunk"].(map[string]any)
+				if !ok || data == nil {
+					return fmt.Errorf("versioned remote stream chunk must contain an object")
 				}
-				kindValue, ok := chunk["kind"].(string)
-				if !ok {
-					return fmt.Errorf("versioned remote stream frame has no valid kind")
-				}
-				switch protocol.ServiceStreamFrameKind(kindValue) {
-				case protocol.ServiceStreamFrameComplete:
-					return errServiceStreamComplete
-				case protocol.ServiceStreamFrameError:
-					message, _ := chunk["error"].(string)
-					if message == "" {
-						message = "remote stream failed"
-					}
-					return fmt.Errorf("%s", message)
-				case protocol.ServiceStreamFrameChunk:
-					data, ok := chunk["chunk"].(map[string]any)
-					if !ok || data == nil {
-						return fmt.Errorf("versioned remote stream chunk must contain an object")
-					}
-					chunk = data
-				default:
-					return fmt.Errorf("unknown remote stream frame kind %q", kindValue)
-				}
+				chunk = data
+			default:
+				return fmt.Errorf("unknown remote stream frame kind %q", kindValue)
 			}
 			if chunkCallback != nil {
 				if err := chunkCallback(chunk); err != nil {
@@ -415,9 +415,6 @@ func (s *Server) localServiceStreamRun(
 		}
 		if err != nil {
 			return err
-		}
-		if streamVersion == 0 {
-			return nil
 		}
 		return fmt.Errorf("remote service stream ended without a terminal event: %w", io.ErrUnexpectedEOF)
 	}

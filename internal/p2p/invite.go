@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"proxyma/internal/protocol"
@@ -119,7 +118,7 @@ func GenerateSmartToken(hostAddress string, caCertPath string, sponsorID string,
 	//   If Hostname: 1 byte length + N bytes
 	//   If Relay Info: 1 byte SponsorID len + N bytes SponsorID + 1 byte RelayAddr len + M bytes RelayAddr
 	var buf bytes.Buffer
-	buf.WriteByte(2) // Version 2
+	buf.WriteByte(2) // Binary smart token format
 	buf.Write(hash)
 	buf.Write(secretBytes)
 
@@ -174,95 +173,71 @@ func ParseSmartToken(smartToken string) (payload InvitePayload, secret string, e
 
 	// Decode base64
 	data, err := base64.RawURLEncoding.DecodeString(smartToken)
-	if err == nil && len(data) > 0 && data[0] == 2 {
-		// Process Version 2 Binary format
-		if len(data) < 1+32+32+2+1 {
-			return InvitePayload{}, "", fmt.Errorf("invalid binary token length")
-		}
-		caHash := data[1:33]
-		secretBytes := data[33:65]
-		port := binary.BigEndian.Uint16(data[65:67])
-		numEntries := int(data[67])
-
-		payload.CAHash = hex.EncodeToString(caHash)
-		secret = hex.EncodeToString(secretBytes)
-
-		idx := 68
-		for i := 0; i < numEntries; i++ {
-			if idx >= len(data) {
-				return InvitePayload{}, "", fmt.Errorf("malformed binary token: out of bounds")
-			}
-			entryType := data[idx]
-			idx++
-			switch entryType {
-			case 1: // IPv4
-				if idx+4 > len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: ipv4 out of bounds")
-				}
-				ip := net.IP(data[idx : idx+4])
-				idx += 4
-				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
-			case 2: // IPv6
-				if idx+16 > len(data) {
-					return InvitePayload{}, "", fmt.Errorf("malformed binary token: ipv6 out of bounds")
-				}
-				ip := net.IP(data[idx : idx+16])
-				idx += 16
-				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
-			case 3: // Hostname
-				host, strErr := readL8String(data, &idx, "hostname")
-				if strErr != nil {
-					return InvitePayload{}, "", strErr
-				}
-				payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(host, port))
-			case 4: // Relay Information
-				sponsorIDRead, strErr := readL8String(data, &idx, "relay sid")
-				if strErr != nil {
-					return InvitePayload{}, "", strErr
-				}
-				payload.SponsorID = sponsorIDRead
-
-				relayAddrRead, strErr := readL8String(data, &idx, "relay addr")
-				if strErr != nil {
-					return InvitePayload{}, "", strErr
-				}
-				payload.RelayAddr = relayAddrRead
-			default:
-				return InvitePayload{}, "", fmt.Errorf("malformed binary token: unknown entry type %d", entryType)
-			}
-		}
-
-		if len(payload.Addresses) > 0 {
-			payload.Address = payload.Addresses[0]
-		}
-		return payload, secret, nil
-	}
-
-	// Fallback to Version 1 JSON format
-	parts := strings.Split(smartToken, ".")
-	if len(parts) != 2 {
-		return InvitePayload{}, "", fmt.Errorf("invalid token format: must contain exactly one dot")
-	}
-
-	encodedPayload, secretHex := parts[0], parts[1]
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(encodedPayload)
 	if err != nil {
-		return InvitePayload{}, "", fmt.Errorf("invalid base64 payload: %w", err)
+		return InvitePayload{}, "", fmt.Errorf("invalid base64 token: %w", err)
+	}
+	if len(data) == 0 || data[0] != 2 {
+		return InvitePayload{}, "", fmt.Errorf("invalid token format: unsupported version")
 	}
 
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		return InvitePayload{}, "", fmt.Errorf("invalid json payload: %w", err)
+	if len(data) < 1+32+32+2+1 {
+		return InvitePayload{}, "", fmt.Errorf("invalid binary token length")
+	}
+	caHash := data[1:33]
+	secretBytes := data[33:65]
+	port := binary.BigEndian.Uint16(data[65:67])
+	numEntries := int(data[67])
+
+	payload.CAHash = hex.EncodeToString(caHash)
+	secret = hex.EncodeToString(secretBytes)
+
+	idx := 68
+	for i := 0; i < numEntries; i++ {
+		if idx >= len(data) {
+			return InvitePayload{}, "", fmt.Errorf("malformed binary token: out of bounds")
+		}
+		entryType := data[idx]
+		idx++
+		switch entryType {
+		case 1: // IPv4
+			if idx+4 > len(data) {
+				return InvitePayload{}, "", fmt.Errorf("malformed binary token: ipv4 out of bounds")
+			}
+			ip := net.IP(data[idx : idx+4])
+			idx += 4
+			payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
+		case 2: // IPv6
+			if idx+16 > len(data) {
+				return InvitePayload{}, "", fmt.Errorf("malformed binary token: ipv6 out of bounds")
+			}
+			ip := net.IP(data[idx : idx+16])
+			idx += 16
+			payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(ip.String(), port))
+		case 3: // Hostname
+			host, strErr := readL8String(data, &idx, "hostname")
+			if strErr != nil {
+				return InvitePayload{}, "", strErr
+			}
+			payload.Addresses = append(payload.Addresses, protocol.HTTPSAddrPort(host, port))
+		case 4: // Relay Information
+			sponsorIDRead, strErr := readL8String(data, &idx, "relay sid")
+			if strErr != nil {
+				return InvitePayload{}, "", strErr
+			}
+			payload.SponsorID = sponsorIDRead
+
+			relayAddrRead, strErr := readL8String(data, &idx, "relay addr")
+			if strErr != nil {
+				return InvitePayload{}, "", strErr
+			}
+			payload.RelayAddr = relayAddrRead
+		default:
+			return InvitePayload{}, "", fmt.Errorf("malformed binary token: unknown entry type %d", entryType)
+		}
 	}
 
-	if payload.Address == "" || payload.CAHash == "" {
-		return InvitePayload{}, "", fmt.Errorf("missing required fields in token payload")
+	if len(payload.Addresses) > 0 {
+		payload.Address = payload.Addresses[0]
 	}
-	if len(secretHex) != 64 {
-		return InvitePayload{}, "", fmt.Errorf("invalid secret length")
-	}
-
-	// Populate Addresses slice with the single address for V1
-	payload.Addresses = []string{payload.Address}
-
-	return payload, secretHex, nil
+	return payload, secret, nil
 }

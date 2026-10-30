@@ -229,3 +229,33 @@ func TestPeerRegistryConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestUpdatePeerServiceNormalizesLegacyServiceTypes(t *testing.T) {
+	pr := newTestRegistry(t)
+	pr.AddPeer("peer-a", record(1, "https://a:8443"))
+
+	pr.UpdatePeerService("peer-a", protocol.ActionAdd, protocol.ServiceSchema{
+		Name: "legacy-grpc",
+		Type: protocol.ServiceTypeGRPC,
+	})
+	pr.UpdatePeerService("peer-a", protocol.ActionAdd, protocol.ServiceSchema{
+		Name: "legacy-bidi",
+		Type: protocol.ServiceTypeGRPCBidi,
+	})
+
+	schema, ok := pr.GetServiceSchema("legacy-grpc")
+	if !ok {
+		t.Fatal("expected legacy-grpc schema to be found")
+	}
+	if schema.Type != protocol.ServiceTypeHTTP {
+		t.Fatalf("expected legacy-grpc to normalize to %q, got %q", protocol.ServiceTypeHTTP, schema.Type)
+	}
+
+	bidiSchema, ok := pr.GetServiceSchema("legacy-bidi")
+	if !ok {
+		t.Fatal("expected legacy-bidi schema to be found")
+	}
+	if bidiSchema.Type != protocol.ServiceTypeHTTPBidi {
+		t.Fatalf("expected legacy-bidi to normalize to %q, got %q", protocol.ServiceTypeHTTPBidi, bidiSchema.Type)
+	}
+}

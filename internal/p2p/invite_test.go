@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSmartTokenV2(t *testing.T) {
+func TestSmartToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	caCertPath, _ := p2p.CACertPaths(tmpDir)
 
@@ -37,7 +37,7 @@ func TestSmartTokenV2(t *testing.T) {
 	require.NotEmpty(t, token)
 	require.Len(t, secret, 64)
 
-	// Since it's V2 (compact binary), there should be no dot in it
+	// Since it's compact binary, there should be no dot in it
 	require.NotContains(t, token, ".")
 
 	// 2. Parse token
@@ -61,8 +61,8 @@ func TestSmartTokenV2(t *testing.T) {
 	require.Equal(t, payload.RelayAddr, payloadTrimmed.RelayAddr)
 }
 
-func TestSmartTokenBackwardsCompatibility(t *testing.T) {
-	// Create a mock V1 payload (JSON based format)
+func TestSmartTokenLegacyFormatRejected(t *testing.T) {
+	// Create a mock legacy V1 payload (JSON based format)
 	v1Payload := struct {
 		Address string `json:"address"`
 		CAHash  string `json:"ca_hash"`
@@ -78,14 +78,9 @@ func TestSmartTokenBackwardsCompatibility(t *testing.T) {
 	secretHex := strings.Repeat("a", 64) // 64 hex characters
 	v1Token := encodedPayload + "." + secretHex
 
-	// Parse it as a legacy token
-	payload, secret, err := p2p.ParseSmartToken(v1Token)
-	require.NoError(t, err)
-	require.Equal(t, secretHex, secret)
-	require.Equal(t, v1Payload.Address, payload.Address)
-	require.Equal(t, v1Payload.CAHash, payload.CAHash)
-	require.Len(t, payload.Addresses, 1)
-	require.Equal(t, v1Payload.Address, payload.Addresses[0])
+	// Parse it as a legacy token; should be rejected
+	_, _, err = p2p.ParseSmartToken(v1Token)
+	require.Error(t, err)
 }
 
 func TestParseHostAddressHandling(t *testing.T) {

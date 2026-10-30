@@ -122,12 +122,15 @@ func (s *Server) HandleAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.goOwned(func() {
+		if s.peerClient == nil {
+			return
+		}
 		payload := protocol.AddPeerRequest{ID: req.ID, Address: req.Address}
 		s.forEachPeer(forEachPeerOpts{Timeout: PeerRPCDefault, Parallel: true, SkipSelf: true}, func(ctx context.Context, peerID string) error {
 			if peerID == req.ID {
 				return errPeerSkipped
 			}
-			if err := s.peerClient.AddPeer(peerID, payload); err != nil {
+			if err := s.peerClient.AddPeer(ctx, peerID, payload); err != nil {
 				s.Config.Logger.Warn("couldn't request to add new peer", "target-peer", peerID, "newPeer", req.Address, "error", err)
 				return err
 			}

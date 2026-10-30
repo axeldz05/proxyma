@@ -21,7 +21,7 @@ func TestHTTPPeerClientNegotiatesServiceStreamVersion(t *testing.T) {
 		wantError       bool
 	}{
 		{name: "v1", selectedVersion: "1", wantVersion: protocol.ServiceStreamVersion},
-		{name: "legacy fallback", selectedVersion: "", wantVersion: 0},
+		{name: "legacy fallback rejected", selectedVersion: "", wantError: true},
 		{name: "unsupported selection", selectedVersion: "2", wantError: true},
 	}
 	for _, test := range tests {

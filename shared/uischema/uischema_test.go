@@ -123,3 +123,24 @@ func TestValidateActionArgs(t *testing.T) {
 		t.Fatalf("URN strategy should be accepted via normalize: %v", err)
 	}
 }
+
+func TestPayloadParameterHidden(t *testing.T) {
+	for _, actionName := range []string{"run", "stream"} {
+		a, ok := FindAction("service", actionName)
+		if !ok {
+			t.Fatalf("expected service.%s", actionName)
+		}
+		found := false
+		for _, p := range a.Parameters {
+			if p.Name == "payload" {
+				found = true
+				if !p.Hidden {
+					t.Errorf("service.%s payload parameter must be marked Hidden: true", actionName)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("service.%s missing payload parameter", actionName)
+		}
+	}
+}

@@ -85,7 +85,6 @@ func NormalizePipelineSchemaVersion(schema PipelineSchema) PipelineSchema {
 const (
 	ActionAdd    = "add"
 	ActionRemove = "remove"
-	ActionModify = "modify"
 )
 
 // DefaultTCPPort is the SSOT fallback listen/advertise TCP port when Config.Address has none.
@@ -287,7 +286,6 @@ const (
 	ServiceStreamVersion           = 1
 	HeaderStreamAcceptVersions     = "X-Proxyma-Stream-Accept"
 	HeaderStreamSelectedVersion    = "X-Proxyma-Stream-Version"
-	StreamVersionLegacy            = "legacy"
 	CapabilityPipelineState        = "pipeline_state"
 	PipelineStateCapabilityVersion = 2
 )

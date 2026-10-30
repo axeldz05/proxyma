@@ -52,22 +52,7 @@ func waitForOutboxSignal(t *testing.T, signal <-chan struct{}, message string) {
 	}
 }
 
-func putLegacyOutboxEntry(t *testing.T, s *Server, id string, kind gossipKind, payload any, createdAt time.Time) {
-	t.Helper()
-	rawPayload, err := json.Marshal(payload)
-	require.NoError(t, err)
-	rawEntry, err := json.Marshal(outboxEntry{
-		ID:        id,
-		PeerID:    "peer-b",
-		Kind:      kind,
-		Payload:   rawPayload,
-		CreatedAt: createdAt,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Storage.PutOutboxRaw(id, rawEntry))
-}
-
-func TestOutboxTupleKeysCannotCollideWithSeparatorsOrLegacyActions(t *testing.T) {
+func TestOutboxTupleKeysCannotCollideWithSeparators(t *testing.T) {
 	t.Parallel()
 	s := &Server{}
 
@@ -76,9 +61,9 @@ func TestOutboxTupleKeysCannotCollideWithSeparatorsOrLegacyActions(t *testing.T)
 	require.NotEqual(t, left, right)
 
 	canonicalSeparatorEntity := s.outboxKey("peer-b", kindService, "svc|add")
-	legacyAdd := legacyOutboxKey("peer-b", kindService, "svc|add")
-	require.NotEqual(t, canonicalSeparatorEntity, legacyAdd,
-		"new entity keys must never alias an old action-suffixed key")
+	rawJoined := "peer-b|service|svc|add"
+	require.NotEqual(t, canonicalSeparatorEntity, rawJoined,
+		"tuple keys must never alias a raw pipe-delimited key")
 }
 
 func TestFlushOutboxDoesNotDeleteNewerSameKeyPayload(t *testing.T) {
@@ -312,63 +297,6 @@ func TestOutboxWorkerIsOwnedAndJoined(t *testing.T) {
 	waitForOutboxSignal(t, joined, "owned outbox worker did not join after shutdown")
 }
 
-func TestLegacyQueuedAddReconcilesToCurrentRemovalBeforeReplay(t *testing.T) {
-	t.Parallel()
-	var (
-		mu      sync.Mutex
-		actions []string
-	)
-	mock := &testutil.MockPeerClient{
-		OnNotifyServiceUpdate: func(_ context.Context, _ string, n protocol.ServiceNotification) error {
-			mu.Lock()
-			actions = append(actions, n.Action)
-			mu.Unlock()
-			return nil
-		},
-	}
-	s := newOutboxRaceTestServer(t, "outbox-legacy-reconcile", mock)
-	schema := protocol.ServiceSchema{Name: "svc"}
-	putLegacyOutboxEntry(t, s,
-		legacyOutboxKey("peer-b", kindService, "svc|add"),
-		kindService,
-		protocol.ServiceNotification{Action: protocol.ActionAdd, NodeID: s.Config.ID, Schema: schema},
-		time.Unix(1, 0),
-	)
-	s.flushOutbox()
-	s.flushOutbox()
-
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{protocol.ActionRemove}, actions,
-		"stale legacy add must reconcile to the currently removed local entity")
-	require.Zero(t, s.OutboxPendingCount())
-}
-
-func TestCatalogSupersessionDoesNotDeleteSeparatorNamedLegacyEntity(t *testing.T) {
-	t.Parallel()
-	mock := &testutil.MockPeerClient{
-		OnNotifyServiceUpdate: func(context.Context, string, protocol.ServiceNotification) error {
-			return nil
-		},
-	}
-	s := newOutboxRaceTestServer(t, "outbox-legacy-collision", mock)
-	separatorSchema := protocol.ServiceSchema{Name: "svc|add"}
-	legacyID := legacyOutboxKey("peer-b", kindService, "svc|add")
-	putLegacyOutboxEntry(t, s, legacyID, kindService, protocol.ServiceNotification{
-		Action: protocol.ActionAdd,
-		NodeID: s.Config.ID,
-		Schema: separatorSchema,
-	}, time.Unix(1, 0))
-
-	require.NoError(t, s.notifyService(context.Background(), "peer-b",
-		protocol.ServiceSchema{Name: "svc"}, protocol.ActionRemove))
-
-	raw, err := s.Storage.ListLegacyOutboxRaw()
-	require.NoError(t, err)
-	require.Contains(t, raw, legacyID,
-		"payload for entity svc|add must not be deleted while superseding entity svc")
-}
-
 func TestSuccessfulServiceRemoveSupersedesQueuedAdd(t *testing.T) {
 	t.Parallel()
 	var (
@@ -391,11 +319,6 @@ func TestSuccessfulServiceRemoveSupersedesQueuedAdd(t *testing.T) {
 
 	require.Error(t, s.notifyService(context.Background(), "peer-b", schema, protocol.ActionAdd))
 	require.Equal(t, 1, s.OutboxPendingCount())
-	putLegacyOutboxEntry(t, s, legacyOutboxKey("peer-b", kindService, "svc|add"), kindService, protocol.ServiceNotification{
-		Action: protocol.ActionAdd,
-		NodeID: s.Config.ID,
-		Schema: schema,
-	}, time.Unix(1, 0))
 	require.NoError(t, s.notifyService(context.Background(), "peer-b", schema, protocol.ActionRemove))
 	s.flushOutbox()
 
@@ -428,11 +351,6 @@ func TestSuccessfulPipelineRemoveSupersedesQueuedAdd(t *testing.T) {
 
 	require.Error(t, s.notifyPipeline(context.Background(), "peer-b", schema, protocol.ActionAdd))
 	require.Equal(t, 1, s.OutboxPendingCount())
-	putLegacyOutboxEntry(t, s, legacyOutboxKey("peer-b", kindPipeline, "pipeline|add"), kindPipeline, protocol.PipelineNotification{
-		Action: protocol.ActionAdd,
-		NodeID: s.Config.ID,
-		Schema: schema,
-	}, time.Unix(1, 0))
 	require.NoError(t, s.notifyPipeline(context.Background(), "peer-b", schema, protocol.ActionRemove))
 	s.flushOutbox()
 
@@ -464,31 +382,6 @@ func TestLocalServiceDoesNotCommitWhenOutboxWALFails(t *testing.T) {
 	require.NoError(t, loadErr)
 	require.NotContains(t, services, "wal-service",
 		"a mutation must not be acknowledged when its write-ahead intent cannot persist")
-}
-
-func TestLegacyPipelineWithoutRevisionDropsInvalidRemove(t *testing.T) {
-	t.Parallel()
-	var deliveries int
-	s := newOutboxRaceTestServer(t, "legacy-pipeline-no-revision", &testutil.MockPeerClient{
-		OnNotifyPipelineSchema: func(context.Context, string, protocol.PipelineNotification) error {
-			deliveries++
-			return nil
-		},
-	})
-	putLegacyOutboxEntry(t, s,
-		legacyOutboxKey("peer-b", kindPipeline, "missing|add"),
-		kindPipeline,
-		protocol.PipelineNotification{
-			Action: protocol.ActionAdd,
-			NodeID: s.Config.ID,
-			Schema: protocol.PipelineSchema{ID: "missing", Version: 1},
-		},
-		time.Unix(1, 0),
-	)
-
-	s.flushOutbox()
-	require.Zero(t, deliveries, "migration must not invent an invalid version-zero tombstone")
-	require.Zero(t, s.OutboxPendingCount(), "unreconstructable legacy row must be safely reconciled")
 }
 
 func TestRestartReconcilesWriteAheadIntentBeforeReplay(t *testing.T) {
@@ -693,3 +586,5 @@ func TestCorruptDownloadDoesNotHotLoopDurableIntent(t *testing.T) {
 	require.LessOrEqual(t, attemptsAfterQuarantine, int32(2),
 		"periodic reconciliation may queue at most one bounded duplicate before quarantine")
 }
+
+

@@ -22,7 +22,8 @@ func TestCorruptSnapshotAbortsOrphanGC(t *testing.T) {
 	t.Cleanup(func() { _ = engine.Close() })
 
 	require.NoError(t, engine.SaveLocalFile("keep.txt", bytes.NewReader([]byte("durable-content"))))
-	meta, ok := engine.GetFileMeta("keep.txt")
+	meta, ok, err := engine.GetFileMetaE("keep.txt")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotEmpty(t, meta.Hash)
 

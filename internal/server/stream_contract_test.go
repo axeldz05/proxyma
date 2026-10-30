@@ -186,7 +186,7 @@ func TestHTTPStreamEmitsExplicitCompletionFrame(t *testing.T) {
 	}
 }
 
-func TestHTTPStreamDefaultsUnknownClientsToRawLegacyChunks(t *testing.T) {
+func TestHTTPStreamWithoutAcceptHeaderIsRejected(t *testing.T) {
 	t.Parallel()
 
 	srv := newStreamContractServer(t, &testutil.MockPeerClient{})
@@ -197,9 +197,10 @@ func TestHTTPStreamDefaultsUnknownClientsToRawLegacyChunks(t *testing.T) {
 		_ map[string]any,
 	) (map[string]any, error) {
 		defer close(out)
-		out <- map[string]any{"error": "service data", "$proxyma_stream": "complete"}
+		out <- map[string]any{"data": "value"}
 		return nil, nil
 	})
+	// 1. Missing header -> 406 Not Acceptable
 	req := httptest.NewRequest(
 		http.MethodPost,
 		protocol.WithServiceQuery(protocol.PathServicesStream, "http-legacy"),
@@ -207,19 +208,50 @@ func TestHTTPStreamDefaultsUnknownClientsToRawLegacyChunks(t *testing.T) {
 	)
 	rec := httptest.NewRecorder()
 	srv.HandleServicesStream(rec, req)
+	if rec.Code != http.StatusNotAcceptable {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusNotAcceptable)
+	}
 
-	if selected := rec.Header().Get(protocol.HeaderStreamSelectedVersion); selected != protocol.StreamVersionLegacy {
-		t.Fatalf("selected stream version = %q, want legacy", selected)
+	// 2. Version 0 header -> 406 Not Acceptable
+	req0 := httptest.NewRequest(
+		http.MethodPost,
+		protocol.WithServiceQuery(protocol.PathServicesStream, "http-legacy"),
+		strings.NewReader(`{}`),
+	)
+	req0.Header.Set(protocol.HeaderStreamAcceptVersions, "0")
+	rec0 := httptest.NewRecorder()
+	srv.HandleServicesStream(rec0, req0)
+	if rec0.Code != http.StatusNotAcceptable {
+		t.Fatalf("status code = %d, want %d", rec0.Code, http.StatusNotAcceptable)
 	}
-	var frames []map[string]any
-	if err := utils.ForEachNDJSON(rec.Body, func(frame map[string]any) error {
-		frames = append(frames, frame)
-		return nil
-	}); err != nil {
-		t.Fatalf("decode legacy response: %v", err)
+
+	// 3. Version 2 only header -> 406 Not Acceptable
+	req2 := httptest.NewRequest(
+		http.MethodPost,
+		protocol.WithServiceQuery(protocol.PathServicesStream, "http-legacy"),
+		strings.NewReader(`{}`),
+	)
+	req2.Header.Set(protocol.HeaderStreamAcceptVersions, "2")
+	rec2 := httptest.NewRecorder()
+	srv.HandleServicesStream(rec2, req2)
+	if rec2.Code != http.StatusNotAcceptable {
+		t.Fatalf("status code = %d, want %d", rec2.Code, http.StatusNotAcceptable)
 	}
-	if len(frames) != 1 || frames[0]["error"] != "service data" {
-		t.Fatalf("legacy frames = %#v, want one raw service chunk", frames)
+
+	// 4. Version 1 header -> 200 OK with selected header
+	req1 := httptest.NewRequest(
+		http.MethodPost,
+		protocol.WithServiceQuery(protocol.PathServicesStream, "http-legacy"),
+		strings.NewReader(`{}`),
+	)
+	req1.Header.Set(protocol.HeaderStreamAcceptVersions, "1, 2")
+	rec1 := httptest.NewRecorder()
+	srv.HandleServicesStream(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rec1.Code, http.StatusOK)
+	}
+	if rec1.Header().Get(protocol.HeaderStreamSelectedVersion) != "1" {
+		t.Fatalf("selected header = %q, want 1", rec1.Header().Get(protocol.HeaderStreamSelectedVersion))
 	}
 }
 
@@ -514,13 +546,11 @@ func TestRemoteStreamRejectsMixedOrUnsupportedFraming(t *testing.T) {
 	}
 }
 
-func TestRemoteLegacyStreamTreatsAllObjectsAsChunksAndEOFSucceeds(t *testing.T) {
+func TestRemoteLegacyStreamIsRejected(t *testing.T) {
 	t.Parallel()
 
 	legacyVersion := 0
-	body := "{\"error\":\"service data\"}\n" +
-		"{\"$proxyma_stream\":\"complete\"}\n" +
-		"{\"proxyma_stream_version\":1,\"kind\":\"error\",\"error\":\"also data\"}\n"
+	body := "{\"error\":\"service data\"}\n"
 	client := &streamContractPeerClient{
 		MockPeerClient:    &testutil.MockPeerClient{},
 		negotiatedVersion: &legacyVersion,
@@ -544,15 +574,9 @@ func TestRemoteLegacyStreamTreatsAllObjectsAsChunksAndEOFSucceeds(t *testing.T) 
 	})
 	srv.Peers.SetPeerOnline("remote", true)
 
-	var chunks []map[string]any
-	err := srv.LocalServiceStreamRun("legacy-stream", `{}`, func(chunk map[string]any) {
-		chunks = append(chunks, chunk)
-	})
-	if err != nil {
-		t.Fatalf("legacy EOF stream: %v", err)
-	}
-	if len(chunks) != 3 {
-		t.Fatalf("legacy chunks = %#v, want all three data objects", chunks)
+	err := srv.LocalServiceStreamRun("legacy-stream", `{}`, func(chunk map[string]any) {})
+	if err == nil || !strings.Contains(err.Error(), "unsupported negotiated remote service stream version 0") {
+		t.Fatalf("err = %v, want unsupported negotiated remote service stream version 0", err)
 	}
 }
 
@@ -684,6 +708,7 @@ func TestHTTPStreamCancellationReachesLocalHandler(t *testing.T) {
 		protocol.WithServiceQuery(protocol.PathServicesStream, "cancel-local"),
 		strings.NewReader(`{}`),
 	).WithContext(ctx)
+	req.Header.Set(protocol.HeaderStreamAcceptVersions, "1")
 	done := make(chan struct{})
 	go func() {
 		srv.HandleServicesStream(httptest.NewRecorder(), req)
@@ -753,6 +778,7 @@ func TestHTTPStreamWriteFailureCancelsWork(t *testing.T) {
 		protocol.WithServiceQuery(protocol.PathServicesStream, "write-failure"),
 		strings.NewReader(`{}`),
 	)
+	req.Header.Set(protocol.HeaderStreamAcceptVersions, "1")
 	done := make(chan struct{})
 	go func() {
 		srv.HandleServicesStream(&failingStreamResponseWriter{

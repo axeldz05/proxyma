@@ -32,7 +32,7 @@ e2e_is_v1_invite_token() {
     [[ $payload =~ $ca_hash_pattern ]]
 }
 
-e2e_is_v2_invite_token() {
+e2e_is_smart_invite_token() {
     local token=$1
     local byte_dump entry_type field_length
     local -a bytes
@@ -88,6 +88,10 @@ e2e_is_v2_invite_token() {
     ((index == ${#bytes[@]}))
 }
 
+e2e_is_v2_invite_token() {
+    e2e_is_smart_invite_token "$@"
+}
+
 e2e_redact_invite_lines() {
     local line candidate
 
@@ -101,7 +105,7 @@ e2e_redact_invite_lines() {
             fi
         fi
 
-        if e2e_is_v1_invite_token "$candidate" || e2e_is_v2_invite_token "$candidate"; then
+        if e2e_is_v1_invite_token "$candidate" || e2e_is_smart_invite_token "$candidate"; then
             printf '%s\n' '[REDACTED INVITE TOKEN]'
         else
             printf '%s\n' "$line"

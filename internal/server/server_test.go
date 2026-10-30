@@ -85,8 +85,8 @@ func TestFilePropagationAcrossCluster(t *testing.T) {
 	// All nodes must eventually have the correct metadata and physical blob
 	for _, srv := range servers {
 		require.Eventually(t, func() bool {
-			meta, exists := srv.Storage.GetFileMeta(fileName)
-			if !exists || meta.Hash != expectedHash {
+			meta, exists, err := srv.Storage.GetFileMetaE(fileName)
+			if err != nil || !exists || meta.Hash != expectedHash {
 				return false
 			}
 			hasBlob, _ := srv.Storage.HasPhysicalBlob(expectedHash)
@@ -103,7 +103,8 @@ func TestUploadEndpointReturnsAndRegistersHash(t *testing.T) {
 	fileContent := "testing"
 	expectedHash := UploadFileSimulated(t, sv, fileName, fileContent)
 
-	fileMeta, exists := sv.Storage.GetFileMeta(fileName)
+	fileMeta, exists, err := sv.Storage.GetFileMetaE(fileName)
+	require.NoError(t, err)
 
 	require.True(t, exists, "The file should be registered in s.files")
 	require.NotEmpty(t, fileMeta.Hash, "The metadata should include the hash")
@@ -179,15 +180,15 @@ func TestTombstonePropagatesToPeers(t *testing.T) {
 	UploadFileSimulated(t, sv1, fileName, fileContent)
 
 	require.Eventually(t, func() bool {
-		_, exists := sv2.Storage.GetFileMeta(fileName)
-		return exists
+		_, exists, err := sv2.Storage.GetFileMetaE(fileName)
+		return err == nil && exists
 	}, 2*time.Second, 100*time.Millisecond)
 
 	DeleteFileSimulated(t, sv1, fileName)
 
 	require.Eventually(t, func() bool {
-		meta, _ := sv2.Storage.GetFileMeta(fileName)
-		return meta.Deleted && meta.Version == 2
+		meta, exists, err := sv2.Storage.GetFileMetaE(fileName)
+		return err == nil && exists && meta.Deleted && meta.Version == 2
 	}, 2*time.Second, 100*time.Millisecond, "Server2 should have processed the Tombstone")
 }
 
@@ -543,10 +544,11 @@ func TestNodeAnnounceAndSyncPropagation(t *testing.T) {
 	fileContent := "Data that newcomer needs to download"
 	expectedHash := UploadFileSimulated(t, sponsor, fileName, fileContent)
 
-	_, exists := newcomer.Storage.GetFileMeta(fileName)
+	_, exists, err := newcomer.Storage.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.False(t, exists, "Newcomer shouldn't have the file yet")
 
-	err := newcomer.AnnouncePresence(sponsor.Config.Address)
+	err = newcomer.AnnouncePresence(sponsor.Config.Address)
 	require.NoError(t, err, "The announce shouldn't fail")
 
 	peersOfSponsor := sponsor.GetPeersCopy()
@@ -564,8 +566,8 @@ func TestNodeAnnounceAndSyncPropagation(t *testing.T) {
 		// force this 'Eventually' block to wait until the metadate is available, then
 		// proceed to wait until the physicalBlob is available. This is necessary to prevent
 		// a race condition between this block and 'assertRemoteHashToBeTheSameAs'
-		meta, exists := newcomer.Storage.GetFileMeta(fileName)
-		if !exists || meta.Hash != expectedHash {
+		meta, exists, err := newcomer.Storage.GetFileMetaE(fileName)
+		if err != nil || !exists || meta.Hash != expectedHash {
 			return false
 		}
 		hasBlob, _ := newcomer.Storage.HasPhysicalBlob(expectedHash)
@@ -620,7 +622,8 @@ func TestDownloadWorkerProcessesDeletion(t *testing.T) {
 	}
 	require.NoError(t, srv.Storage.ProcessRemoteDeletion(tombstone))
 
-	meta, exists := srv.Storage.GetFileMeta(fileName)
+	meta, exists, err := srv.Storage.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists, "Metadata entry should still exist after deletion")
 	require.True(t, meta.Deleted, "Metadata should be marked as deleted")
 	require.Equal(t, 2, meta.Version, "Version should have been incremented to 2")
@@ -1005,7 +1008,7 @@ func TestAddPeerIgnoresOldSequence(t *testing.T) {
 func TestAnnouncePresenceFallbackError(t *testing.T) {
 	t.Parallel()
 	mockClient := &testutil.MockPeerClient{
-		OnAnnounce: func(sponsor string, req protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
+		OnAnnounce: func(_ context.Context, sponsor string, req protocol.AddPeerRequest) (map[string]protocol.AddressRecord, error) {
 			return nil, fmt.Errorf("connection refused")
 		},
 	}
@@ -1014,6 +1017,27 @@ func TestAnnouncePresenceFallbackError(t *testing.T) {
 	err := srv.AnnouncePresence("https://unreachable:8443")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
+
+	// AnnouncePresenceContext with nil context falls back safely without panic
+	err = srv.AnnouncePresenceContext(nil, "https://unreachable:8443")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
+}
+
+func TestAnnouncePresenceContextNilPeerClient(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "nil-peerclient-test")
+	srv, err := server.New(cfg, nil)
+	require.NoError(t, err)
+
+	err = srv.AnnouncePresenceContext(context.Background(), "https://sponsor:8443")
+	require.Error(t, err)
+	require.Equal(t, "peer client not initialized", err.Error())
+
+	// RemovePeer with nil peerClient should not panic
+	require.NotPanics(t, func() {
+		srv.RemovePeer("peer-x")
+	})
 }
 
 func TestOfflineNotificationAndSelfHealing(t *testing.T) {

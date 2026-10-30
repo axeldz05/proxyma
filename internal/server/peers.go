@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"proxyma/internal/p2p"
@@ -30,7 +31,9 @@ func (s *Server) RemovePeer(peerID string) {
 	if s.Storage != nil {
 		_ = s.Storage.DeletePeer(peerID)
 	}
-	s.peerClient.RemovePeerRoute(peerID)
+	if s.peerClient != nil {
+		s.peerClient.RemovePeerRoute(peerID)
+	}
 }
 
 func (s *Server) announceOffline(ctx context.Context) {
@@ -142,6 +145,19 @@ func (s *Server) buildPresenceAddresses(tcpPortStr string, natState NATState, lo
 }
 
 func (s *Server) AnnouncePresence(sponsorAddress string) error {
+	return s.AnnouncePresenceContext(s.lifetimeCtx, sponsorAddress)
+}
+
+func (s *Server) AnnouncePresenceContext(ctx context.Context, sponsorAddress string) error {
+	if s.peerClient == nil {
+		return errors.New("peer client not initialized")
+	}
+	if ctx == nil {
+		ctx = s.lifetimeCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
 	s.CheckNAT()
 	tcpPortStr := s.advertisedTCPPort()
 	natState := s.CurrentNATState()
@@ -159,7 +175,10 @@ func (s *Server) AnnouncePresence(sponsorAddress string) error {
 		},
 	}
 
-	announceResp, err := s.peerClient.Announce(sponsorAddress, payload)
+	rpcCtx, cancel := context.WithTimeout(ctx, PeerRPCSync)
+	defer cancel()
+
+	announceResp, err := s.peerClient.Announce(rpcCtx, sponsorAddress, payload)
 	if err != nil {
 		s.Config.Logger.Error("Error while announcing from sponsor", "sponsor", sponsorAddress, "error", err)
 		return fmt.Errorf("there was an error trying to connect to the cluster: %w", err)

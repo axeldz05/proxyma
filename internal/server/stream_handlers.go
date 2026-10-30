@@ -127,22 +127,19 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	if streamVersion == protocol.ServiceStreamVersion {
-		w.Header().Set(protocol.HeaderStreamSelectedVersion, "1")
-	} else {
-		w.Header().Set(protocol.HeaderStreamSelectedVersion, protocol.StreamVersionLegacy)
+	if streamVersion != protocol.ServiceStreamVersion {
+		utils.RespondError(w, http.StatusNotAcceptable, "streaming requires "+protocol.HeaderStreamAcceptVersions+": 1")
+		return
 	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set(protocol.HeaderStreamSelectedVersion, "1")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
 	streamCtx, cancel := s.contextWithServerLifetime(r.Context())
 	defer cancel()
 	err = s.localServiceStreamRun(streamCtx, serviceName, payload, func(chunk map[string]any) error {
-		frame := any(chunk)
-		if streamVersion == protocol.ServiceStreamVersion {
-			frame = protocol.NewServiceStreamChunk(chunk)
-		}
+		frame := protocol.NewServiceStreamChunk(chunk)
 		if err := utils.WriteNDJSON(w, frame); err != nil {
 			return err
 		}
@@ -150,13 +147,11 @@ func (s *Server) HandleServicesStream(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	if streamVersion == protocol.ServiceStreamVersion {
-		terminal := protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameComplete, "")
-		if err != nil {
-			terminal = protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameError, err.Error())
-		}
-		if writeErr := utils.WriteNDJSON(w, terminal); writeErr == nil {
-			flusher.Flush()
-		}
+	terminal := protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameComplete, "")
+	if err != nil {
+		terminal = protocol.NewServiceStreamTerminal(protocol.ServiceStreamFrameError, err.Error())
+	}
+	if writeErr := utils.WriteNDJSON(w, terminal); writeErr == nil {
+		flusher.Flush()
 	}
 }

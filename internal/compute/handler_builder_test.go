@@ -424,10 +424,10 @@ func TestBuildHandlerTypeAliasesMatchHTTPStreamSemantics(t *testing.T) {
 		exec     string
 		wantNorm protocol.ServiceType
 	}{
-		{protocol.ServiceTypeHTTPBidi, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
-		{protocol.ServiceTypeGRPCBidi, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
-		{protocol.ServiceTypeBidiGRPC, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
-		{protocol.ServiceTypeBidiStream, bidiTS.URL, protocol.ServiceTypeGRPCBidi},
+		{protocol.ServiceTypeHTTPBidi, bidiTS.URL, protocol.ServiceTypeHTTPBidi},
+		{protocol.ServiceTypeGRPCBidi, bidiTS.URL, protocol.ServiceTypeHTTPBidi},
+		{protocol.ServiceTypeBidiGRPC, bidiTS.URL, protocol.ServiceTypeHTTPBidi},
+		{protocol.ServiceTypeBidiStream, bidiTS.URL, protocol.ServiceTypeHTTPBidi},
 		{protocol.ServiceTypeHTTPServerStream, streamTS.URL, protocol.ServiceTypeServerStream},
 		{protocol.ServiceTypeGRPCServerStream, streamTS.URL, protocol.ServiceTypeServerStream},
 		{protocol.ServiceTypeServerStream, streamTS.URL, protocol.ServiceTypeServerStream},

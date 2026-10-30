@@ -35,7 +35,8 @@ func TestVirtualFileSystemTracksFileUpdates(t *testing.T) {
 	err = engine.SaveLocalFile(fileName, bytes.NewReader(content2))
 	require.NoError(t, err)
 
-	meta, exists := engine.GetFileMeta(fileName)
+	meta, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 
 	require.True(t, exists, "The system must track the file by its logic name")
 	require.Equal(t, 2, meta.Version, "Version of the file should have been incremented to 2")
@@ -52,13 +53,16 @@ func TestLocalDeleteCreatesTombstone(t *testing.T) {
 	err := engine.SaveLocalFile(fileName, bytes.NewReader(fileContent))
 	require.NoError(t, err)
 
-	metaBefore, _ := engine.GetFileMeta(fileName)
+	metaBefore, existsBefore, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
+	require.True(t, existsBefore)
 	require.False(t, metaBefore.Deleted, "File should have not been deleted previously")
 
 	err = engine.DeleteLocalFile(fileName)
 	require.NoError(t, err)
 
-	metaAfter, exists := engine.GetFileMeta(fileName)
+	metaAfter, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists, "The protocol.IndexEntry of the file should still exist after deleting")
 	require.True(t, metaAfter.Deleted, "Deleted should be true in the protocol.IndexEntry")
 	require.Equal(t, metaBefore.Version+1, metaAfter.Version, "Version should have been incremented")
@@ -83,18 +87,20 @@ func TestStorageEngineProcessesManifestAndStoresBlob(t *testing.T) {
 		fileName: {Name: fileName, Hash: expectedHash, Version: 1, Size: int64(len(fileContent))},
 	}
 
-	missingFiles := engine.ProcessRemoteManifest(remoteManifest)
+	missingFiles, err := engine.ProcessRemoteManifestE(remoteManifest)
+	require.NoError(t, err)
 	require.Len(t, missingFiles, 1, "Should identify one missing file")
 	require.Equal(t, fileName, missingFiles[0].Name)
 
 	fakeHTTPBody := io.NopCloser(bytes.NewReader([]byte(fileContent)))
-	err := engine.StoreRemoteBlob(missingFiles[0], fakeHTTPBody)
+	err = engine.StoreRemoteBlob(missingFiles[0], fakeHTTPBody)
 	require.NoError(t, err)
 
 	hasBlob, _ := engine.HasPhysicalBlob(expectedHash)
 	require.True(t, hasBlob, "Physical blob should exist in disk")
 
-	meta, exists := engine.GetFileMeta(fileName)
+	meta, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists, "Metadata should be updated in VFS")
 	require.Equal(t, expectedHash, meta.Hash)
 }
@@ -115,15 +121,18 @@ func TestSelectiveSynchronizationEvaluatesManifestCorrectly(t *testing.T) {
 		fileAName: {Name: fileAName, Hash: hashA, Version: 1},
 		fileBName: {Name: fileBName, Hash: hashB, Version: 1},
 	}
-	missingFiles := engine.ProcessRemoteManifest(remoteManifest)
+	missingFiles, err := engine.ProcessRemoteManifestE(remoteManifest)
+	require.NoError(t, err)
 	require.Len(t, missingFiles, 1, "Should ONLY return subscribed files for physical download")
 	require.Equal(t, fileAName, missingFiles[0].Name)
 
-	metaA, existsA := engine.GetFileMeta(fileAName)
+	metaA, existsA, err := engine.GetFileMetaE(fileAName)
+	require.NoError(t, err)
 	require.True(t, existsA)
 	require.Equal(t, hashA, metaA.Hash)
 
-	metaB, existsB := engine.GetFileMeta(fileBName)
+	metaB, existsB, err := engine.GetFileMetaE(fileBName)
+	require.NoError(t, err)
 	require.True(t, existsB)
 	require.Equal(t, hashB, metaB.Hash)
 
@@ -168,8 +177,9 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 		snapshotEntry, existsInSnapshot := snapshot[fileName]
 		require.True(t, existsInSnapshot, "Snapshot must include entry for %s", fileName)
 
-		metaEntry, existsInMeta := engine.GetFileMeta(fileName)
-		require.True(t, existsInMeta, "GetFileMeta must return entry for %s", fileName)
+		metaEntry, existsInMeta, err := engine.GetFileMetaE(fileName)
+		require.NoError(t, err)
+		require.True(t, existsInMeta, "GetFileMetaE must return entry for %s", fileName)
 
 		require.Equal(t, metaEntry.Name, snapshotEntry.Name, "Name mismatch for %s", fileName)
 		require.Equal(t, metaEntry.Version, snapshotEntry.Version, "Version mismatch for %s", fileName)
@@ -213,7 +223,8 @@ func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, updated, "Upsert with lower version should be rejected")
 
-	meta, exists := engine.GetFileMeta("versioned.txt")
+	meta, exists, err := engine.GetFileMetaE("versioned.txt")
+	require.NoError(t, err)
 	require.True(t, exists)
 	require.Equal(t, 3, meta.Version, "Version should remain at 3")
 	require.Equal(t, "hash-v3", meta.Hash, "Hash should remain unchanged")
@@ -280,10 +291,12 @@ func TestProcessRemoteManifestSkipsTombstones(t *testing.T) {
 		fileName: {Name: fileName, Hash: "hash-deleted", Version: 2, Deleted: true},
 	}
 
-	missingFiles := engine.ProcessRemoteManifest(remoteManifest)
+	missingFiles, err := engine.ProcessRemoteManifestE(remoteManifest)
+	require.NoError(t, err)
 	require.Empty(t, missingFiles, "Tombstoned entries should NOT be added to missingFiles")
 
-	meta, exists := engine.GetFileMeta(fileName)
+	meta, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists, "Metadata should still be updated via Upsert")
 	require.True(t, meta.Deleted, "Entry should be marked as deleted")
 }
@@ -400,7 +413,8 @@ func TestProcessRemoteDeletionCreatesNewTombstone(t *testing.T) {
 	// Should not panic or error — the file never existed locally
 	require.NoError(t, engine.ProcessRemoteDeletion(tombstone))
 
-	meta, exists := engine.GetFileMeta("never_existed.txt")
+	meta, exists, err := engine.GetFileMetaE("never_existed.txt")
+	require.NoError(t, err)
 	require.True(t, exists, "A tombstone record should have been created")
 	require.True(t, meta.Deleted, "The record should be marked as deleted")
 	require.Equal(t, 1, meta.Version)
@@ -426,13 +440,13 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 		}(i)
 	}
 
-	// Readers: GetFileMeta
+	// Readers: GetFileMetaE
 	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
-			engine.GetFileMeta(fileName)
+			_, _, _ = engine.GetFileMetaE(fileName)
 		}(i)
 	}
 
@@ -454,7 +468,7 @@ func TestConcurrentStorageEngineAccess(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			fileName := fmt.Sprintf("concurrent_%d.txt", idx)
-			engine.GetFileMeta(fileName)
+			_, _, _ = engine.GetFileMetaE(fileName)
 		}(i)
 	}
 
@@ -476,13 +490,15 @@ func TestCASReferenceCountingAndDeduplication(t *testing.T) {
 	err := engine.SaveLocalFile("file1.txt", bytes.NewReader(content))
 	require.NoError(t, err)
 
-	meta1, exists := engine.GetFileMeta("file1.txt")
+	meta1, exists, err := engine.GetFileMetaE("file1.txt")
+	require.NoError(t, err)
 	require.True(t, exists)
 
 	err = engine.SaveLocalFile("file2.txt", bytes.NewReader(content))
 	require.NoError(t, err)
 
-	meta2, exists := engine.GetFileMeta("file2.txt")
+	meta2, exists, err := engine.GetFileMetaE("file2.txt")
+	require.NoError(t, err)
 	require.True(t, exists)
 
 	require.Equal(t, meta1.Hash, meta2.Hash, "Identical content must produce identical hash")
@@ -586,7 +602,8 @@ func TestRemoteTombstoneNotificationGCsPhysicalBlob(t *testing.T) {
 	content := []byte("blob that should be GC'd on remote tombstone")
 	require.NoError(t, engine.SaveLocalFile(fileName, bytes.NewReader(content)))
 
-	meta, ok := engine.GetFileMeta(fileName)
+	meta, ok, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, ok)
 	hash := meta.Hash
 	hasBlob, _ := engine.HasPhysicalBlob(hash)
@@ -604,7 +621,8 @@ func TestRemoteTombstoneNotificationGCsPhysicalBlob(t *testing.T) {
 	engine.HandleNotification(w, req)
 
 	require.True(t, w.Code == http.StatusOK || w.Code == http.StatusAccepted)
-	got, exists := engine.GetFileMeta(fileName)
+	got, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists)
 	require.True(t, got.Deleted)
 	hasBlob, _ = engine.HasPhysicalBlob(hash)
@@ -620,14 +638,17 @@ func TestRemoteTombstoneManifestGCsPhysicalBlob(t *testing.T) {
 	fileName := "manifest-orphan.txt"
 	content := []byte("blob GC via ProcessRemoteManifest")
 	require.NoError(t, engine.SaveLocalFile(fileName, bytes.NewReader(content)))
-	meta, ok := engine.GetFileMeta(fileName)
+	meta, ok, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, ok)
 
-	_ = engine.ProcessRemoteManifest(map[string]protocol.IndexEntry{
+	_, err = engine.ProcessRemoteManifestE(map[string]protocol.IndexEntry{
 		fileName: {Name: fileName, Hash: meta.Hash, Version: meta.Version + 1, Deleted: true, Size: meta.Size},
 	})
+	require.NoError(t, err)
 
-	got, exists := engine.GetFileMeta(fileName)
+	got, exists, err := engine.GetFileMetaE(fileName)
+	require.NoError(t, err)
 	require.True(t, exists)
 	require.True(t, got.Deleted)
 	hasBlob, _ := engine.HasPhysicalBlob(meta.Hash)
@@ -676,8 +697,10 @@ func TestStageLocalFileDistinctLogicalNamesForSameBasename(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, len(names), 2, "both staged blobs must have distinct VFS index entries")
 
-	metaA, okA := engine.GetFileMeta(snapNameForHash(snap, hashA))
-	metaB, okB := engine.GetFileMeta(snapNameForHash(snap, hashB))
+	metaA, okA, err := engine.GetFileMetaE(snapNameForHash(snap, hashA))
+	require.NoError(t, err)
+	metaB, okB, err := engine.GetFileMetaE(snapNameForHash(snap, hashB))
+	require.NoError(t, err)
 	require.True(t, okA)
 	require.True(t, okB)
 	require.NotEqual(t, metaA.Name, metaB.Name)
@@ -753,4 +776,57 @@ func TestInvitePersistenceRoundTrip(t *testing.T) {
 	invites, err = engine.LoadInvites()
 	require.NoError(t, err)
 	require.NotContains(t, invites, "secret")
+}
+
+func TestServiceSubscriptionsLifecycle(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "service-subscriptions")
+	engine := testutil.NewStorageEngine(t, cfg)
+
+	// 1. Initially empty: no service subscriptions active, accept-all compat behavior
+	hasSubs, err := engine.HasServiceSubscriptionsE()
+	require.NoError(t, err)
+	require.False(t, hasSubs)
+
+	subbed, err := engine.IsServiceSubscribedE("ocr")
+	require.NoError(t, err)
+	require.True(t, subbed, "empty subscriptions bucket must accept all")
+
+	// 2. Add pattern subscriptions
+	require.NoError(t, engine.SetServiceSubscription("vision.*", true))
+	require.NoError(t, engine.SetServiceSubscription("nlp", true))
+
+	hasSubs, err = engine.HasServiceSubscriptionsE()
+	require.NoError(t, err)
+	require.True(t, hasSubs)
+
+	// Matching patterns
+	subbed, err = engine.IsServiceSubscribedE("vision.detect")
+	require.NoError(t, err)
+	require.True(t, subbed)
+
+	subbed, err = engine.IsServiceSubscribedE("nlp")
+	require.NoError(t, err)
+	require.True(t, subbed)
+
+	// Non-matching patterns
+	subbed, err = engine.IsServiceSubscribedE("speech.stt")
+	require.NoError(t, err)
+	require.False(t, subbed)
+
+	// 3. Unsubscribe
+	require.NoError(t, engine.SetServiceSubscription("vision.*", false))
+	subbed, err = engine.IsServiceSubscribedE("vision.detect")
+	require.NoError(t, err)
+	require.False(t, subbed)
+
+	require.NoError(t, engine.SetServiceSubscription("nlp", false))
+	hasSubs, err = engine.HasServiceSubscriptionsE()
+	require.NoError(t, err)
+	require.False(t, hasSubs)
+
+	// Once again empty, falls back to accept-all
+	subbed, err = engine.IsServiceSubscribedE("speech.stt")
+	require.NoError(t, err)
+	require.True(t, subbed)
 }

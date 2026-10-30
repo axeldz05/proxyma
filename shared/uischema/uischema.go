@@ -20,6 +20,7 @@ type ParameterDetail struct {
 	UIHint       string   `json:"uiHint,omitempty"` // "file_picker", "image_picker", "audio_picker", "audio_stream", "live_stream", "text", "password", "dropdown"
 	DefaultValue string   `json:"defaultValue,omitempty"`
 	Options      []string `json:"options,omitempty"`
+	Hidden       bool     `json:"hidden,omitempty"`
 }
 
 // TableColumn defines how a column should be formatted in a table view
@@ -311,7 +312,7 @@ var Registry = []DomainDetail{
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to run"},
 					{Name: "inputs", Type: "string", Required: false, Description: "Service inputs in 'key1=val1,key2=val2' format or JSON object"},
-					{Name: "payload", Type: "string", Required: false, Description: "Legacy alias for service inputs in JSON format"},
+					{Name: "payload", Type: "string", Required: false, Hidden: true, Description: "Legacy alias for service inputs in JSON format"},
 					{Name: "strategy", Type: "string", Required: false, Description: "Bid sort strategy", UIHint: "dropdown", Options: protocol.SortStrategyShortOptions()},
 				},
 			},
@@ -324,7 +325,7 @@ var Registry = []DomainDetail{
 				Hidden:      true,
 				Parameters: []ParameterDetail{
 					{Name: "name", Type: "string", Required: true, Description: "Service name to stream"},
-					{Name: "payload", Type: "string", Required: false, Description: "Service inputs JSON"},
+					{Name: "payload", Type: "string", Required: false, Hidden: true, Description: "Service inputs JSON"},
 				},
 			},
 			{

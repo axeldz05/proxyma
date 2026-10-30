@@ -194,7 +194,7 @@ CI splits responsibilities:
 
 Per-case output is written to `tests/e2e/logs/<case>.log` and sanitized before the runner reports or archives it. Failed logs are copied to `tests/e2e/logs/failed/<timestamp>/`. Cases using `dump_e2e_diagnostics` also capture sanitized Compose state, bounded logs, and public health under `tests/e2e/logs/diagnostics/`.
 
-Sanitization removes private-key bodies and redacts bearer credentials, CLI `--token` values, JSON `token` and `secret` fields, and query tokens. It also recognizes valid V1 and structurally valid V2 invite tokens when the token occupies the complete trimmed (optionally quoted) line. It deliberately preserves ordinary SHA-256/CA hashes, Git SHAs, generic base64, and token-like substrings embedded in other text. [`lib/dump_sanitize_test.sh`](lib/dump_sanitize_test.sh), run by `make test-sanitizer`, locks these positive and negative cases.
+Sanitization removes private-key bodies and redacts bearer credentials, CLI `--token` values, JSON `token` and `secret` fields, and query tokens. It also recognizes valid legacy JSON and structurally valid Smart Token invite tokens when the token occupies the complete trimmed (optionally quoted) line. It deliberately preserves ordinary SHA-256/CA hashes, Git SHAs, generic base64, and token-like substrings embedded in other text. [`lib/dump_sanitize_test.sh`](lib/dump_sanitize_test.sh), run by `make test-sanitizer`, locks these positive and negative cases.
 
 CI sanitizes the complete logs directory again before uploading failure artifacts and retains them for five days. When a new credential format is introduced, update [`lib/dump.sh`](lib/dump.sh) and its sanitizer contract before logging it.
 

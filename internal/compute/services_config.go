@@ -39,32 +39,18 @@ func canonicalServicesFilePath(storagePath string) string {
 // and every writer/RMW takes an exclusive one. Processes bypassing these APIs
 // are unsupported because POSIX locks are advisory.
 func lockServicesFile(storagePath string, exclusive bool) (func() error, error) {
-	acquired, unlock, err := lockServicesFileMode(storagePath, exclusive, false)
-	if err != nil {
-		return nil, err
-	}
-	if !acquired {
-		return nil, fmt.Errorf("services file lock unexpectedly unavailable")
-	}
-	return unlock, nil
+	return lockServicesFileMode(storagePath, exclusive)
 }
 
-func tryLockServicesFile(storagePath string, exclusive bool) (bool, func() error, error) {
-	return lockServicesFileMode(storagePath, exclusive, true)
-}
-
-func lockServicesFileMode(storagePath string, exclusive, nonblocking bool) (bool, func() error, error) {
+func lockServicesFileMode(storagePath string, exclusive bool) (func() error, error) {
 	lockPath := canonicalServicesFilePath(storagePath) + ".lock"
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return false, nil, err
+		return nil, err
 	}
 	mode := unix.LOCK_SH
 	if exclusive {
 		mode = unix.LOCK_EX
-	}
-	if nonblocking {
-		mode |= unix.LOCK_NB
 	}
 	for {
 		err = unix.Flock(int(file.Fd()), mode)
@@ -74,10 +60,7 @@ func lockServicesFileMode(storagePath string, exclusive, nonblocking bool) (bool
 	}
 	if err != nil {
 		_ = file.Close()
-		if nonblocking && (errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN)) {
-			return false, nil, nil
-		}
-		return false, nil, err
+		return nil, err
 	}
 	var once sync.Once
 	var unlockErr error
@@ -90,7 +73,7 @@ func lockServicesFileMode(storagePath string, exclusive, nonblocking bool) (bool
 		})
 		return unlockErr
 	}
-	return true, unlock, nil
+	return unlock, nil
 }
 
 // withServicesFile runs fn under the services.json double lock: the in-process
@@ -353,10 +336,13 @@ var serviceTypeBuilders = map[protocol.ServiceType]func(exec string) (ServiceHan
 	protocol.ServiceTypeScript: func(exec string) (ServiceHandler, error) {
 		return BuildScriptHandler(exec), nil
 	},
-	protocol.ServiceTypeGRPC: func(exec string) (ServiceHandler, error) {
+	protocol.ServiceTypeHTTP: func(exec string) (ServiceHandler, error) {
+		if err := requireHTTPExec(exec, protocol.ServiceTypeHTTP, "webhook URL"); err != nil {
+			return nil, err
+		}
 		return BuildHTTPHandler(exec, protocol.HandlerDialUnary), nil
 	},
-	protocol.ServiceTypeGRPCBidi: buildStreamOrScript,
+	protocol.ServiceTypeHTTPBidi: buildStreamOrScript,
 	protocol.ServiceTypeBidi:     buildStreamOrScript,
 	protocol.ServiceTypeServerStream: func(exec string) (ServiceHandler, error) {
 		if err := requireHTTPExec(exec, protocol.ServiceTypeServerStream, "exec URL"); err != nil {
