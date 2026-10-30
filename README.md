@@ -126,3 +126,10 @@ contract. The stable E2E profile covers the public behaviors listed in
 - [ ] Public HTTP/CLI multi-message bidirectional streaming and end-to-end cancellation.
 - [ ] Real low-latency screen capture, rendering, remote input, and latency/jitter targets.
 - [ ] WebRTC service and signaling support on Android.
+
+---
+
+## License
+
+Proxyma is open source software licensed under the [Apache License, Version 2.0](LICENSE).
+
