@@ -1,14 +1,26 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+
 	"proxyma/internal/protocol"
 	storage "proxyma/internal/storage/physical"
 	"proxyma/internal/utils"
 )
 
 func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Body == nil {
+		r.Body = http.NoBody
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
 
 	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
 	if err != nil {
@@ -26,6 +38,11 @@ func (s *StorageEngine) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			s.logger.Error("failed to close file", "error", err)
 		}
 	}()
+
+	if strings.TrimSpace(header.Filename) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "File name cannot be empty")
+		return
+	}
 
 	err = s.SaveLocalFile(header.Filename, file)
 	if err != nil {
@@ -97,7 +114,11 @@ func (se *StorageEngine) HandleNotification(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
-	requestedHash := r.URL.Path[len(protocol.PathDownloadPrefix):]
+	if !strings.HasPrefix(r.URL.Path, protocol.PathDownloadPrefix) {
+		utils.RespondError(w, http.StatusBadRequest, "Invalid blob hash")
+		return
+	}
+	requestedHash := strings.TrimPrefix(r.URL.Path, protocol.PathDownloadPrefix)
 	if !storage.IsValidCASHash(requestedHash) {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid blob hash")
 		return
@@ -116,8 +137,19 @@ func (s *StorageEngine) HandleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageEngine) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
-	fileName, ok := utils.GetRequiredQueryParam(w, r, "name")
-	if !ok {
+	fileName := r.URL.Query().Get("name")
+	if fileName == "" && r.Body != nil && r.Body != http.NoBody {
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload")
+			return
+		}
+		fileName = payload.Name
+	}
+	if strings.TrimSpace(fileName) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Missing 'name' query parameter")
 		return
 	}
 	if err := s.SetSubscription(fileName, true); err != nil {

@@ -808,3 +808,246 @@ func TestServiceSubscriptionsLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, subbed)
 }
+
+func TestStorageEnginePeerPersistence(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-peer-persist")
+	engine := testutil.NewStorageEngine(t, cfg)
+
+	// Initially empty
+	peers, err := engine.LoadPeers()
+	require.NoError(t, err)
+	require.Empty(t, peers)
+
+	peer1 := protocol.AddressRecord{
+		Addresses: []string{"https://127.0.0.1:8001", "quic://127.0.0.1:9001"},
+		IsSponsor: true,
+		Sequence:  1,
+	}
+	peer2 := protocol.AddressRecord{
+		Addresses: []string{"https://127.0.0.1:8002"},
+		IsSponsor: false,
+		Sequence:  3,
+	}
+
+	require.NoError(t, engine.SavePeer("node-peer-1", peer1))
+	require.NoError(t, engine.SavePeer("node-peer-2", peer2))
+
+	loaded, err := engine.LoadPeers()
+	require.NoError(t, err)
+	require.Len(t, loaded, 2)
+	require.Equal(t, peer1, loaded["node-peer-1"])
+	require.Equal(t, peer2, loaded["node-peer-2"])
+
+	// Update existing peer
+	peer1.Sequence = 2
+	peer1.Addresses = append(peer1.Addresses, "quic://127.0.0.1:9002")
+	require.NoError(t, engine.SavePeer("node-peer-1", peer1))
+
+	loaded, err = engine.LoadPeers()
+	require.NoError(t, err)
+	require.Equal(t, peer1, loaded["node-peer-1"])
+
+	// Delete peer (and non-existent peer idempotently)
+	require.NoError(t, engine.DeletePeer("node-peer-1"))
+	require.NoError(t, engine.DeletePeer("non-existent-peer"))
+	loaded, err = engine.LoadPeers()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Contains(t, loaded, "node-peer-2")
+	require.NotContains(t, loaded, "node-peer-1")
+
+	// Verify persistence across restart (reopening DB from storagePath)
+	require.NoError(t, engine.Close())
+	reopened, err := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+	require.NoError(t, err)
+	defer func() { _ = reopened.Close() }()
+
+	persisted, err := reopened.LoadPeers()
+	require.NoError(t, err)
+	require.Len(t, persisted, 1)
+	require.Equal(t, peer2, persisted["node-peer-2"])
+}
+
+func TestStorageEnginePipelineSchemaPersistence(t *testing.T) {
+	t.Parallel()
+	cfg := testutil.DefaultConfig(t, "node-pipeline-persist")
+	engine := testutil.NewStorageEngine(t, cfg)
+
+	// Initially empty
+	schemas, err := engine.LoadPipelineSchemas()
+	require.NoError(t, err)
+	require.Empty(t, schemas)
+
+	// Schema with Version 0 must be normalized to Version 1
+	schema := protocol.PipelineSchema{
+		ID:      "pipe-ocr-pipeline",
+		Version: 0,
+		Steps: []protocol.PipelineStep{
+			{
+				ID:      "step-preprocess",
+				Service: "preprocess",
+			},
+			{
+				ID:      "step-ocr",
+				Service: "tesseract",
+			},
+		},
+	}
+
+	require.NoError(t, engine.SavePipelineSchema(schema))
+
+	loaded, err := engine.LoadPipelineSchemas()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Equal(t, schema.ID, loaded[schema.ID].ID)
+	require.Equal(t, 1, loaded[schema.ID].Version, "Version 0 must normalize to 1")
+	require.Len(t, loaded[schema.ID].Steps, 2)
+	require.Equal(t, "step-preprocess", loaded[schema.ID].Steps[0].ID)
+
+	// Update schema to version 2 with a connection
+	schema.Version = 2
+	schema.Connections = []protocol.PipelineConnection{
+		{
+			FromStep: "step-preprocess",
+			ToStep:   "step-ocr",
+		},
+	}
+	require.NoError(t, engine.SavePipelineSchema(schema))
+
+	// Reopen DB to verify persistence in BoltDB across restarts
+	require.NoError(t, engine.Close())
+	reopened, err := storage.NewStorageEngine(
+		cfg.Logger, cfg.StoragePath,
+		func(protocol.IndexEntry) {},
+		func(protocol.IndexEntry, string) error { return nil },
+	)
+	require.NoError(t, err)
+	defer func() { _ = reopened.Close() }()
+
+	persisted, err := reopened.LoadPipelineSchemas()
+	require.NoError(t, err)
+	require.Len(t, persisted, 1)
+	require.Equal(t, 2, persisted[schema.ID].Version)
+	require.Len(t, persisted[schema.ID].Connections, 1)
+	require.Equal(t, "step-preprocess", persisted[schema.ID].Connections[0].FromStep)
+}
+
+func TestStorageEngineDeleteLocalCache(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closed engine returns error", func(t *testing.T) {
+		cfg := testutil.DefaultConfig(t, "cache-closed")
+		engine := testutil.NewStorageEngine(t, cfg)
+		require.NoError(t, engine.Close())
+
+		err := engine.DeleteLocalCache("any-file.bin")
+		require.Error(t, err)
+		require.False(t, storage.IsVFSFileNotFound(err))
+	})
+
+	t.Run("non-existent file returns VFSFileNotFoundError", func(t *testing.T) {
+		cfg := testutil.DefaultConfig(t, "cache-not-found")
+		engine := testutil.NewStorageEngine(t, cfg)
+
+		err := engine.DeleteLocalCache("does-not-exist.bin")
+		require.Error(t, err)
+		require.True(t, storage.IsVFSFileNotFound(err))
+		var fnf *storage.VFSFileNotFoundError
+		require.ErrorAs(t, err, &fnf)
+		require.Equal(t, "does-not-exist.bin", fnf.Name)
+	})
+
+	t.Run("removes physical blob when ref count reaches 0 without generating VFS tombstone", func(t *testing.T) {
+		cfg := testutil.DefaultConfig(t, "cache-single")
+		engine := testutil.NewStorageEngine(t, cfg)
+
+		fileName := "cached-asset.txt"
+		fileContent := []byte("cache purgable file payload")
+		require.NoError(t, engine.SaveLocalFile(fileName, bytes.NewReader(fileContent)))
+
+		metaBefore, existsBefore, err := engine.GetFileMetaE(fileName)
+		require.NoError(t, err)
+		require.True(t, existsBefore)
+		require.False(t, metaBefore.Deleted)
+
+		subBefore, err := engine.IsSubscribedE(fileName)
+		require.NoError(t, err)
+		require.True(t, subBefore)
+
+		hasBlobBefore, err := engine.HasPhysicalBlob(metaBefore.Hash)
+		require.NoError(t, err)
+		require.True(t, hasBlobBefore)
+
+		// Purge local cache
+		require.NoError(t, engine.DeleteLocalCache(fileName))
+
+		// Subscription must be false
+		subAfter, err := engine.IsSubscribedE(fileName)
+		require.NoError(t, err)
+		require.False(t, subAfter)
+
+		// VFS metadata must remain present and NOT tombstoned
+		metaAfter, existsAfter, err := engine.GetFileMetaE(fileName)
+		require.NoError(t, err)
+		require.True(t, existsAfter, "VFS metadata must remain after cache purge")
+		require.False(t, metaAfter.Deleted, "VFS tombstone must NOT be generated by DeleteLocalCache")
+		require.Equal(t, metaBefore.Version, metaAfter.Version, "VFS version must remain unchanged")
+		require.Equal(t, metaBefore.Hash, metaAfter.Hash)
+
+		// Physical blob must be deleted as ref count reached 0
+		hasBlobAfter, err := engine.HasPhysicalBlob(metaBefore.Hash)
+		require.NoError(t, err)
+		require.False(t, hasBlobAfter, "Physical blob must be removed when ref count reaches 0")
+	})
+
+	t.Run("preserves physical blob if other local files share the blob hash", func(t *testing.T) {
+		cfg := testutil.DefaultConfig(t, "cache-shared")
+		engine := testutil.NewStorageEngine(t, cfg)
+
+		sharedContent := []byte("shared physical blob payload")
+		require.NoError(t, engine.SaveLocalFile("shared-a.bin", bytes.NewReader(sharedContent)))
+		require.NoError(t, engine.SaveLocalFile("shared-b.bin", bytes.NewReader(sharedContent)))
+
+		metaA, existsA, err := engine.GetFileMetaE("shared-a.bin")
+		require.NoError(t, err)
+		require.True(t, existsA)
+
+		metaB, existsB, err := engine.GetFileMetaE("shared-b.bin")
+		require.NoError(t, err)
+		require.True(t, existsB)
+		require.Equal(t, metaA.Hash, metaB.Hash, "Same content must share CAS hash")
+
+		// Purge cache for shared-a.bin only
+		require.NoError(t, engine.DeleteLocalCache("shared-a.bin"))
+
+		subA, err := engine.IsSubscribedE("shared-a.bin")
+		require.NoError(t, err)
+		require.False(t, subA)
+
+		subB, err := engine.IsSubscribedE("shared-b.bin")
+		require.NoError(t, err)
+		require.True(t, subB)
+
+		// Physical blob must STILL exist because shared-b is still subscribed
+		hasBlob, err := engine.HasPhysicalBlob(metaA.Hash)
+		require.NoError(t, err)
+		require.True(t, hasBlob, "Blob must remain when another file is still subscribed")
+
+		// Purge cache for shared-b.bin
+		require.NoError(t, engine.DeleteLocalCache("shared-b.bin"))
+
+		subBAfter, err := engine.IsSubscribedE("shared-b.bin")
+		require.NoError(t, err)
+		require.False(t, subBAfter)
+
+		// Physical blob must now be deleted as no subscribers remain
+		hasBlobFinal, err := engine.HasPhysicalBlob(metaA.Hash)
+		require.NoError(t, err)
+		require.False(t, hasBlobFinal, "Blob must be removed when all subscribers purged")
+	})
+}
