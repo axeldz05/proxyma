@@ -10,6 +10,7 @@ import (
 	"proxyma/internal/utils"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -96,13 +97,58 @@ func TestResolveUDPAddrContext(t *testing.T) {
 		addr, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "127.0.0.1:8080")
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:8080", addr.String())
+
+		addrV6, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "[::1]:8080")
+		require.NoError(t, err)
+		require.Equal(t, "[::1]:8080", addrV6.String())
 	})
 
-	t.Run("aborts on cancelled context", func(t *testing.T) {
+	t.Run("aborts on context cancelled before resolution", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := utils.ResolveUDPAddrContext(ctx, "udp", "localhost:8080")
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("aborts on context timeout during resolution", func(t *testing.T) {
+		restore := utils.SetNetResolverForTest(&net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		})
+		defer restore()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		_, err := utils.ResolveUDPAddrContext(ctx, "udp", "some-unresolved-domain.local:8080")
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Contains(t, err.Error(), "failed to resolve address")
+	})
+
+	t.Run("incompatible network family", func(t *testing.T) {
+		// IPv4 literal with udp6
+		_, err := utils.ResolveUDPAddrContext(context.Background(), "udp6", "127.0.0.1:8080")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "did not resolve to a compatible IP")
+
+		// IPv6 literal with udp4
+		_, err = utils.ResolveUDPAddrContext(context.Background(), "udp4", "[::1]:8080")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "did not resolve to a compatible IP")
+	})
+
+	t.Run("port fallback to service name lookup", func(t *testing.T) {
+		addr, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "127.0.0.1:domain")
+		require.NoError(t, err)
+		require.Equal(t, 53, addr.Port)
+
+		_, err = utils.ResolveUDPAddrContext(context.Background(), "udp", "127.0.0.1:notarealservicenamexyz")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to resolve UDP port")
 	})
 
 	t.Run("invalid address format", func(t *testing.T) {
@@ -132,7 +178,54 @@ func TestHTTPStatusErrors(t *testing.T) {
 }
 
 func TestReadLimits(t *testing.T) {
-	t.Parallel()
-	_ = utils.ReadMemoryLimit()
-	_ = utils.ReadCPULimit()
+	tempDir := t.TempDir()
+	restore := utils.SetCgroupPathsForTest(
+		filepath.Join(tempDir, "cpu.max.none"),
+		filepath.Join(tempDir, "cpu.cfs_quota_us.none"),
+		filepath.Join(tempDir, "cpu.cfs_period_us.none"),
+		filepath.Join(tempDir, "memory.max.none"),
+		filepath.Join(tempDir, "memory.limit_in_bytes.none"),
+	)
+	defer restore()
+
+	require.Equal(t, float64(0), utils.ReadCPULimit())
+	require.Equal(t, int64(0), utils.ReadMemoryLimit())
+
+	// Cgroups v2
+	v2CPU := filepath.Join(tempDir, "cpu.max")
+	require.NoError(t, os.WriteFile(v2CPU, []byte("250000 100000\n"), 0644))
+	v2Mem := filepath.Join(tempDir, "memory.max")
+	require.NoError(t, os.WriteFile(v2Mem, []byte("1073741824\n"), 0644))
+
+	utils.SetCgroupPathsForTest(v2CPU, "", "", v2Mem, "")
+	require.InDelta(t, 2.5, utils.ReadCPULimit(), 0.001)
+	require.Equal(t, int64(1073741824), utils.ReadMemoryLimit())
+
+	// cgroups v2 "max" (unlimited)
+	require.NoError(t, os.WriteFile(v2CPU, []byte("max 100000\n"), 0644))
+	require.NoError(t, os.WriteFile(v2Mem, []byte("max\n"), 0644))
+	require.Equal(t, float64(0), utils.ReadCPULimit())
+	require.Equal(t, int64(0), utils.ReadMemoryLimit())
+
+	// Cgroups v1 fallback (when v2 files are absent)
+	require.NoError(t, os.Remove(v2CPU))
+	require.NoError(t, os.Remove(v2Mem))
+
+	v1Quota := filepath.Join(tempDir, "cpu.cfs_quota_us")
+	v1Period := filepath.Join(tempDir, "cpu.cfs_period_us")
+	v1Mem := filepath.Join(tempDir, "memory.limit_in_bytes")
+
+	require.NoError(t, os.WriteFile(v1Quota, []byte("150000\n"), 0644))
+	require.NoError(t, os.WriteFile(v1Period, []byte("100000\n"), 0644))
+	require.NoError(t, os.WriteFile(v1Mem, []byte("2147483648\n"), 0644))
+
+	utils.SetCgroupPathsForTest("", v1Quota, v1Period, "", v1Mem)
+	require.InDelta(t, 1.5, utils.ReadCPULimit(), 0.001)
+	require.Equal(t, int64(2147483648), utils.ReadMemoryLimit())
+
+	// cgroups v1 unlimited (-1 or huge value)
+	require.NoError(t, os.WriteFile(v1Quota, []byte("-1\n"), 0644))
+	require.NoError(t, os.WriteFile(v1Mem, []byte("9223372036854771712\n"), 0644))
+	require.Equal(t, float64(0), utils.ReadCPULimit())
+	require.Equal(t, int64(0), utils.ReadMemoryLimit())
 }

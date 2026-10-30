@@ -22,11 +22,26 @@ type BandwidthTracker struct {
 	sentHistory     []TransferRecord
 	receivedHistory []TransferRecord
 	mu              sync.RWMutex
+	now             func() time.Time
 }
 
 // NewBandwidthTracker creates a new BandwidthTracker.
 func NewBandwidthTracker() *BandwidthTracker {
 	return &BandwidthTracker{}
+}
+
+// SetClock replaces the time source (used for tests to simulate time passing).
+func (bt *BandwidthTracker) SetClock(clk func() time.Time) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	bt.now = clk
+}
+
+func (bt *BandwidthTracker) timeNow() time.Time {
+	if bt.now != nil {
+		return bt.now()
+	}
+	return time.Now()
 }
 
 // bandwidthWindow is the sampling window every bandwidth figure is computed
@@ -38,7 +53,7 @@ func (bt *BandwidthTracker) recordTransfer(isSent bool, n int64, path string) {
 	defer bt.mu.Unlock()
 
 	rec := TransferRecord{
-		Timestamp: time.Now(),
+		Timestamp: bt.timeNow(),
 		Bytes:     n,
 		Category:  bt.CategorizePath(path),
 	}
@@ -68,7 +83,7 @@ func (bt *BandwidthTracker) GetCurrentBandwidth() (float64, float64) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 
-	threshold := time.Now().Add(-bandwidthWindow)
+	threshold := bt.timeNow().Add(-bandwidthWindow)
 	var sentSum, recvSum int64
 	bt.sentHistory, sentSum = pruneHistory(bt.sentHistory, threshold)
 	bt.receivedHistory, recvSum = pruneHistory(bt.receivedHistory, threshold)
@@ -81,7 +96,7 @@ func (bt *BandwidthTracker) GetCategoryBandwidth(category string) (float64, floa
 	bt.mu.RLock()
 	defer bt.mu.RUnlock()
 
-	threshold := time.Now().Add(-bandwidthWindow)
+	threshold := bt.timeNow().Add(-bandwidthWindow)
 	sentSum := sumCategory(bt.sentHistory, threshold, category)
 	recvSum := sumCategory(bt.receivedHistory, threshold, category)
 	return float64(sentSum) / bandwidthWindow.Seconds(), float64(recvSum) / bandwidthWindow.Seconds()

@@ -195,21 +195,34 @@ func (rm *RelayManager) GetOrCreateQueue(peerID string) (chan protocol.RelayRequ
 
 // RegisterWaiter creates and registers a response waiter channel for a request ID.
 // expectedPeer is the only CN allowed to deliver HandleRelayReply for this ReqID.
-func (rm *RelayManager) RegisterWaiter(reqID, expectedPeer string) chan protocol.RelayResponse {
+// If a waiter for reqID already exists, it returns an error to prevent collision/hijack.
+func (rm *RelayManager) RegisterWaiter(reqID, expectedPeer string) (chan protocol.RelayResponse, error) {
+	if reqID == "" {
+		return nil, fmt.Errorf("request ID cannot be empty")
+	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+	if _, exists := rm.waiters[reqID]; exists {
+		return nil, fmt.Errorf("waiter for request ID %q already exists", reqID)
+	}
 	waiter := &relayWaiter{
 		ch:           make(chan protocol.RelayResponse, 1),
 		expectedPeer: expectedPeer,
 	}
 	rm.waiters[reqID] = waiter
-	return waiter.ch
+	return waiter.ch, nil
 }
 
-// RemoveWaiter unregisters a response waiter channel.
-func (rm *RelayManager) RemoveWaiter(reqID string) {
+// RemoveWaiter unregisters a response waiter channel. If ch is provided,
+// it only removes the waiter if the currently registered channel matches ch[0].
+func (rm *RelayManager) RemoveWaiter(reqID string, ch ...chan protocol.RelayResponse) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+	if len(ch) > 0 && ch[0] != nil {
+		if waiter, exists := rm.waiters[reqID]; exists && waiter.ch != ch[0] {
+			return
+		}
+	}
 	delete(rm.waiters, reqID)
 }
 
@@ -298,8 +311,12 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waiter := s.Relays.RegisterWaiter(req.ReqID, req.Target)
-	defer s.Relays.RemoveWaiter(req.ReqID)
+	waiter, err := s.Relays.RegisterWaiter(req.ReqID, req.Target)
+	if err != nil {
+		utils.RespondError(w, http.StatusConflict, err.Error())
+		return
+	}
+	defer s.Relays.RemoveWaiter(req.ReqID, waiter)
 
 	// Send to queue (non-blocking if full)
 	select {

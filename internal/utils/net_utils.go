@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // GetLocalIPs returns all non-loopback IP addresses of the system.
@@ -145,6 +146,34 @@ func SameIPFamily(ip net.IP, network string) bool {
 	return ip.To4() != nil
 }
 
+var (
+	resolverMu  sync.RWMutex
+	netResolver = net.DefaultResolver
+)
+
+func currentNetResolver() *net.Resolver {
+	resolverMu.RLock()
+	defer resolverMu.RUnlock()
+	return netResolver
+}
+
+// SetNetResolverForTest overrides the resolver used by ResolveUDPAddrContext (tests).
+func SetNetResolverForTest(r *net.Resolver) func() {
+	resolverMu.Lock()
+	prev := netResolver
+	if r == nil {
+		netResolver = net.DefaultResolver
+	} else {
+		netResolver = r
+	}
+	resolverMu.Unlock()
+	return func() {
+		resolverMu.Lock()
+		netResolver = prev
+		resolverMu.Unlock()
+	}
+}
+
 // ResolveUDPAddrContext resolves a UDP address with context cancellation.
 // When network is "udp", IPv4 is preferred if available.
 func ResolveUDPAddrContext(ctx context.Context, network, address string) (*net.UDPAddr, error) {
@@ -155,17 +184,21 @@ func ResolveUDPAddrContext(ctx context.Context, network, address string) (*net.U
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse UDP address: %w", err)
 	}
+	resolver := currentNetResolver()
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		port, err = net.DefaultResolver.LookupPort(ctx, network, portStr)
+		port, err = resolver.LookupPort(ctx, network, portStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve UDP port: %w", err)
 		}
 	}
 	if ip := net.ParseIP(host); ip != nil {
+		if (network == "udp4" || network == "udp6") && !SameIPFamily(ip, network) {
+			return nil, fmt.Errorf("address %q did not resolve to a compatible IP", address)
+		}
 		return &net.UDPAddr{IP: ip, Port: port}, nil
 	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve address: %w", err)
 	}

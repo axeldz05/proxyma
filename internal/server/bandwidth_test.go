@@ -3,6 +3,7 @@ package server_test
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/server"
@@ -73,4 +74,40 @@ func TestBandwidthTrackerConcurrentRecords(t *testing.T) {
 	sent, recv := bt.GetTotalBandwidth()
 	require.Equal(t, int64(500), sent)
 	require.Equal(t, int64(250), recv)
+}
+
+func TestBandwidthDecayOverTime(t *testing.T) {
+	t.Parallel()
+	bt := server.NewBandwidthTracker()
+	currentTime := time.Now()
+	bt.SetClock(func() time.Time {
+		return currentTime
+	})
+
+	bt.RecordBytesSent(5000, protocol.PathUpload)
+	bt.RecordBytesReceived(2500, protocol.PathDownloadPrefix+"abc")
+
+	up, down := bt.GetCurrentBandwidth()
+	require.InDelta(t, 1000.0, up, 0.01)
+	require.InDelta(t, 500.0, down, 0.01)
+
+	catUp, catDown := bt.GetCategoryBandwidth("vfs:upload")
+	require.InDelta(t, 1000.0, catUp, 0.01)
+	require.InDelta(t, 0.0, catDown, 0.01)
+
+	// Advance time by 6 seconds (> 5s of inactivity)
+	currentTime = currentTime.Add(6 * time.Second)
+
+	upAfter, downAfter := bt.GetCurrentBandwidth()
+	require.Equal(t, 0.0, upAfter, "upload rate must decay to 0 B/s after >5s of inactivity")
+	require.Equal(t, 0.0, downAfter, "download rate must decay to 0 B/s after >5s of inactivity")
+
+	catUpAfter, catDownAfter := bt.GetCategoryBandwidth("vfs:upload")
+	require.Equal(t, 0.0, catUpAfter, "category upload rate must decay to 0 B/s after >5s of inactivity")
+	require.Equal(t, 0.0, catDownAfter, "category download rate must decay to 0 B/s after >5s of inactivity")
+
+	// Total bytes sent and received must remain unchanged
+	sent, recv := bt.GetTotalBandwidth()
+	require.Equal(t, int64(5000), sent)
+	require.Equal(t, int64(2500), recv)
 }

@@ -30,7 +30,11 @@ type LogWriter struct {
 }
 
 func (w *LogWriter) Write(p []byte) (n int, err error) {
-	n, err = w.Stdout.Write(p)
+	if w.Stdout != nil {
+		n, err = w.Stdout.Write(p)
+	} else {
+		n = len(p)
+	}
 	line := string(p)
 
 	LogBufferMu.Lock()

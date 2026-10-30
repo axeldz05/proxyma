@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -282,4 +283,56 @@ func TestConcurrentReadBlobCorrupt(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestCleanupTempFiles(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	st := storage.NewStorage(baseDir)
+
+	past := time.Now().Add(-1 * time.Hour)
+	recent := time.Now().Add(-5 * time.Minute)
+
+	// 1. Stale temporary file (should be deleted)
+	staleTemp := filepath.Join(baseDir, "tmp-blob-stale-1")
+	require.NoError(t, os.WriteFile(staleTemp, []byte("stale-temp-data"), 0644))
+	require.NoError(t, os.Chtimes(staleTemp, past, past))
+
+	// 2. Fresh temporary file (should NOT be deleted)
+	freshTemp := filepath.Join(baseDir, "tmp-blob-fresh-1")
+	require.NoError(t, os.WriteFile(freshTemp, []byte("fresh-temp-data"), 0644))
+	require.NoError(t, os.Chtimes(freshTemp, recent, recent))
+
+	// 3. Non-temp file with old mtime (should NOT be deleted)
+	oldNonTemp := filepath.Join(baseDir, "permanent-blob-or-metadata")
+	require.NoError(t, os.WriteFile(oldNonTemp, []byte("permanent-data"), 0644))
+	require.NoError(t, os.Chtimes(oldNonTemp, past, past))
+
+	// 4. Directory with tmp-blob prefix (should NOT be deleted because it is a directory)
+	tempSubdir := filepath.Join(baseDir, "tmp-blob-subdir")
+	require.NoError(t, os.Mkdir(tempSubdir, 0755))
+	require.NoError(t, os.Chtimes(tempSubdir, past, past))
+
+	st.CleanupTempFiles()
+
+	_, err := os.Stat(staleTemp)
+	require.True(t, os.IsNotExist(err), "stale tmp-blob-* file must be deleted")
+
+	_, err = os.Stat(freshTemp)
+	require.NoError(t, err, "fresh tmp-blob-* file must be preserved")
+
+	_, err = os.Stat(oldNonTemp)
+	require.NoError(t, err, "non-temp file must be preserved regardless of age")
+
+	info, err := os.Stat(tempSubdir)
+	require.NoError(t, err, "directories must not be deleted by CleanupTempFiles")
+	require.True(t, info.IsDir())
+}
+
+func TestCleanupTempFilesMissingDir(t *testing.T) {
+	t.Parallel()
+	st := storage.NewStorage(filepath.Join(t.TempDir(), "non-existent-dir"))
+	require.NotPanics(t, func() {
+		st.CleanupTempFiles()
+	})
 }

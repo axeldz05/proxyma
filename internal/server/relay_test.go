@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"proxyma/internal/p2p"
 	"proxyma/internal/protocol"
+	"proxyma/internal/server"
 	"proxyma/internal/testutil"
 	"sync"
 	"testing"
@@ -574,5 +575,92 @@ func TestHandleRelayForward_UnauthenticatedOriginStripped(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for forwarded relay request")
 	}
+}
+
+func TestRelayManagerRegisterWaiterCollision(t *testing.T) {
+	t.Parallel()
+	rm := server.NewRelayManager(nil)
+
+	// Empty reqID must be rejected
+	emptyCh, emptyErr := rm.RegisterWaiter("", "peer-1")
+	require.Error(t, emptyErr)
+	require.Nil(t, emptyCh)
+	require.Contains(t, emptyErr.Error(), "cannot be empty")
+
+	reqID := "req-unique-123"
+
+	ch, err := rm.RegisterWaiter(reqID, "peer-1")
+	require.NoError(t, err)
+	require.NotNil(t, ch)
+
+	// Second registration with the same reqID must fail with error
+	chDup, errDup := rm.RegisterWaiter(reqID, "peer-2")
+	require.Error(t, errDup)
+	require.Nil(t, chDup)
+	require.Contains(t, errDup.Error(), "already exists")
+
+	// Ensure the original waiter is still valid and untouched
+	originalCh, peer, ok := rm.GetWaiter(reqID)
+	require.True(t, ok)
+	require.Equal(t, "peer-1", peer)
+	require.Equal(t, ch, originalCh)
+
+	// Calling RemoveWaiter with a mismatched channel must NOT remove the waiter
+	mismatchedCh := make(chan protocol.RelayResponse, 1)
+	rm.RemoveWaiter(reqID, mismatchedCh)
+	stillCh, stillPeer, stillOk := rm.GetWaiter(reqID)
+	require.True(t, stillOk, "waiter must not be removed by a mismatched channel")
+	require.Equal(t, ch, stillCh)
+	require.Equal(t, "peer-1", stillPeer)
+
+	// Calling RemoveWaiter with the matching channel must remove the waiter
+	rm.RemoveWaiter(reqID, ch)
+	_, _, okAfterMatch := rm.GetWaiter(reqID)
+	require.False(t, okAfterMatch, "waiter must be removed when channel matches")
+
+	// After removing, registration should succeed again
+	chNew, errNew := rm.RegisterWaiter(reqID, "peer-3")
+	require.NoError(t, errNew)
+	require.NotNil(t, chNew)
+
+	// Calling RemoveWaiter without channel should unconditionally delete
+	rm.RemoveWaiter(reqID)
+	_, _, okAfterUncond := rm.GetWaiter(reqID)
+	require.False(t, okAfterUncond, "unconditional RemoveWaiter must delete waiter")
+}
+
+func TestRelayForwardReqIDCollision(t *testing.T) {
+	t.Parallel()
+	sponsor := NewServer(t, testutil.DefaultConfig(t, "sponsor-collision"), nil)
+	sponsor.AddPeer("target-node", protocol.AddressRecord{
+		Addresses: []string{"http://target-node.proxyma.local"},
+	})
+
+	relayReq := protocol.RelayRequest{
+		ReqID:  "duplicate-req-id",
+		Target: "target-node",
+		Method: "GET",
+		Path:   "/test",
+	}
+	bodyBytes, err := json.Marshal(relayReq)
+	require.NoError(t, err)
+
+	// Pre-register waiter manually in sponsor's RelayManager to simulate an in-flight request
+	_, err = sponsor.Relays.RegisterWaiter("duplicate-req-id", "target-node")
+	require.NoError(t, err)
+	defer sponsor.Relays.RemoveWaiter("duplicate-req-id")
+
+	// Try to forward another request with the same ReqID
+	fwdReq, err := http.NewRequest(http.MethodPost, sponsor.Config.Address+protocol.PathRelayForward, bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	fwdReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := sponsor.Client().Do(fwdReq)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	require.Contains(t, string(body), "already exists")
 }
 

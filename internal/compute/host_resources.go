@@ -34,11 +34,14 @@ func setHostResourceSampler(fn HostResourceSampler) {
 
 // SetHostResourceSampler replaces the host resource sampler (tests). Restores previous on cleanup.
 func SetHostResourceSampler(fn HostResourceSampler) (restore func()) {
-	samplerMu.RLock()
+	samplerMu.Lock()
 	prev := hostResourceSampler
-	samplerMu.RUnlock()
-
-	setHostResourceSampler(fn)
+	if fn == nil {
+		hostResourceSampler = defaultHostResourceSampler
+	} else {
+		hostResourceSampler = fn
+	}
+	samplerMu.Unlock()
 	return func() { setHostResourceSampler(prev) }
 }
 
