@@ -10,7 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
 // GetLocalIPs returns all non-loopback IP addresses of the system.
@@ -146,31 +146,32 @@ func SameIPFamily(ip net.IP, network string) bool {
 	return ip.To4() != nil
 }
 
-var (
-	resolverMu  sync.RWMutex
-	netResolver = net.DefaultResolver
-)
+var netResolver atomic.Pointer[net.Resolver]
+
+func init() {
+	netResolver.Store(net.DefaultResolver)
+}
 
 func currentNetResolver() *net.Resolver {
-	resolverMu.RLock()
-	defer resolverMu.RUnlock()
-	return netResolver
+	if r := netResolver.Load(); r != nil {
+		return r
+	}
+	return net.DefaultResolver
 }
 
 // SetNetResolverForTest overrides the resolver used by ResolveUDPAddrContext (tests).
 func SetNetResolverForTest(r *net.Resolver) func() {
-	resolverMu.Lock()
-	prev := netResolver
-	if r == nil {
-		netResolver = net.DefaultResolver
-	} else {
-		netResolver = r
+	target := r
+	if target == nil {
+		target = net.DefaultResolver
 	}
-	resolverMu.Unlock()
+	prev := netResolver.Swap(target)
 	return func() {
-		resolverMu.Lock()
-		netResolver = prev
-		resolverMu.Unlock()
+		if prev == nil {
+			netResolver.Store(net.DefaultResolver)
+		} else {
+			netResolver.Store(prev)
+		}
 	}
 }
 
