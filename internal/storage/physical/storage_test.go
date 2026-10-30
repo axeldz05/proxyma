@@ -29,9 +29,10 @@ func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
 	hasher.Write([]byte(content))
 	expectedHash := hex.EncodeToString(hasher.Sum(nil))
 
-	gotHash, _, err := aStorage.SaveBlob(strings.NewReader(content))
+	gotHash, size, err := aStorage.SaveBlob(strings.NewReader(content))
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, gotHash, "SaveBlob must return the content's hash SHA-256")
+	require.Equal(t, int64(len(content)), size, "SaveBlob must return the content size")
 
 	fullPath := filepath.Join(baseDir, expectedHash)
 	info, err := os.Stat(fullPath)
@@ -40,14 +41,14 @@ func Test02SaveBlobWritesToDiskAndReturnsHash(t *testing.T) {
 }
 func Test03ReadBlobStreamsFromDiskUsingHash(t *testing.T) {
 	aStorage := storage.NewStorage(t.TempDir())
-	content := "some content!"
-	savedHash, _, err := aStorage.SaveBlob(strings.NewReader(content))
+	content := aFileAcceptedByStorage()
+	savedHash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	err = aStorage.ReadBlob(savedHash, &buf)
 
 	require.NoError(t, err)
-	require.Equal(t, content, buf.String(), "ReadBlob must stream the exact content")
+	require.Equal(t, content, buf.Bytes(), "ReadBlob must stream the exact content")
 }
 
 func Test04SaveBlobIsIdempotent(t *testing.T) {
@@ -99,17 +100,6 @@ func Test05SavingBlobsAreDiscoverable(t *testing.T) {
 	assertBlobExists(t, aStorage, hash2)
 }
 
-func Test06StorageRecognizesTheSameSavedBlob(t *testing.T) {
-	aStorage := storage.NewStorage(t.TempDir())
-	content := aFileAcceptedByStorage()
-	generatedHash, _, err := aStorage.SaveBlob(bytes.NewReader(content))
-	require.NoError(t, err)
-
-	var got bytes.Buffer
-	err = aStorage.ReadBlob(generatedHash, &got)
-	require.NoError(t, err)
-	require.Equal(t, content, got.Bytes())
-}
 
 func Test07CanNotReadABlobThatDoesNotExistsInTheStorage(t *testing.T) {
 	aStorage := storage.NewStorage(t.TempDir())
@@ -143,18 +133,6 @@ func Test8DoesNotDeleteADifferentBlobThanTheSpecified(t *testing.T) {
 	assertBlobExists(t, aStorage, generatedHash2)
 }
 
-func Test9SaveBlobReturnsSHA256Hash(t *testing.T) {
-	aStorage := storage.NewStorage(t.TempDir())
-	content := "Super secret message!"
-	hasher := sha256.New()
-	hasher.Write([]byte(content))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
-	gotHash, _, err := aStorage.SaveBlob(bytes.NewReader([]byte(content)))
-
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, gotHash, "Hash should be the exact SHA-256 of the file content")
-}
 
 func TestBlobExistsClearsStaleCacheWhenFileMissingOnDisk(t *testing.T) {
 	baseDir := t.TempDir()

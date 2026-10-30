@@ -13,8 +13,6 @@ type IndexStore interface {
 	// Upsert reports whether the entry replaced an older version. A storage
 	// failure must surface as an error, never as updated=false.
 	Upsert(entry protocol.IndexEntry) (bool, error)
-	// UpsertAutoVersion bumps Version atomically when Version<=0.
-	UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error)
 	// Snapshot returns the full index. On load failure it must return an error —
 	// never an empty map that would look like an empty VFS (orphan GC hazard).
 	Snapshot() (map[string]protocol.IndexEntry, error)
@@ -137,18 +135,6 @@ func (v *VFS) Upsert(entry protocol.IndexEntry) (bool, error) {
 	return updated, nil
 }
 
-// UpsertAutoVersion bumps Version atomically inside the Bolt transaction when Version<=0 (M5).
-func (v *VFS) UpsertAutoVersion(entry protocol.IndexEntry) (protocol.IndexEntry, error) {
-	err := v.index.Update(func(tx *bbolt.Tx) error {
-		written, _, _, _, err := resolveVFSWrite(tx, entry)
-		if err != nil {
-			return err
-		}
-		entry = written
-		return nil
-	})
-	return entry, err
-}
 
 type indexSubscriptionMutation struct {
 	Entry       protocol.IndexEntry

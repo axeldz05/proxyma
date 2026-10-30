@@ -17,8 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type LocalService = protocol.LocalService
-
 func TestServiceAddCmd(t *testing.T) {
 	resetRootCommandState(t)
 	tempDir := t.TempDir()
@@ -42,19 +40,10 @@ func TestServiceAddCmd(t *testing.T) {
 			"--param", "param1:string, param2:bool",
 			"--no-required", "param2",
 		})
+		require.NoError(t, rootCmd.Execute())
 
-		err := rootCmd.Execute()
+		services, err := compute.LoadServicesMap(tempDir)
 		require.NoError(t, err)
-
-		// Verify services.json
-		servicesFile := compute.ServicesFilePath(tempDir)
-		data, err := os.ReadFile(servicesFile)
-		require.NoError(t, err)
-
-		var services map[string]LocalService
-		err = json.Unmarshal(data, &services)
-		require.NoError(t, err)
-
 		svc, exists := services["my-script"]
 		require.True(t, exists)
 		require.Equal(t, protocol.ServiceTypeScript, svc.Type)
@@ -62,12 +51,12 @@ func TestServiceAddCmd(t *testing.T) {
 		require.Equal(t, "My test script", svc.Schema.Description)
 
 		p1, ok := svc.Schema.Parameters["param1"]
-		require.True(t, ok)
+		require.True(t, ok, "param1 flag must be parsed into schema parameters")
 		require.Equal(t, "string", p1.Type)
 		require.True(t, p1.Required)
 
 		p2, ok := svc.Schema.Parameters["param2"]
-		require.True(t, ok)
+		require.True(t, ok, "param2 flag must be parsed into schema parameters")
 		require.Equal(t, "bool", p2.Type)
 		require.False(t, p2.Required)
 	})
@@ -80,7 +69,8 @@ func TestServiceAddCmd(t *testing.T) {
 				"token": {Type: "string", Required: true},
 			},
 		}
-		schemaBytes, _ := json.Marshal(schema)
+		schemaBytes, err := json.Marshal(schema)
+		require.NoError(t, err)
 		schemaPath := filepath.Join(tempDir, "schema.json")
 		err = os.WriteFile(schemaPath, schemaBytes, 0644)
 		require.NoError(t, err)
@@ -93,25 +83,17 @@ func TestServiceAddCmd(t *testing.T) {
 			"--exec", "http://localhost:8080/rpc",
 			"--schema-file", schemaPath,
 		})
+		require.NoError(t, rootCmd.Execute())
 
-		err := rootCmd.Execute()
+		services, err := compute.LoadServicesMap(tempDir)
 		require.NoError(t, err)
-
-		servicesFile := compute.ServicesFilePath(tempDir)
-		data, err := os.ReadFile(servicesFile)
-		require.NoError(t, err)
-
-		var services map[string]LocalService
-		err = json.Unmarshal(data, &services)
-		require.NoError(t, err)
-
 		svc, exists := services["my-grpc"]
 		require.True(t, exists)
 		require.Equal(t, protocol.ServiceTypeHTTP, svc.Type)
 		require.Equal(t, "http://localhost:8080/rpc", svc.Exec)
 
 		tokenParam, ok := svc.Schema.Parameters["token"]
-		require.True(t, ok)
+		require.True(t, ok, "schema file parameters must be loaded into service schema")
 		require.Equal(t, "string", tokenParam.Type)
 		require.True(t, tokenParam.Required)
 	})
@@ -125,18 +107,10 @@ func TestServiceAddCmd(t *testing.T) {
 			"--exec", "http://localhost:8080/webhook",
 			"--desc", "Canonical HTTP service",
 		})
+		require.NoError(t, rootCmd.Execute())
 
-		err := rootCmd.Execute()
+		services, err := compute.LoadServicesMap(tempDir)
 		require.NoError(t, err)
-
-		servicesFile := compute.ServicesFilePath(tempDir)
-		data, err := os.ReadFile(servicesFile)
-		require.NoError(t, err)
-
-		var services map[string]LocalService
-		err = json.Unmarshal(data, &services)
-		require.NoError(t, err)
-
 		svc, exists := services["my-http"]
 		require.True(t, exists)
 		require.Equal(t, protocol.ServiceTypeHTTP, svc.Type)
@@ -158,18 +132,10 @@ func TestServiceAddCmd(t *testing.T) {
 			"--name", "my-script",
 			"--storage", tempDir,
 		})
+		require.NoError(t, rootCmd.Execute())
 
-		err := rootCmd.Execute()
+		services, err := compute.LoadServicesMap(tempDir)
 		require.NoError(t, err)
-
-		servicesFile := compute.ServicesFilePath(tempDir)
-		data, err := os.ReadFile(servicesFile)
-		require.NoError(t, err)
-
-		var services map[string]LocalService
-		err = json.Unmarshal(data, &services)
-		require.NoError(t, err)
-
 		_, exists := services["my-script"]
 		require.False(t, exists)
 	})

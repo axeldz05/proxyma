@@ -47,12 +47,10 @@ func TestRequireHTTPExec(t *testing.T) {
 	if err := requireHTTPExec("http://localhost:8080/webhook", protocol.ServiceTypeHTTP, "webhook URL"); err != nil {
 		t.Errorf("http exec must be accepted: %v", err)
 	}
-}
 
-func TestBuildHandlerRejectsNonHTTPExecForHTTPTypes(t *testing.T) {
 	for _, typ := range []protocol.ServiceType{protocol.ServiceTypeHTTP, protocol.ServiceTypeGRPC} {
 		if _, err := BuildHandler(typ, "/bin/echo"); err == nil {
-			t.Errorf("type %q must reject non-http exec", typ)
+			t.Errorf("type %q must reject non-http exec via BuildHandler", typ)
 		}
 	}
 }
@@ -200,6 +198,7 @@ func TestServicesFileUsesCrossProcessAdvisoryLock(t *testing.T) {
 
 	started := make(chan struct{})
 	acquired := make(chan struct{})
+	releaseSecond := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
 		close(started)
@@ -209,6 +208,7 @@ func TestServicesFileUsesCrossProcessAdvisoryLock(t *testing.T) {
 			return
 		}
 		close(acquired)
+		<-releaseSecond
 		errCh <- secondUnlock()
 	}()
 
@@ -231,6 +231,7 @@ func TestServicesFileUsesCrossProcessAdvisoryLock(t *testing.T) {
 		t.Fatal("timed out waiting for second lock to acquire after release")
 	}
 
+	close(releaseSecond)
 	require.NoError(t, <-errCh)
 }
 

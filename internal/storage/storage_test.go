@@ -207,28 +207,6 @@ func TestSnapshotReflectsFullIndexState(t *testing.T) {
 	}
 }
 
-func TestVFSUpsertRejectsDecreasingVersion(t *testing.T) {
-	t.Parallel()
-	cfg := testutil.DefaultConfig(t, "node-vfs-version")
-
-	engine := testutil.NewStorageEngine(t, cfg)
-
-	entry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v3", Version: 3, Size: 100}
-	updated, err := engine.Upsert(entry)
-	require.NoError(t, err)
-	require.True(t, updated, "First insert should succeed")
-
-	olderEntry := protocol.IndexEntry{Name: "versioned.txt", Hash: "hash-v2", Version: 2, Size: 50}
-	updated, err = engine.Upsert(olderEntry)
-	require.NoError(t, err)
-	require.False(t, updated, "Upsert with lower version should be rejected")
-
-	meta, exists, err := engine.GetFileMetaE("versioned.txt")
-	require.NoError(t, err)
-	require.True(t, exists)
-	require.Equal(t, 3, meta.Version, "Version should remain at 3")
-	require.Equal(t, "hash-v3", meta.Hash, "Hash should remain unchanged")
-}
 
 func TestStoreRemoteBlobRejectsCorruptedContent(t *testing.T) {
 	t.Parallel()

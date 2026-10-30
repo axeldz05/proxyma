@@ -468,12 +468,9 @@ func (se *StorageEngine) upsertAndSubscribeLocked(
 	} else {
 		result.Entry = entry
 		result.Previous, result.HadPrevious, err = se.vfs.Get(entry.Name)
-		if err == nil && entry.Version <= 0 {
-			result.Entry, err = se.vfs.UpsertAutoVersion(entry)
-			result.Applied = err == nil
-		} else if err == nil {
+		if err == nil {
 			result.Applied, err = se.vfs.Upsert(entry)
-			if !result.Applied {
+			if err == nil {
 				current, exists, readErr := se.vfs.Get(entry.Name)
 				if readErr != nil {
 					err = readErr

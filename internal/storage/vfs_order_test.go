@@ -93,6 +93,10 @@ func TestVFSUpsertFollowsTotalOrder(t *testing.T) {
 	if older {
 		t.Fatal("older version must not replace the current entry")
 	}
+	current, exists, err := vfs.Get("doc.txt")
+	if err != nil || !exists || current.Version != 3 || current.Hash != "aaaa" {
+		t.Fatalf("current entry should remain version 3 after older rejected: %+v", current)
+	}
 
 	equalLive, err := vfs.Upsert(live)
 	if err != nil {

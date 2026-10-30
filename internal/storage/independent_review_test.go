@@ -48,27 +48,6 @@ func TestEqualVersionEntriesConvergeByDocumentedTotalOrder(t *testing.T) {
 	require.Equal(t, firstWinner, secondWinner)
 }
 
-func TestEqualVersionTombstoneDominatesLiveEntry(t *testing.T) {
-	t.Parallel()
-	engine := newDataIntegrityEngine(t, nil)
-	live := protocol.IndexEntry{Name: "deleted.txt", Version: 3, Hash: "zzz"}
-	tombstone := protocol.IndexEntry{Name: live.Name, Version: live.Version, Hash: "aaa", Deleted: true}
-
-	updated, err := engine.Upsert(live)
-	require.NoError(t, err)
-	require.True(t, updated)
-	updated, err = engine.Upsert(tombstone)
-	require.NoError(t, err)
-	require.True(t, updated)
-	updated, err = engine.Upsert(live)
-	require.NoError(t, err)
-	require.False(t, updated)
-
-	current, ok, err := engine.GetFileMetaE(live.Name)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, tombstone, current)
-}
 
 func TestRequestRemoteDownloadRejectsStaleMetadataBeforeDurableIntent(t *testing.T) {
 	t.Parallel()
