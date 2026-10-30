@@ -18,7 +18,8 @@ func TestNewComputeEngineRejectsNilParentWithoutPanic(t *testing.T) {
 	t.Parallel()
 	logger := protocol.NewLogger(io.Discard, false)
 
-	engine, err := compute.NewComputeEngine(nil, logger, nil, 1, "nil-parent") //nolint:staticcheck // verifies nil rejection
+	var nilParent context.Context
+	engine, err := compute.NewComputeEngine(nilParent, logger, nil, 1, "nil-parent")
 
 	require.Error(t, err)
 	require.Nil(t, engine)

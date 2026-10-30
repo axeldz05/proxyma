@@ -1019,7 +1019,8 @@ func TestAnnouncePresenceFallbackError(t *testing.T) {
 	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
 
 	// AnnouncePresenceContext with nil context falls back safely without panic
-	err = srv.AnnouncePresenceContext(nil, "https://unreachable:8443")
+	var nilCtx context.Context
+	err = srv.AnnouncePresenceContext(nilCtx, "https://unreachable:8443")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "there was an error trying to connect to the cluster")
 }

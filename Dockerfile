@@ -17,7 +17,7 @@ RUN if [ "$COVER" = "true" ]; then \
 # ==========================================
 # Fase 2: Runner
 # ==========================================
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates tzdata python3 python3-pip ocrmypdf ghostscript tesseract-ocr curl && \
     rm -rf /var/lib/apt/lists/*

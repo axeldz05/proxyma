@@ -286,11 +286,12 @@ func TestHTTPPeerClientNilContext(t *testing.T) {
 	addr, client := newMockServer(t, mux)
 
 	// nil context should fall back gracefully without panic
-	peers, err := client.Announce(nil, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
+	var nilCtx context.Context
+	peers, err := client.Announce(nilCtx, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
 	require.NoError(t, err)
 	require.NotNil(t, peers)
 
-	err = client.AddPeer(nil, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
+	err = client.AddPeer(nilCtx, addr, protocol.AddPeerRequest{ID: "nil-ctx"})
 	require.NoError(t, err)
 }
 
