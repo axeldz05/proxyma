@@ -296,7 +296,7 @@ func (r *P2PRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Phase 2: Relay Fallback before IP literals (critical for partitioned nets)
-	if sponsorAddr != "" {
+	if sponsorAddr != "" && !isSponsorPeer(record, peerID, sponsorAddr) {
 		relayRes, relayErr := r.tryRelay(clone, peerID, sponsorAddr)
 		switch {
 		case relayErr == nil:
@@ -373,6 +373,31 @@ func (r *P2PRoundTripper) isOwnAddress(parsedAddr *url.URL, peerID, nodeID, ownA
 	}
 	r.logDebug("Skipping address that matches our own node host/port", "peerID", peerID, "host", host, "port", port)
 	return true
+}
+
+// isSponsorPeer reports whether peerID is the sponsor itself, in which case
+// relaying through the sponsor to reach the sponsor would loop or deadlock.
+func isSponsorPeer(record protocol.AddressRecord, peerID, sponsorAddr string) bool {
+	if record.IsSponsor {
+		return true
+	}
+	if sponsorAddr == "" {
+		return false
+	}
+	sponsorParsed, err := url.Parse(sponsorAddr)
+	if err != nil {
+		return false
+	}
+	for _, raw := range record.Addresses {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if parsed.Host == sponsorParsed.Host {
+			return true
+		}
+	}
+	return false
 }
 
 // dialDirect probes the TCP port before issuing the request, then verifies that

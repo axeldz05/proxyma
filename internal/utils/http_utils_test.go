@@ -61,3 +61,16 @@ func TestGetRequiredQueryParam(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "node-1", val)
 }
+
+func TestRespondMessageAndStatus(t *testing.T) {
+	t.Parallel()
+	recMsg := httptest.NewRecorder()
+	utils.RespondMessage(recMsg, http.StatusAccepted, "in progress")
+	require.Equal(t, http.StatusAccepted, recMsg.Code)
+	require.JSONEq(t, `{"message":"in progress"}`, recMsg.Body.String())
+
+	recStatus := httptest.NewRecorder()
+	utils.RespondStatus(recStatus, http.StatusOK, "ready")
+	require.Equal(t, http.StatusOK, recStatus.Code)
+	require.JSONEq(t, `{"status":"ready"}`, recStatus.Body.String())
+}

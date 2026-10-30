@@ -269,6 +269,11 @@ func (s *Server) HandleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Target == s.Config.ID {
+		utils.RespondError(w, http.StatusBadRequest, "Cannot relay to sponsor itself")
+		return
+	}
+
 	// Security validation: if no valid peer certificates are supplied via mTLS,
 	// only allow forwarding to the cluster joining endpoint.
 	if cn, ok := peerCNFromRequest(r); ok {

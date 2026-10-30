@@ -2,10 +2,13 @@ package utils_test
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"proxyma/internal/utils"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -106,4 +109,30 @@ func TestResolveUDPAddrContext(t *testing.T) {
 		_, err := utils.ResolveUDPAddrContext(context.Background(), "udp", "not-a-valid-addr")
 		require.Error(t, err)
 	})
+}
+
+func TestHTTPStatusErrors(t *testing.T) {
+	t.Parallel()
+	err := utils.HTTPStatusError(http.StatusNotFound)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "404")
+
+	respOK := &http.Response{
+		StatusCode: http.StatusOK,
+	}
+	require.NoError(t, utils.HTTPErrorFromResponse(respOK, "test"))
+
+	respErr := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader("gateway down")),
+	}
+	errResp := utils.HTTPErrorFromResponse(respErr, "peer")
+	require.Error(t, errResp)
+	require.Contains(t, errResp.Error(), "peer returned status 502: gateway down")
+}
+
+func TestReadLimits(t *testing.T) {
+	t.Parallel()
+	_ = utils.ReadMemoryLimit()
+	_ = utils.ReadCPULimit()
 }
