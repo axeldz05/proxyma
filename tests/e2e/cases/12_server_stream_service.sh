@@ -67,6 +67,7 @@ wait_for_output "${E2E_DISCOVERY_TIMEOUT:-45}" ticks \
 echo "Streaming ticks from node-1 via /services/stream..."
 STREAM_OUT=$(call_api node-1 POST 8081 "services/stream?service=ticks" \
     -H "Content-Type: application/json" \
+    -H "X-Proxyma-Stream-Accept: 1" \
     -d '{}')
 echo "stream body: $STREAM_OUT"
 

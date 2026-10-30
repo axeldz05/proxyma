@@ -73,7 +73,7 @@ test-android-bind test-android:
 	classes_jar="$$work_dir/classes.jar"; \
 	javap_output="$$work_dir/Proxyma_bind.javap"; \
 	gobind_dir="$$(dirname "$$($(GO) tool -n gobind)")"; \
-	PATH="$$gobind_dir:$$PATH" $(GOMOBILE) bind -o "$$aar" -target=android -androidapi=21 ./cmd/proxyma-bind; \
+	PATH="$$gobind_dir:$$PATH" $(GOMOBILE) bind -ldflags="-checklinkname=0" -o "$$aar" -target=android -androidapi=21 ./cmd/proxyma-bind; \
 	unzip -p "$$aar" classes.jar > "$$classes_jar"; \
 	javap -classpath "$$classes_jar" -public -s proxyma_bind.Proxyma_bind > "$$javap_output"; \
 	awk '$$0 == "  public static native java.lang.String runService(java.lang.String, java.lang.String);" { run_decl=NR; next } \

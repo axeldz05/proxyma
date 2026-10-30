@@ -439,10 +439,14 @@ func (s *Server) ListenAndServe(serverTLS *tls.Config) error {
 		addr = ":" + strconv.Itoa(httpListener.Addr().(*net.TCPAddr).Port)
 	}
 
+	var hsTLS *tls.Config
+	if serverTLS != nil {
+		hsTLS = serverTLS.Clone()
+	}
 	hs := &http.Server{
 		Addr:      addr,
 		Handler:   s.handler, // MountHandlers already wraps bandwidth + mTLS
-		TLSConfig: serverTLS,
+		TLSConfig: hsTLS,
 		ErrorLog:  log.New(&tlsErrorWriter{server: s}, "", 0),
 	}
 	httpShutdownStarted := make(chan struct{})

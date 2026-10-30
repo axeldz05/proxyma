@@ -39,6 +39,7 @@ echo "Streaming screen frames from node-1 (viewer) → node-2 (capturer)..."
 START_TS=$(date +%s)
 STREAM_OUT=$(call_api node-1 POST 8081 "services/stream?service=screen-share" \
     -H "Content-Type: application/json" \
+    -H "X-Proxyma-Stream-Accept: 1" \
     -d '{"frames":45}')
 END_TS=$(date +%s)
 ELAPSED=$((END_TS - START_TS))
