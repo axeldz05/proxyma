@@ -2,19 +2,14 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"proxyma/internal/protocol"
 	"proxyma/internal/utils"
 )
 
-// getDefaultStorage returns the default storage path from environment or fallback
+// getDefaultStorage returns the default storage path from environment or home directory fallback.
 func getDefaultStorage() string {
-	defaultStorage := os.Getenv("PROXYMA_STORAGE")
-	if defaultStorage == "" {
-		defaultStorage = "./data"
-	}
-	return defaultStorage
+	return protocol.DefaultStoragePath()
 }
 
 // requireConfig fails when the node has no config.json yet. Returning the error

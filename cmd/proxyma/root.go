@@ -30,7 +30,11 @@ Allows synchronizing files and running compute tasks between nodes encrypted wit
 
 func init() {
 	defaultStorage := getDefaultStorage()
-	rootCmd.PersistentFlags().StringVar(&cliStorage, "storage", defaultStorage, "Path to the local node's directory")
+	rootCmd.PersistentFlags().StringVar(&cliStorage, "storage", defaultStorage, "Path to the local node's directory (defaults to ~/.proxyma or $PROXYMA_STORAGE)")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		cliStorage = protocol.ResolveActiveStorage(cliStorage, cmd.Flags().Changed("storage"))
+		return nil
+	}
 
 	// Dynamically register Cobra commands from SSOT Registry (visible CLI + Hidden escapes)
 	for _, domain := range cliRegistry() {

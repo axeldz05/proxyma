@@ -204,6 +204,7 @@ Skip only for purely cosmetic changes with no behavioral or structural impact.
 | Hole-punch | `BurstPings` / `HolePunchPingPayload` / `ParseHolePunchPing` / `RespondToHolePunch` / `QUICManager.ReloadTLS` |
 | JSON files | `ReadJSONFile` / `WriteJSONFile` |
 | Map utilities (clone/populate/merge) | `utils.CloneJSONMap` / `utils.CloneMap` / `utils.PopulateMap` / `utils.PopulateMapIf` / `utils.CopyMapIf` / `utils.MergeMap` / `protocol.ClonePipelineExecutionState` |
+| Storage directory resolution | `protocol.ResolveActiveStorage` / `protocol.DefaultStoragePath` / `protocol.DefaultUserHomeStorage` / `protocol.ExpandHome` |
 | Service bid cost | `Compute.EstimateTaskCost` / `BuildServiceBid` / `selectBestServiceBid` (`CostUnits` / `PowerScore`) |
 | HTTP stream handlers | `BuildHTTPBidiHandler` / `BuildHTTPServerStreamHandler` via `BuildHandler` |
 | WebRTC DataChannel | `BuildWebRTCHandler` / `BuildWebRTCHandlerWithClient` / `AcceptWebRTCOfferEcho` (`Type=webrtc`) |
